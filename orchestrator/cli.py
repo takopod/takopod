@@ -29,23 +29,33 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     log_file = DATA_DIR / "rhclaw.log"
 
-    log = open(log_file, "a")  # noqa: SIM115
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "orchestrator.main:app",
-            "--host",
-            host,
-            "--port",
-            str(port),
-        ],
-        stdout=log,
-        stderr=log,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    try:
+        log = open(log_file, "a")  # noqa: SIM115
+    except OSError as exc:
+        print(f"Error: cannot open log file {log_file}: {exc}")
+        sys.exit(1)
+
+    try:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "orchestrator.main:app",
+                "--host",
+                host,
+                "--port",
+                str(port),
+            ],
+            stdout=log,
+            stderr=log,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        log.close()
+        print(f"Error: failed to start rhclaw: {exc}")
+        sys.exit(1)
 
     PID_FILE.write_text(str(proc.pid))
     print(f"rhclaw started on {host}:{port} (pid {proc.pid})")
@@ -58,7 +68,18 @@ def stop() -> None:
         print("rhclaw is not running")
         sys.exit(1)
 
-    os.kill(pid, signal.SIGTERM)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        PID_FILE.unlink(missing_ok=True)
+        print(f"Error: process {pid} not found (stale pid file removed)")
+        sys.exit(1)
+    except PermissionError:
+        print(f"Error: permission denied stopping process {pid}")
+        sys.exit(1)
+    except OSError as exc:
+        print(f"Error: failed to stop rhclaw (pid {pid}): {exc}")
+        sys.exit(1)
     PID_FILE.unlink(missing_ok=True)
     print(f"rhclaw stopped (pid {pid})")
 
@@ -80,7 +101,11 @@ def main() -> None:
                 host = args[i + 1]
                 i += 2
             elif args[i] in ("--port", "-p") and i + 1 < len(args):
-                port = int(args[i + 1])
+                try:
+                    port = int(args[i + 1])
+                except ValueError:
+                    print(f"Error: invalid port number: {args[i + 1]}")
+                    sys.exit(1)
                 i += 2
             else:
                 print(f"Unknown argument: {args[i]}")
