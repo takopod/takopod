@@ -396,7 +396,7 @@ async def get_agent_messages(agent_id: str, limit: int = 100):
     """Return recent messages for an agent across all its sessions."""
     db = await get_db()
     async with db.execute(
-        "SELECT m.id, m.role, m.content, m.created_at, m.metadata "
+        "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_id "
         "WHERE s.agent_id = ? "
@@ -407,9 +407,32 @@ async def get_agent_messages(agent_id: str, limit: int = 100):
 
     # Return in chronological order
     return [
-        {"id": r[0], "role": r[1], "content": r[2], "created_at": r[3], "metadata": r[4]}
+        {
+            "id": r[0], "role": r[1], "content": r[2],
+            "created_at": r[3], "metadata": r[4], "status": r[5],
+        }
         for r in reversed(rows)
     ]
+
+
+@router.get("/agents/{agent_id}/messages/{message_id}")
+async def get_agent_message(agent_id: str, message_id: str):
+    """Return a single message by ID, scoped to an agent."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_id "
+        "WHERE m.id = ? AND s.agent_id = ?",
+        (message_id, agent_id),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {
+        "id": row[0], "role": row[1], "content": row[2],
+        "created_at": row[3], "metadata": row[4], "status": row[5],
+    }
 
 
 @router.delete("/agents/{agent_id}/messages")

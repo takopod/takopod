@@ -208,7 +208,7 @@ export function App() {
                     </div>
                     <ChatMessageList messages={messages} />
                     {(queueStatus.queued > 0 || queueStatus.in_flight > 0) &&
-                      !messages.some((m) => m.streaming) && (
+                      !messages.some((m) => m.status === "streaming") && (
                         <div className="flex items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
                           <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
                           Processing...

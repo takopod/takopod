@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-import uuid
+import time
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -10,6 +10,9 @@ from orchestrator.db import get_db
 
 logger = logging.getLogger(__name__)
 
+# Minimum interval between WebSocket notifications for the same message
+_NOTIFY_INTERVAL = 0.3  # 300ms
+
 
 class StreamReader:
     """Tails /workspace/output.jsonl from a worker container.
@@ -17,9 +20,9 @@ class StreamReader:
     Reads the JSONL output file on the bind-mounted host directory,
     bypassing podman's stdout relay to avoid buffering issues.
 
-    The WebSocket can be attached/detached as clients connect/disconnect.
-    The reader keeps running regardless — events without a WebSocket are
-    still persisted to the DB but not forwarded to a client.
+    Every event is persisted to the DB immediately. The WebSocket receives
+    throttled ``message_updated`` notifications so the frontend can fetch
+    the latest state from the API.
     """
 
     def __init__(
@@ -32,20 +35,18 @@ class StreamReader:
         self._ws: WebSocket | None = None
         self._ws_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
-        # Accumulate blocks per message_id for persistence on complete
-        self._blocks: dict[str, list[dict]] = {}
+        # Throttle state per message_id
+        self._last_notify: dict[str, float] = {}
+        self._pending_notify: dict[str, asyncio.TimerHandle] = {}
 
     def attach(self, ws: WebSocket, session_id: str) -> None:
-        """Attach a WebSocket to receive forwarded events."""
         self._ws = ws
         self.session_id = session_id
 
     def detach(self) -> None:
-        """Detach the WebSocket. Events are still read and persisted."""
         self._ws = None
 
     async def send(self, text: str) -> None:
-        """Send text on the attached WebSocket, serialized by a lock."""
         async with self._ws_lock:
             ws = self._ws
             if ws is None:
@@ -80,17 +81,19 @@ class StreamReader:
     def cancel(self) -> None:
         if self._task:
             self._task.cancel()
+        # Cancel any pending deferred notifications
+        for handle in self._pending_notify.values():
+            handle.cancel()
+        self._pending_notify.clear()
 
     def restart_if_dead(self) -> None:
-        """Restart the tail loop if the task has exited unexpectedly."""
         if self._task is not None and not self._task.done():
             return
         if self._task and self._task.done() and not self._task.cancelled():
             exc = self._task.exception()
             if exc:
                 logger.error(
-                    "Stream reader was dead (crashed: %s), restarting",
-                    exc,
+                    "Stream reader was dead (crashed: %s), restarting", exc,
                 )
             else:
                 logger.warning("Stream reader was dead (exited cleanly), restarting")
@@ -98,102 +101,226 @@ class StreamReader:
             logger.info("Stream reader not started, starting")
         self.start()
 
+    # --- Notification throttling ---
+
+    async def _notify(self, row_id: str) -> None:
+        frame = json.dumps({"type": "message_updated", "message_id": row_id})
+        await self.send(frame)
+
+    def _schedule_notify(self, row_id: str, immediate: bool = False) -> None:
+        now = time.monotonic()
+        last = self._last_notify.get(row_id, 0.0)
+        elapsed = now - last
+
+        # Cancel any existing deferred notification for this message
+        pending = self._pending_notify.pop(row_id, None)
+        if pending:
+            pending.cancel()
+
+        if immediate or elapsed >= _NOTIFY_INTERVAL:
+            self._last_notify[row_id] = now
+            asyncio.ensure_future(self._notify(row_id))
+        else:
+            # Defer notification to ensure frontend gets the latest state
+            delay = _NOTIFY_INTERVAL - elapsed
+            loop = asyncio.get_running_loop()
+            handle = loop.call_later(
+                delay,
+                lambda rid=row_id: asyncio.ensure_future(self._flush_notify(rid)),
+            )
+            self._pending_notify[row_id] = handle
+
+    async def _flush_notify(self, row_id: str) -> None:
+        self._pending_notify.pop(row_id, None)
+        self._last_notify[row_id] = time.monotonic()
+        await self._notify(row_id)
+
+    # --- DB persistence ---
+
     async def _process_event(self, line: str) -> None:
-        """Parse, forward, and persist a single JSONL event."""
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             return
 
-        await self.send(line)
-
         event_type = event.get("type")
-        message_id = event.get("message_id", "")
 
-        if event_type == "token":
-            blocks = self._blocks.setdefault(message_id, [])
-            if blocks and blocks[-1]["type"] == "text":
-                blocks[-1]["text"] += event.get("content", "")
-            else:
-                blocks.append({"type": "text", "text": event.get("content", "")})
+        # Forward context_cleared directly — it has no message_id
+        if event_type == "status" and event.get("status") == "context_cleared":
+            await self.send(line)
+            return
+
+        message_id = event.get("message_id", "")
+        if not message_id:
+            return
+
+        row_id = f"assistant-{message_id}"
+
+        if event_type == "status" and event.get("status") == "thinking":
+            await self._db_ensure_row(row_id)
+            self._schedule_notify(row_id)
+
+        elif event_type == "token":
+            await self._db_ensure_row(row_id)
+            content = event.get("content", "")
+            await self._db_append_token(row_id, content)
+            self._schedule_notify(row_id)
 
         elif event_type == "tool_call":
-            logger.info(
-                "Tool call: %s (id=%s) for session %s",
-                event.get("tool_name"), event.get("tool_call_id"),
-                self.session_id,
-            )
-            self._blocks.setdefault(message_id, []).append({
+            await self._db_ensure_row(row_id)
+            block = {
                 "type": "tool_call",
                 "tool": {
                     "tool_name": event.get("tool_name", "unknown"),
                     "tool_input": event.get("tool_input", {}),
                     "tool_call_id": event.get("tool_call_id", ""),
                 },
-            })
+            }
+            await self._db_append_block(row_id, block)
+            self._schedule_notify(row_id)
 
         elif event_type == "tool_result":
-            logger.info(
-                "Tool result: id=%s for session %s",
-                event.get("tool_call_id"), self.session_id,
+            tc_id = event.get("tool_call_id", "")
+            output = event.get("output", "")
+            await self._db_update_tool_result(row_id, tc_id, output)
+            self._schedule_notify(row_id)
+
+        elif event_type == "complete":
+            usage = event.get("usage")
+            content = event.get("content", "")
+            await self._db_complete(row_id, content, usage)
+            # Always notify immediately on complete
+            self._schedule_notify(row_id, immediate=True)
+
+    async def _db_ensure_row(self, row_id: str) -> None:
+        metadata = json.dumps({"blocks": []})
+        try:
+            db = await get_db()
+            await db.execute(
+                "INSERT OR IGNORE INTO messages "
+                "(id, session_id, role, content, status, metadata) "
+                "VALUES (?, ?, 'assistant', '', 'streaming', ?)",
+                (row_id, self.session_id, metadata),
             )
-            tc_id = event.get("tool_call_id")
-            for block in self._blocks.get(message_id, []):
-                if block["type"] == "tool_call" and block["tool"].get("tool_call_id") == tc_id:
-                    block["tool"]["output"] = event.get("output", "")
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to insert message %s", row_id)
+
+    async def _db_append_token(self, row_id: str, content: str) -> None:
+        try:
+            db = await get_db()
+            row = await self._db_get_metadata(db, row_id)
+            if row is None:
+                return
+            current_content, meta = row
+
+            blocks = meta.get("blocks", [])
+            if blocks and blocks[-1]["type"] == "text":
+                blocks[-1]["text"] += content
+            else:
+                blocks.append({"type": "text", "text": content})
+            meta["blocks"] = blocks
+
+            await db.execute(
+                "UPDATE messages SET content = ?, metadata = ? WHERE id = ?",
+                (current_content + content, json.dumps(meta), row_id),
+            )
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to append token to %s", row_id)
+
+    async def _db_append_block(self, row_id: str, block: dict) -> None:
+        try:
+            db = await get_db()
+            row = await self._db_get_metadata(db, row_id)
+            if row is None:
+                return
+            _, meta = row
+
+            meta.setdefault("blocks", []).append(block)
+
+            await db.execute(
+                "UPDATE messages SET metadata = ? WHERE id = ?",
+                (json.dumps(meta), row_id),
+            )
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to append block to %s", row_id)
+
+    async def _db_update_tool_result(
+        self, row_id: str, tool_call_id: str, output: str,
+    ) -> None:
+        try:
+            db = await get_db()
+            row = await self._db_get_metadata(db, row_id)
+            if row is None:
+                return
+            _, meta = row
+
+            for block in meta.get("blocks", []):
+                if (
+                    block["type"] == "tool_call"
+                    and block["tool"].get("tool_call_id") == tool_call_id
+                ):
+                    block["tool"]["output"] = output
                     break
 
-        elif event_type == "system_error":
-            logger.warning(
-                "Worker error for session %s: %s",
-                self.session_id, event.get("error"),
+            await db.execute(
+                "UPDATE messages SET metadata = ? WHERE id = ?",
+                (json.dumps(meta), row_id),
             )
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to update tool result in %s", row_id)
 
-        if event_type == "complete":
-            blocks = self._blocks.pop(message_id, None)
-            metadata = {}
-            if event.get("usage"):
-                metadata["usage"] = event["usage"]
-            if blocks:
-                metadata["blocks"] = blocks
-            try:
-                db = await get_db()
-                await db.execute(
-                    "INSERT INTO messages (id, session_id, role, content, metadata) "
-                    "VALUES (?, ?, 'assistant', ?, ?)",
-                    (
-                        str(uuid.uuid4()),
-                        self.session_id,
-                        event.get("content", ""),
-                        json.dumps(metadata) if metadata else None,
-                    ),
-                )
-                await db.commit()
-            except Exception:
-                logger.exception(
-                    "Failed to persist complete event for session %s",
-                    self.session_id,
-                )
+    async def _db_complete(
+        self, row_id: str, content: str, usage: dict | None,
+    ) -> None:
+        try:
+            db = await get_db()
+            row = await self._db_get_metadata(db, row_id)
+            if row is None:
+                return
+            _, meta = row
 
-    _POLL_MIN = 0.5   # 500ms when active
-    _POLL_MAX = 5.0   # 5s when idle
+            if usage:
+                meta["usage"] = usage
+
+            await db.execute(
+                "UPDATE messages SET content = ?, status = 'complete', metadata = ? "
+                "WHERE id = ?",
+                (content, json.dumps(meta), row_id),
+            )
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to complete message %s", row_id)
+
+    @staticmethod
+    async def _db_get_metadata(db, row_id: str) -> tuple[str, dict] | None:
+        async with db.execute(
+            "SELECT content, metadata FROM messages WHERE id = ?", (row_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            logger.warning("Message %s not found for update", row_id)
+            return None
+        content = row[0] or ""
+        try:
+            meta = json.loads(row[1]) if row[1] else {}
+        except json.JSONDecodeError:
+            meta = {}
+        return content, meta
+
+    # --- File tailing ---
+
+    _POLL_MIN = 0.5
+    _POLL_MAX = 5.0
 
     async def _tail_loop(self) -> None:
-        """Tail the output JSONL file, forwarding events as they appear.
-
-        Uses a close-and-reopen pattern instead of a long-lived file handle.
-        On macOS with podman bind mounts (virtiofs), a persistent handle
-        caches file metadata and misses data written by the container after
-        the host-side handle hits EOF.  Reopening on each poll gives us
-        close-to-open consistency.
-
-        Polls with exponential backoff: 500ms while active, doubling up to
-        5s when idle, resetting to 500ms when new data arrives.
-        """
         while not self.output_path.exists():
             await asyncio.sleep(0.5)
 
-        pos = self.output_path.stat().st_size  # start from current end
+        pos = 0
         delay = self._POLL_MIN
 
         while True:
@@ -205,7 +332,6 @@ class StreamReader:
                     continue
 
                 if size < pos:
-                    # File was truncated (new container started)
                     pos = 0
 
                 if size <= pos:
@@ -213,7 +339,6 @@ class StreamReader:
                     await asyncio.sleep(delay)
                     continue
 
-                # New data available — reset to fast polling
                 delay = self._POLL_MIN
 
                 try:
@@ -228,8 +353,6 @@ class StreamReader:
                     await asyncio.sleep(delay)
                     continue
 
-                # Only process up to the last complete line (ends with \n).
-                # Partial lines at the end are left for the next iteration.
                 last_nl = data.rfind(b"\n")
                 if last_nl == -1:
                     await asyncio.sleep(delay)

@@ -17,11 +17,9 @@ export interface ErrorFrame {
   retry_after_seconds?: number
 }
 
-export interface TokenFrame {
-  type: "token"
-  content: string
+export interface MessageUpdatedFrame {
+  type: "message_updated"
   message_id: string
-  seq: number
 }
 
 export interface StatusFrame {
@@ -30,36 +28,11 @@ export interface StatusFrame {
   message_id: string
 }
 
-export interface CompleteFrame {
-  type: "complete"
-  content: string
-  message_id: string
-  usage?: { input_tokens: number; output_tokens: number }
-}
-
-export interface ToolCallFrame {
-  type: "tool_call"
-  tool_name: string
-  tool_input: Record<string, unknown>
-  tool_call_id: string
-  message_id: string
-}
-
-export interface ToolResultFrame {
-  type: "tool_result"
-  tool_call_id: string
-  output: string
-  message_id: string
-}
-
 export type ServerFrame =
   | QueueStatusFrame
   | ErrorFrame
-  | TokenFrame
+  | MessageUpdatedFrame
   | StatusFrame
-  | CompleteFrame
-  | ToolCallFrame
-  | ToolResultFrame
 
 export interface ToolCallInfo {
   tool_name: string
@@ -77,7 +50,7 @@ export interface ChatMessage {
   role: "user" | "assistant"
   content: string
   timestamp: number
-  streaming?: boolean
+  status?: "streaming" | "complete"
   toolCalls?: ToolCallInfo[]
   blocks?: ContentBlock[]
 }

@@ -99,7 +99,7 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
                     <ToolCallBlock key={block.tool.tool_call_id} tool={block.tool} />
                   ),
                 )
-              ) : msg.streaming && !msg.content ? (
+              ) : msg.status === "streaming" && !msg.content ? (
                 <span className="inline-block animate-pulse">...</span>
               ) : msg.role === "assistant" ? (
                 <div className="markdown-body">

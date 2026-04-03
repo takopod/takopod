@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type {
   ChatMessage,
-  ContentBlock,
   ErrorFrame,
   QueueStatusFrame,
   ServerFrame,
@@ -15,11 +14,46 @@ function getWsUrl(agentId: string): string {
   return `${protocol}//${window.location.host}/api/ws?agent_id=${agentId}`
 }
 
+interface ApiMessage {
+  id: string
+  role: string
+  content: string
+  created_at: string
+  metadata?: string
+  status?: string
+}
+
+function parseMessage(m: ApiMessage): ChatMessage {
+  const msg: ChatMessage = {
+    id: m.id,
+    role: m.role as "user" | "assistant",
+    content: m.content,
+    timestamp: new Date(m.created_at).getTime(),
+    status: (m.status as "streaming" | "complete") ?? "complete",
+  }
+  if (m.metadata) {
+    try {
+      const meta = JSON.parse(m.metadata)
+      if (Array.isArray(meta.blocks) && meta.blocks.length > 0) {
+        msg.blocks = meta.blocks
+        msg.toolCalls = meta.blocks
+          .filter((b: { type: string }) => b.type === "tool_call")
+          .map((b: { tool: import("@/lib/types").ToolCallInfo }) => b.tool)
+      }
+    } catch {
+      // metadata is not valid JSON — ignore
+    }
+  }
+  return msg
+}
+
 export function useWebSocket(agentId: string | null) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttempt = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(null)
   const errorTimer = useRef<ReturnType<typeof setTimeout>>(null)
+  const agentIdRef = useRef(agentId)
+  agentIdRef.current = agentId
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [queueStatus, setQueueStatus] = useState<QueueStatusFrame>({
@@ -34,6 +68,27 @@ export function useWebSocket(agentId: string | null) {
   const clearError = useCallback(() => {
     if (errorTimer.current) clearTimeout(errorTimer.current)
     errorTimer.current = setTimeout(() => setError(null), 5000)
+  }, [])
+
+  const fetchMessage = useCallback((messageId: string) => {
+    const aid = agentIdRef.current
+    if (!aid) return
+    fetch(`/api/agents/${aid}/messages/${messageId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: ApiMessage | null) => {
+        if (!data) return
+        const parsed = parseMessage(data)
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === parsed.id)
+          if (idx >= 0) {
+            const updated = [...prev]
+            updated[idx] = parsed
+            return updated
+          }
+          return [...prev, parsed]
+        })
+      })
+      .catch(() => {})
   }, [])
 
   const connect = useCallback(() => {
@@ -53,99 +108,11 @@ export function useWebSocket(agentId: string | null) {
       } else if (frame.type === "error") {
         setError(frame)
         clearError()
-      } else if (frame.type === "status" && frame.status === "thinking") {
-        const assistantId = `assistant-${frame.message_id}`
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: assistantId,
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-            streaming: true,
-            blocks: [],
-            toolCalls: [],
-          },
-        ])
-      } else if (frame.type === "token") {
-        const assistantId = `assistant-${frame.message_id}`
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id !== assistantId) return msg
-            const blocks: ContentBlock[] = [...(msg.blocks ?? [])]
-            const last = blocks[blocks.length - 1]
-            if (last?.type === "text") {
-              blocks[blocks.length - 1] = { type: "text", text: last.text + frame.content }
-            } else {
-              blocks.push({ type: "text", text: frame.content })
-            }
-            return { ...msg, content: msg.content + frame.content, blocks }
-          }),
-        )
-      } else if (frame.type === "tool_call") {
-        const assistantId = `assistant-${frame.message_id}`
-        const toolInfo = {
-          tool_name: frame.tool_name,
-          tool_input: frame.tool_input,
-          tool_call_id: frame.tool_call_id,
-        }
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id !== assistantId) return msg
-            return {
-              ...msg,
-              toolCalls: [...(msg.toolCalls ?? []), toolInfo],
-              blocks: [...(msg.blocks ?? []), { type: "tool_call" as const, tool: toolInfo }],
-            }
-          }),
-        )
-      } else if (frame.type === "tool_result") {
-        const tc = frame as import("@/lib/types").ToolResultFrame
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (!msg.toolCalls) return msg
-            const updatedToolCalls = msg.toolCalls.map((t) =>
-              t.tool_call_id === tc.tool_call_id
-                ? { ...t, output: tc.output }
-                : t,
-            )
-            const updatedBlocks = (msg.blocks ?? []).map((b) =>
-              b.type === "tool_call" && b.tool.tool_call_id === tc.tool_call_id
-                ? { ...b, tool: { ...b.tool, output: tc.output } }
-                : b,
-            )
-            return { ...msg, toolCalls: updatedToolCalls, blocks: updatedBlocks }
-          }),
-        )
-      } else if (frame.type === "complete") {
-        const assistantId = `assistant-${frame.message_id}`
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id !== assistantId) return msg
-            let blocks = msg.blocks
-            if (blocks && blocks.length > 0) {
-              // Check if blocks are missing text that the complete content has.
-              // This happens when a post-tool token event was dropped.
-              const existingText = blocks
-                .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
-                .map((b) => b.text)
-                .join("\n\n")
-              if (frame.content.length > existingText.length) {
-                const remaining = frame.content
-                  .slice(existingText.length)
-                  .replace(/^\n\n/, "")
-                if (remaining) {
-                  blocks = [...blocks, { type: "text" as const, text: remaining }]
-                }
-              }
-            }
-            return { ...msg, content: frame.content, streaming: false, blocks }
-          }),
-        )
+      } else if (frame.type === "message_updated") {
+        fetchMessage(frame.message_id)
       } else if (
         frame.type === "status" &&
-        (frame as import("@/lib/types").StatusFrame).status ===
-          "context_cleared"
+        frame.status === "context_cleared"
       ) {
         setMessages([])
       }
@@ -153,7 +120,6 @@ export function useWebSocket(agentId: string | null) {
 
     ws.onclose = () => {
       setConnected(false)
-      // Only reconnect if this is still the active WebSocket
       if (wsRef.current === ws) {
         wsRef.current = null
         const delay = Math.min(
@@ -166,7 +132,7 @@ export function useWebSocket(agentId: string | null) {
     }
 
     wsRef.current = ws
-  }, [agentId, clearError])
+  }, [agentId, clearError, fetchMessage])
 
   useEffect(() => {
     if (!agentId) return
@@ -185,30 +151,8 @@ export function useWebSocket(agentId: string | null) {
 
     fetch(`/api/agents/${agentId}/messages`)
       .then((res) => (res.ok ? res.json() : []))
-      .then((history: { id: string; role: string; content: string; created_at: string; metadata?: string }[]) => {
-        const loaded: ChatMessage[] = history.map((m) => {
-          const msg: ChatMessage = {
-            id: m.id,
-            role: m.role as "user" | "assistant",
-            content: m.content,
-            timestamp: new Date(m.created_at).getTime(),
-          }
-          if (m.metadata) {
-            try {
-              const meta = JSON.parse(m.metadata)
-              if (Array.isArray(meta.blocks) && meta.blocks.length > 0) {
-                msg.blocks = meta.blocks
-                msg.toolCalls = meta.blocks
-                  .filter((b: { type: string }) => b.type === "tool_call")
-                  .map((b: { tool: import("@/lib/types").ToolCallInfo }) => b.tool)
-              }
-            } catch {
-              // metadata is not valid JSON — ignore
-            }
-          }
-          return msg
-        })
-        setMessages(loaded)
+      .then((history: ApiMessage[]) => {
+        setMessages(history.map(parseMessage))
       })
       .catch(() => {})
 
