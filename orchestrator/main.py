@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from orchestrator.db import connect, disconnect, run_migrations
+from orchestrator.routes import router
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="rhclaw", lifespan=lifespan)
+app.include_router(router)
 
 
 @app.get("/api/health")
