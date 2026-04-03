@@ -145,7 +145,7 @@ async def run_query(
             # ResultMessage signals completion; text already captured above
             pass
 
-    full_text = "".join(full_text_parts)
+    full_text = "\n\n".join(full_text_parts)
     emit({
         "type": "complete",
         "content": full_text,

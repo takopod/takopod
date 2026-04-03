@@ -184,12 +184,15 @@ async def delete_agent(agent_id: str):
         worker.stream_reader.cancel()
         container_name = f"rhclaw-{agent_id[:8]}"
         await kill_container(container_name)
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        await db.execute(
-            "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
-            "WHERE id = ?",
-            (now, worker.container_record_id),
-        )
+
+    # Mark ALL running/starting containers for this agent as stopped,
+    # regardless of whether we had an active worker reference.
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    await db.execute(
+        "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
+        "WHERE agent_id = ? AND status IN ('running', 'starting', 'idle')",
+        (now, agent_id),
+    )
 
     await db.execute(
         "UPDATE agents SET status = 'archived' WHERE id = ?", (agent_id,),
@@ -461,10 +464,14 @@ async def _store_message(session_id: str, frame: UserMessageFrame) -> None:
     await queue_message(session_id, frame.message_id, frame.content)
 
 
-async def _send_queue_status(ws: WebSocket, session_id: str) -> None:
+async def _send_queue_status(ws: WebSocket, session_id: str, agent_id: str) -> None:
     counts = await get_queue_counts(session_id)
     status = QueueStatusFrame(**counts)
-    await ws.send_text(status.model_dump_json())
+    worker = _active_workers.get(agent_id)
+    if worker:
+        await worker.stream_reader.send(status.model_dump_json())
+    else:
+        await ws.send_text(status.model_dump_json())
 
 
 async def _ensure_worker(
@@ -479,7 +486,7 @@ async def _ensure_worker(
 
         worker.session_id = session_id
         worker.stream_reader.attach(ws, session_id)
-        worker.polling_task = start_polling_loop(session_id, worker.host_dir, ws)
+        worker.polling_task = start_polling_loop(session_id, worker.host_dir, worker.stream_reader)
 
         # Mark as running again (was idle)
         db = await get_db()
@@ -491,7 +498,8 @@ async def _ensure_worker(
         return
 
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
-    reader = StreamReader(process, session_id)
+    output_path = host_dir / "output.jsonl"
+    reader = StreamReader(output_path, session_id)
     reader.attach(ws, session_id)
     reader.start()
 
@@ -501,7 +509,7 @@ async def _ensure_worker(
         host_dir=host_dir,
         session_id=session_id,
         stream_reader=reader,
-        polling_task=start_polling_loop(session_id, host_dir, ws),
+        polling_task=start_polling_loop(session_id, host_dir, reader),
     )
 
 
@@ -611,7 +619,7 @@ async def websocket_endpoint(ws: WebSocket):
                 try:
                     cmd_frame = SystemCommandFrame.model_validate(data)
                     await queue_system_command(session_id, cmd_frame.command)
-                    await _send_queue_status(ws, session_id)
+                    await _send_queue_status(ws, session_id, agent_id)
                     await _ensure_worker(agent_id, session_id, ws)
                 except ValidationError:
                     error = ErrorFrame(code="QUEUE_FULL")
@@ -641,7 +649,7 @@ async def websocket_endpoint(ws: WebSocket):
                 continue
 
             await _store_message(session_id, frame)
-            await _send_queue_status(ws, session_id)
+            await _send_queue_status(ws, session_id, agent_id)
             await _ensure_worker(agent_id, session_id, ws)
 
     except WebSocketDisconnect:

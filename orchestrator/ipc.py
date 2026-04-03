@@ -1,15 +1,19 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
+import typing
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import WebSocket
-
 from orchestrator.db import get_db
 from orchestrator.models import QueueStatusFrame
+
+if typing.TYPE_CHECKING:
+    from orchestrator.stream_reader import StreamReader
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +77,14 @@ def atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
-async def _send_queue_status(ws: WebSocket, session_id: str) -> None:
+async def _send_queue_status(reader: StreamReader, session_id: str) -> None:
     counts = await get_queue_counts(session_id)
     frame = QueueStatusFrame(**counts)
-    await ws.send_text(frame.model_dump_json())
+    await reader.send(frame.model_dump_json())
 
 
 async def _polling_loop(
-    session_id: str, host_dir: Path, ws: WebSocket
+    session_id: str, host_dir: Path, reader: StreamReader
 ) -> None:
     input_path = host_dir / "input.json"
     db = await get_db()
@@ -105,7 +109,7 @@ async def _polling_loop(
                     (now, session_id),
                 )
                 await db.commit()
-                await _send_queue_status(ws, session_id)
+                await _send_queue_status(reader, session_id)
 
             # Flush check: QUEUED messages + no input.json = write input.json
             async with db.execute(
@@ -138,7 +142,7 @@ async def _polling_loop(
                     (now, session_id),
                 )
                 await db.commit()
-                await _send_queue_status(ws, session_id)
+                await _send_queue_status(reader, session_id)
 
         except (ConnectionError, RuntimeError):
             # WebSocket disconnected
@@ -150,9 +154,9 @@ async def _polling_loop(
 
 
 def start_polling_loop(
-    session_id: str, host_dir: Path, ws: WebSocket
+    session_id: str, host_dir: Path, reader: StreamReader
 ) -> asyncio.Task:
     return asyncio.create_task(
-        _polling_loop(session_id, host_dir, ws),
+        _polling_loop(session_id, host_dir, reader),
         name=f"poll-{session_id[:8]}",
     )

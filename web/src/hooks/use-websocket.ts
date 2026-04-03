@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type {
   ChatMessage,
+  ContentBlock,
   ErrorFrame,
   QueueStatusFrame,
   ServerFrame,
@@ -62,57 +63,84 @@ export function useWebSocket(agentId: string | null) {
             content: "",
             timestamp: Date.now(),
             streaming: true,
+            blocks: [],
+            toolCalls: [],
           },
         ])
       } else if (frame.type === "token") {
         const assistantId = `assistant-${frame.message_id}`
         setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantId
-              ? { ...msg, content: msg.content + frame.content }
-              : msg,
-          ),
+          prev.map((msg) => {
+            if (msg.id !== assistantId) return msg
+            const blocks: ContentBlock[] = [...(msg.blocks ?? [])]
+            const last = blocks[blocks.length - 1]
+            if (last?.type === "text") {
+              blocks[blocks.length - 1] = { type: "text", text: last.text + frame.content }
+            } else {
+              blocks.push({ type: "text", text: frame.content })
+            }
+            return { ...msg, content: msg.content + frame.content, blocks }
+          }),
         )
       } else if (frame.type === "tool_call") {
         const assistantId = `assistant-${frame.message_id}`
+        const toolInfo = {
+          tool_name: frame.tool_name,
+          tool_input: frame.tool_input,
+          tool_call_id: frame.tool_call_id,
+        }
         setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantId
-              ? {
-                  ...msg,
-                  toolCalls: [
-                    ...(msg.toolCalls ?? []),
-                    {
-                      tool_name: frame.tool_name,
-                      tool_input: frame.tool_input,
-                      tool_call_id: frame.tool_call_id,
-                    },
-                  ],
-                }
-              : msg,
-          ),
+          prev.map((msg) => {
+            if (msg.id !== assistantId) return msg
+            return {
+              ...msg,
+              toolCalls: [...(msg.toolCalls ?? []), toolInfo],
+              blocks: [...(msg.blocks ?? []), { type: "tool_call" as const, tool: toolInfo }],
+            }
+          }),
         )
       } else if (frame.type === "tool_result") {
         const tc = frame as import("@/lib/types").ToolResultFrame
         setMessages((prev) =>
           prev.map((msg) => {
             if (!msg.toolCalls) return msg
-            const updated = msg.toolCalls.map((t) =>
+            const updatedToolCalls = msg.toolCalls.map((t) =>
               t.tool_call_id === tc.tool_call_id
                 ? { ...t, output: tc.output }
                 : t,
             )
-            return { ...msg, toolCalls: updated }
+            const updatedBlocks = (msg.blocks ?? []).map((b) =>
+              b.type === "tool_call" && b.tool.tool_call_id === tc.tool_call_id
+                ? { ...b, tool: { ...b.tool, output: tc.output } }
+                : b,
+            )
+            return { ...msg, toolCalls: updatedToolCalls, blocks: updatedBlocks }
           }),
         )
       } else if (frame.type === "complete") {
         const assistantId = `assistant-${frame.message_id}`
         setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantId
-              ? { ...msg, content: frame.content, streaming: false }
-              : msg,
-          ),
+          prev.map((msg) => {
+            if (msg.id !== assistantId) return msg
+            let blocks = msg.blocks
+            if (blocks && blocks.length > 0) {
+              // Check if blocks are missing text that the complete content has.
+              // This happens when a post-tool token event was dropped.
+              const existingText = blocks
+                .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+                .map((b) => b.text)
+                .join("\n\n")
+              if (frame.content.length > existingText.length) {
+                const remaining = frame.content
+                  .slice(existingText.length)
+                  .replace(/^\n\n/, "")
+                if (remaining) {
+                  blocks = [...blocks, { type: "text" as const, text: remaining }]
+                }
+              }
+            }
+            return { ...msg, content: frame.content, streaming: false, blocks }
+          }),
         )
       } else if (
         frame.type === "status" &&

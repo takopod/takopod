@@ -68,6 +68,10 @@ export interface ToolCallInfo {
   output?: string
 }
 
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_call"; tool: ToolCallInfo }
+
 export interface ChatMessage {
   id: string
   role: "user" | "assistant"
@@ -75,6 +79,7 @@ export interface ChatMessage {
   timestamp: number
   streaming?: boolean
   toolCalls?: ToolCallInfo[]
+  blocks?: ContentBlock[]
 }
 
 export interface FileEntry {

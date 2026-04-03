@@ -17,7 +17,7 @@ import {
 import { useTheme } from "@/components/theme-provider"
 import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
-import { Box, Moon, Plus, RotateCcw, Sun } from "lucide-react"
+import { Moon, Plus, RotateCcw, Sun } from "lucide-react"
 
 function NavLink({
   to,

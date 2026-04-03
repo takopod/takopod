@@ -33,12 +33,16 @@ function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
       </button>
       {open && (
         <div className="border-t px-2 py-1.5">
-          <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Input
-          </div>
-          <pre className="whitespace-pre-wrap break-all font-mono text-[11px]">
-            {JSON.stringify(tool.tool_input, null, 2)}
-          </pre>
+          {Object.entries(tool.tool_input).map(([key, value]) => (
+            <div key={key} className="mb-1.5">
+              <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                {key}
+              </div>
+              <pre className="whitespace-pre-wrap break-all font-mono text-[11px]">
+                {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+              </pre>
+            </div>
+          ))}
           {tool.output != null && (
             <>
               <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -85,7 +89,17 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
                   : "bg-muted text-foreground"
               }`}
             >
-              {msg.streaming && !msg.content ? (
+              {msg.blocks && msg.blocks.length > 0 ? (
+                msg.blocks.map((block, i) =>
+                  block.type === "text" ? (
+                    <div key={i} className="markdown-body">
+                      <Markdown remarkPlugins={[remarkGfm]}>{block.text}</Markdown>
+                    </div>
+                  ) : (
+                    <ToolCallBlock key={block.tool.tool_call_id} tool={block.tool} />
+                  ),
+                )
+              ) : msg.streaming && !msg.content ? (
                 <span className="inline-block animate-pulse">...</span>
               ) : msg.role === "assistant" ? (
                 <div className="markdown-body">
@@ -93,13 +107,6 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
                 </div>
               ) : (
                 <span className="whitespace-pre-wrap">{msg.content}</span>
-              )}
-              {msg.toolCalls && msg.toolCalls.length > 0 && (
-                <div className="mt-2">
-                  {msg.toolCalls.map((tool) => (
-                    <ToolCallBlock key={tool.tool_call_id} tool={tool} />
-                  ))}
-                </div>
               )}
             </div>
           </div>

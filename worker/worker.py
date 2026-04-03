@@ -12,16 +12,32 @@ from worker.agent import run_query
 
 WORKSPACE = Path("/workspace")
 INPUT_PATH = WORKSPACE / "input.json"
+OUTPUT_PATH = WORKSPACE / "output.jsonl"
 POLL_INTERVAL = 0.5
 
 # SDK manages sessions internally via JSONL files in /workspace/sessions/.
 # We track the session_id so we can resume on subsequent queries.
 _session_id: str | None = None
 
+# Persistent file handle for output — opened once, kept open for the
+# lifetime of the worker so the orchestrator can tail it.
+_output_fh = None
+
+
+def _ensure_output_fh():
+    global _output_fh
+    if _output_fh is None:
+        _output_fh = open(OUTPUT_PATH, "a")
+    return _output_fh
+
 
 def emit(event: dict[str, Any]) -> None:
-    """Write a JSONL event to stdout."""
-    print(json.dumps(event), flush=True)
+    """Write a JSONL event to /workspace/output.jsonl."""
+    line = json.dumps(event) + "\n"
+    fh = _ensure_output_fh()
+    fh.write(line)
+    fh.flush()
+    os.fsync(fh.fileno())
 
 
 def _is_processed(conn, message_id: str) -> bool:
@@ -66,6 +82,8 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         return
 
     content = msg.get("content", "")
+    sys.stderr.write(f"worker: query message_id={message_id} content={content!r}\n")
+    sys.stderr.flush()
     emit({"type": "status", "status": "thinking", "message_id": message_id})
 
     try:
@@ -93,6 +111,9 @@ async def main() -> None:
 
     conn = db.connect()
     db.run_migrations(conn)
+
+    # Truncate output file on startup so the orchestrator starts fresh
+    OUTPUT_PATH.write_text("")
 
     sys.stderr.write("worker: ready, polling for input.json\n")
     sys.stderr.flush()
