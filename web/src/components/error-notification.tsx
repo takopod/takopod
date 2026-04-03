@@ -1,6 +1,6 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { AlertCircle } from "lucide-react"
-import type { ErrorFrame } from "@/lib/types"
+import { AlertCircle, RefreshCw } from "lucide-react"
+import type { ErrorFrame, SystemErrorFrame } from "@/lib/types"
 
 export function ErrorNotification({ error }: { error: ErrorFrame | null }) {
   if (!error) return null
@@ -16,6 +16,24 @@ export function ErrorNotification({ error }: { error: ErrorFrame | null }) {
         <AlertCircle className="size-4" />
         <AlertTitle>{error.code === "RATE_LIMITED" ? "Rate Limited" : "Queue Full"}</AlertTitle>
         <AlertDescription>{message}</AlertDescription>
+      </Alert>
+    </div>
+  )
+}
+
+export function SystemErrorNotification({ error }: { error: SystemErrorFrame | null }) {
+  if (!error) return null
+
+  return (
+    <div className="px-4">
+      <Alert variant={error.fatal ? "destructive" : "default"}>
+        {error.fatal ? (
+          <AlertCircle className="size-4" />
+        ) : (
+          <RefreshCw className="size-4 animate-spin" />
+        )}
+        <AlertTitle>{error.fatal ? "Agent Unavailable" : "Agent Restarting"}</AlertTitle>
+        <AlertDescription>{error.error}</AlertDescription>
       </Alert>
     </div>
   )

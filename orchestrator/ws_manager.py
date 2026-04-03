@@ -20,6 +20,10 @@ class WebSocketManager:
         self._ws = ws
         self.session_id = session_id
 
+    @property
+    def connected(self) -> bool:
+        return self._ws is not None
+
     def detach(self) -> None:
         self._ws = None
 

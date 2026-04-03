@@ -28,11 +28,18 @@ export interface StatusFrame {
   message_id: string
 }
 
+export interface SystemErrorFrame {
+  type: "system_error"
+  error: string
+  fatal: boolean
+}
+
 export type ServerFrame =
   | QueueStatusFrame
   | ErrorFrame
   | MessageUpdatedFrame
   | StatusFrame
+  | SystemErrorFrame
 
 export interface ToolCallInfo {
   tool_name: string

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from orchestrator.boot_recovery import boot_recovery
 from orchestrator.container_manager import build_image, ensure_network
 from orchestrator.db import connect, disconnect, run_migrations
 from orchestrator.routes import _reap_idle_workers, router
@@ -26,6 +27,8 @@ async def lifespan(app: FastAPI):
     global _schema_version
     db = await connect()
     _schema_version = await run_migrations(db)
+
+    await boot_recovery()
 
     await ensure_network()
     await build_image()

@@ -55,6 +55,12 @@ class UpdateAgentRequest(BaseModel):
     memory_md: str | None = None
 
 
+class SystemErrorFrame(BaseModel):
+    type: Literal["system_error"] = "system_error"
+    error: str
+    fatal: bool = False
+
+
 class SystemCommandFrame(BaseModel):
     type: Literal["system_command"]
     command: Literal["clear_context"]

@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ from orchestrator.models import (
     FileEntry,
     QueueStatusFrame,
     SystemCommandFrame,
+    SystemErrorFrame,
     UpdateAgentRequest,
     UserMessageFrame,
 )
@@ -43,6 +45,8 @@ RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 10
 QUEUE_DEPTH_MAX = 50
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))  # 5 minutes
+CIRCUIT_BREAKER_WINDOW = 600  # 10 minutes
+CIRCUIT_BREAKER_MAX_CRASHES = 3
 
 _rate_limits: dict[str, deque[float]] = defaultdict(deque)
 
@@ -59,6 +63,8 @@ class WorkerState:
     session_id: str
     ws_manager: WebSocketManager
     polling_task: asyncio.Task | None = None
+    monitor_task: asyncio.Task | None = None
+    crash_times: deque = dataclasses.field(default_factory=deque)
 
 
 # Keyed by agent_id — one worker per agent
@@ -181,6 +187,8 @@ async def delete_agent(agent_id: str):
     if worker:
         if worker.polling_task:
             worker.polling_task.cancel()
+        if worker.monitor_task:
+            worker.monitor_task.cancel()
         container_name = f"rhclaw-{agent_id[:8]}"
         await kill_container(container_name)
 
@@ -382,6 +390,8 @@ async def delete_container(container_id: str):
     if worker:
         if worker.polling_task:
             worker.polling_task.cancel()
+        if worker.monitor_task:
+            worker.monitor_task.cancel()
 
     return {"status": "ok", "container_id": container_id}
 
@@ -504,10 +514,15 @@ async def _ensure_worker(
         # Container already running — reattach WebSocket
         if worker.polling_task:
             worker.polling_task.cancel()
+        if worker.monitor_task:
+            worker.monitor_task.cancel()
 
         worker.session_id = session_id
         worker.ws_manager.attach(ws, session_id)
         worker.polling_task = start_polling_loop(session_id, worker.host_dir, worker.ws_manager)
+        worker.monitor_task = asyncio.create_task(
+            _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
+        )
 
         # Mark as running again (was idle)
         db = await get_db()
@@ -522,13 +537,17 @@ async def _ensure_worker(
     ws_mgr = WebSocketManager(session_id)
     ws_mgr.attach(ws, session_id)
 
-    _active_workers[agent_id] = WorkerState(
+    worker = WorkerState(
         container_record_id=record_id,
         process=process,
         host_dir=host_dir,
         session_id=session_id,
         ws_manager=ws_mgr,
         polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
+    )
+    _active_workers[agent_id] = worker
+    worker.monitor_task = asyncio.create_task(
+        _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
     )
 
 
@@ -539,6 +558,9 @@ async def _cleanup_session(agent_id: str, session_id: str) -> None:
         if worker.polling_task:
             worker.polling_task.cancel()
             worker.polling_task = None
+        if worker.monitor_task:
+            worker.monitor_task.cancel()
+            worker.monitor_task = None
         worker.ws_manager.detach()
 
         # Mark as idle — reaper will kill after timeout
@@ -550,6 +572,119 @@ async def _cleanup_session(agent_id: str, session_id: str) -> None:
         await db.commit()
 
     _rate_limits.pop(session_id, None)
+
+
+async def _respawn_worker(agent_id: str) -> None:
+    """Respawn a crashed worker container for the same agent."""
+    worker = _active_workers.get(agent_id)
+    if not worker:
+        return
+
+    try:
+        await worker.ws_manager.send(
+            SystemErrorFrame(
+                error="Agent restarting after crash...", fatal=False,
+            ).model_dump_json()
+        )
+    except Exception:
+        pass
+
+    try:
+        record_id, process, host_dir = await spawn_container(
+            agent_id, worker.session_id,
+        )
+        worker.container_record_id = record_id
+        worker.process = process
+        worker.host_dir = host_dir
+        worker.polling_task = start_polling_loop(
+            worker.session_id, host_dir, worker.ws_manager,
+        )
+        worker.monitor_task = asyncio.create_task(
+            _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
+        )
+        logger.info("Respawned worker for agent %s", agent_id)
+    except Exception:
+        logger.exception("Failed to respawn worker for agent %s", agent_id)
+        try:
+            await worker.ws_manager.send(
+                SystemErrorFrame(
+                    error="Agent failed to restart", fatal=True,
+                ).model_dump_json()
+            )
+        except Exception:
+            pass
+        _active_workers.pop(agent_id, None)
+
+
+async def _monitor_worker(agent_id: str) -> None:
+    """Await worker process exit and handle crash recovery."""
+    worker = _active_workers.get(agent_id)
+    if not worker:
+        return
+
+    returncode = await worker.process.wait()
+
+    # Process exited — check if we still own this agent
+    current = _active_workers.get(agent_id)
+    if current is not worker:
+        return  # Worker was replaced (e.g., by _ensure_worker)
+
+    logger.warning(
+        "Worker for agent %s exited with code %s", agent_id, returncode,
+    )
+
+    # Cancel polling loop
+    if worker.polling_task:
+        worker.polling_task.cancel()
+        worker.polling_task = None
+
+    # Clean up dead container
+    container_name = f"rhclaw-{agent_id[:8]}"
+    await kill_container(container_name)
+
+    # Update DB status
+    db = await get_db()
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    await db.execute(
+        "UPDATE agent_containers SET status = 'error', stopped_at = ?, "
+        "error_message = ? WHERE id = ?",
+        (now, f"Process exited with code {returncode}", worker.container_record_id),
+    )
+    await db.commit()
+
+    # Check if WebSocket is connected
+    if not worker.ws_manager.connected:
+        logger.info(
+            "No WebSocket connected for agent %s — skipping respawn", agent_id,
+        )
+        _active_workers.pop(agent_id, None)
+        return
+
+    # Circuit breaker: prune old crash times, then check
+    cutoff = time.monotonic() - CIRCUIT_BREAKER_WINDOW
+    while worker.crash_times and worker.crash_times[0] < cutoff:
+        worker.crash_times.popleft()
+    worker.crash_times.append(time.monotonic())
+
+    if len(worker.crash_times) >= CIRCUIT_BREAKER_MAX_CRASHES:
+        logger.error(
+            "Circuit breaker triggered for agent %s: %d crashes in %ds",
+            agent_id, len(worker.crash_times), CIRCUIT_BREAKER_WINDOW,
+        )
+        try:
+            await worker.ws_manager.send(
+                SystemErrorFrame(
+                    error="Agent unavailable after repeated failures. Refresh to retry.",
+                    fatal=True,
+                ).model_dump_json()
+            )
+        except Exception:
+            pass
+        _active_workers.pop(agent_id, None)
+        return
+
+    # Respawn
+    await _respawn_worker(agent_id)
 
 
 async def _reap_idle_workers() -> None:
@@ -590,6 +725,8 @@ async def _reap_idle_workers() -> None:
                 if worker:
                     if worker.polling_task:
                         worker.polling_task.cancel()
+                    if worker.monitor_task:
+                        worker.monitor_task.cancel()
 
         except asyncio.CancelledError:
             raise

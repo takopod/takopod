@@ -4,6 +4,7 @@ import type {
   ErrorFrame,
   QueueStatusFrame,
   ServerFrame,
+  SystemErrorFrame,
   UserMessageFrame,
 } from "@/lib/types"
 
@@ -63,6 +64,7 @@ export function useWebSocket(agentId: string | null) {
     processed: 0,
   })
   const [error, setError] = useState<ErrorFrame | null>(null)
+  const [systemError, setSystemError] = useState<SystemErrorFrame | null>(null)
   const [connected, setConnected] = useState(false)
 
   const clearError = useCallback(() => {
@@ -98,6 +100,7 @@ export function useWebSocket(agentId: string | null) {
     ws.onopen = () => {
       setConnected(true)
       setError(null)
+      setSystemError(null)
       reconnectAttempt.current = 0
     }
 
@@ -105,6 +108,12 @@ export function useWebSocket(agentId: string | null) {
       const frame = JSON.parse(event.data) as ServerFrame
       if (frame.type === "queue_status") {
         setQueueStatus(frame)
+      } else if (frame.type === "system_error") {
+        setSystemError(frame)
+        if (!frame.fatal) {
+          // Auto-dismiss transient errors after 5s
+          setTimeout(() => setSystemError(null), 5000)
+        }
       } else if (frame.type === "error") {
         setError(frame)
         clearError()
@@ -203,5 +212,5 @@ export function useWebSocket(agentId: string | null) {
     }
   }, [agentId])
 
-  return { messages, queueStatus, error, connected, sendMessage, sendSystemCommand }
+  return { messages, queueStatus, error, systemError, connected, sendMessage, sendSystemCommand }
 }
