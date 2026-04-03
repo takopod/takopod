@@ -173,7 +173,11 @@ export function useWebSocket(agentId: string | null) {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
 
-    const messageId = crypto.randomUUID()
+    const messageId = crypto.randomUUID?.() ??
+      "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0
+        return (c === "x" ? r : (r & 0x3) | 0x8).toString(16)
+      })
     const frame: UserMessageFrame = {
       type: "user_message",
       content,
