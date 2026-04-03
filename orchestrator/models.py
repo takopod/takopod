@@ -63,7 +63,7 @@ class SystemErrorFrame(BaseModel):
 
 class SystemCommandFrame(BaseModel):
     type: Literal["system_command"]
-    command: Literal["clear_context"]
+    command: Literal["clear_context", "shutdown"]
 
 
 class FileEntry(BaseModel):

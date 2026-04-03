@@ -4,7 +4,7 @@ import { AgentsView } from "@/components/agents-view"
 import { ChatInput } from "@/components/chat-input"
 import { ContainersView } from "@/components/containers-view"
 import { ChatMessageList } from "@/components/chat-message-list"
-import { ErrorNotification, SystemErrorNotification } from "@/components/error-notification"
+import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { Button } from "@/components/ui/button"
 import {
@@ -59,7 +59,7 @@ export function App() {
     }
   }, [selectedAgentId])
 
-  const { messages, queueStatus, error, systemError, connected, sendMessage, sendSystemCommand } =
+  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect } =
     useWebSocket(selectedAgentId)
 
   const fetchAgents = useCallback(async () => {
@@ -216,7 +216,8 @@ export function App() {
                       )}
                     <ErrorNotification error={error} />
                     <SystemErrorNotification error={systemError} />
-                    <ChatInput onSend={sendMessage} disabled={!connected} />
+                    <SessionEndedBanner reason={sessionEnded} onReconnect={reconnect} />
+                    <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} />
                   </>
                 )
               }

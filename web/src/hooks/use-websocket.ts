@@ -66,6 +66,7 @@ export function useWebSocket(agentId: string | null) {
   const [error, setError] = useState<ErrorFrame | null>(null)
   const [systemError, setSystemError] = useState<SystemErrorFrame | null>(null)
   const [connected, setConnected] = useState(false)
+  const [sessionEnded, setSessionEnded] = useState<string | null>(null)
 
   const clearError = useCallback(() => {
     if (errorTimer.current) clearTimeout(errorTimer.current)
@@ -101,6 +102,7 @@ export function useWebSocket(agentId: string | null) {
       setConnected(true)
       setError(null)
       setSystemError(null)
+      setSessionEnded(null)
       reconnectAttempt.current = 0
     }
 
@@ -127,8 +129,23 @@ export function useWebSocket(agentId: string | null) {
       }
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setConnected(false)
+
+      // Application-specific close codes (4000-4999): session ended, do NOT reconnect
+      if (event.code >= 4000 && event.code <= 4999) {
+        const reason =
+          event.code === 4001
+            ? "Session ended due to inactivity"
+            : event.code === 4002
+              ? "Session terminated by admin"
+              : "Session ended"
+        setSessionEnded(reason)
+        wsRef.current = null
+        return
+      }
+
+      // Normal/unexpected close: auto-reconnect with backoff
       if (wsRef.current === ws) {
         wsRef.current = null
         const delay = Math.min(
@@ -212,5 +229,11 @@ export function useWebSocket(agentId: string | null) {
     }
   }, [agentId])
 
-  return { messages, queueStatus, error, systemError, connected, sendMessage, sendSystemCommand }
+  const reconnect = useCallback(() => {
+    setSessionEnded(null)
+    reconnectAttempt.current = 0
+    connect()
+  }, [connect])
+
+  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect }
 }

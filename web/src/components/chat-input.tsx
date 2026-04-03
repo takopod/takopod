@@ -6,9 +6,10 @@ import { SendHorizontal } from "lucide-react"
 interface ChatInputProps {
   onSend: (content: string) => void
   disabled: boolean
+  sessionEnded?: string | null
 }
 
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export function ChatInput({ onSend, disabled, sessionEnded }: ChatInputProps) {
   const [value, setValue] = useState("")
 
   function handleSubmit(e: FormEvent) {
@@ -24,7 +25,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       <Input
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder={disabled ? "Disconnected..." : "Type a message..."}
+        placeholder={sessionEnded ? "Session ended" : disabled ? "Disconnected..." : "Type a message..."}
         disabled={disabled}
         autoFocus
       />

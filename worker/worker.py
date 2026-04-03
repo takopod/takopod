@@ -98,6 +98,12 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         if command == "clear_context":
             _session_id = None  # Next query starts a fresh SDK session
             emit({"type": "status", "status": "context_cleared", "message_id": ""})
+        elif command == "shutdown":
+            sys.stderr.write("worker: received shutdown command, exiting\n")
+            sys.stderr.flush()
+            emit({"type": "status", "status": "done", "message_id": ""})
+            flush_responses()
+            sys.exit(0)
         return
 
     if msg_type != "user_message":

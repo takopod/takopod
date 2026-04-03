@@ -7,6 +7,10 @@ from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
+# Application-specific WebSocket close codes (4000-4999 range)
+WS_CLOSE_IDLE_TIMEOUT = 4001
+WS_CLOSE_ADMIN_KILL = 4002
+
 
 class WebSocketManager:
     """Manages a single WebSocket connection with serialized sends."""
@@ -40,3 +44,18 @@ class WebSocketManager:
                     self.session_id,
                 )
                 self._ws = None
+
+    async def close(self, code: int, reason: str = "") -> None:
+        """Send a close frame with an application-specific code and detach."""
+        async with self._ws_lock:
+            ws = self._ws
+            if ws is None:
+                return
+            try:
+                await ws.close(code=code, reason=reason)
+            except (ConnectionError, RuntimeError):
+                logger.warning(
+                    "WebSocket close failed for session %s (client already gone)",
+                    self.session_id,
+                )
+            self._ws = None

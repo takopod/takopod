@@ -19,6 +19,7 @@ from orchestrator.container_manager import (
 )
 from orchestrator.db import get_db
 from orchestrator.ipc import (
+    atomic_write,
     get_queue_counts,
     queue_message,
     queue_system_command,
@@ -37,7 +38,7 @@ from orchestrator.models import (
     UpdateAgentRequest,
     UserMessageFrame,
 )
-from orchestrator.ws_manager import WebSocketManager
+from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WS_CLOSE_IDLE_TIMEOUT, WebSocketManager
 
 router = APIRouter(prefix="/api")
 
@@ -65,6 +66,7 @@ class WorkerState:
     polling_task: asyncio.Task | None = None
     monitor_task: asyncio.Task | None = None
     crash_times: deque = dataclasses.field(default_factory=deque)
+    shutting_down: bool = False
 
 
 # Keyed by agent_id — one worker per agent
@@ -396,6 +398,185 @@ async def delete_container(container_id: str):
     return {"status": "ok", "container_id": container_id}
 
 
+# --- Admin API ---
+
+
+@router.post("/admin/sessions/{session_id}/kill")
+async def admin_kill_session(session_id: str):
+    """Force-terminate a session: graceful shutdown with 10s timeout, then kill."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT c.id, c.agent_id FROM agent_containers c "
+        "WHERE c.session_id = ? AND c.status IN ('running', 'idle', 'starting', 'stopping')",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="No active container for session")
+
+    record_id, agent_id = row
+    container_name = f"rhclaw-{agent_id[:8]}"
+    worker = _active_workers.get(agent_id)
+    graceful = False
+
+    if worker:
+        worker.shutting_down = True
+        # Try graceful shutdown
+        try:
+            input_path = worker.host_dir / "input.json"
+            shutdown_payload = json.dumps(
+                [{"type": "system_command", "command": "shutdown"}]
+            )
+            atomic_write(input_path, shutdown_payload.encode())
+            await asyncio.wait_for(worker.process.wait(), timeout=10)
+            graceful = True
+        except (asyncio.TimeoutError, Exception):
+            await kill_container(container_name)
+
+        # Notify connected client
+        if worker.ws_manager.connected:
+            try:
+                await worker.ws_manager.send(
+                    SystemErrorFrame(
+                        error="Session terminated by admin", fatal=True,
+                    ).model_dump_json()
+                )
+            except Exception:
+                pass
+            await worker.ws_manager.close(WS_CLOSE_ADMIN_KILL, "Terminated by admin")
+    else:
+        await kill_container(container_name)
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    await db.execute(
+        "UPDATE agent_containers SET status = 'stopped', stopped_at = ? WHERE id = ?",
+        (now, record_id),
+    )
+    await db.execute(
+        "UPDATE sessions SET status = 'terminated', ended_at = ? "
+        "WHERE id = ? AND ended_at IS NULL",
+        (now, session_id),
+    )
+    await db.commit()
+
+    # Clean up in-memory state
+    w = _active_workers.pop(agent_id, None)
+    if w:
+        if w.polling_task:
+            w.polling_task.cancel()
+        if w.monitor_task:
+            w.monitor_task.cancel()
+
+    return {"status": "ok", "session_id": session_id, "graceful": graceful}
+
+
+@router.get("/admin/sessions")
+async def admin_list_sessions(status: str | None = None, limit: int = 50):
+    """List sessions, optionally filtered by status."""
+    db = await get_db()
+    query = (
+        "SELECT s.id, s.agent_id, a.name, s.status, s.created_at, s.ended_at "
+        "FROM sessions s LEFT JOIN agents a ON a.id = s.agent_id "
+    )
+    params: list = []
+    if status:
+        query += "WHERE s.status = ? "
+        params.append(status)
+    query += "ORDER BY s.created_at DESC LIMIT ?"
+    params.append(limit)
+
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+
+    return [
+        {
+            "id": r[0], "agent_id": r[1], "agent_name": r[2],
+            "status": r[3], "created_at": r[4], "ended_at": r[5],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/admin/sessions/{session_id}")
+async def admin_session_detail(session_id: str):
+    """Detailed session state: metadata, container info, message queue breakdown."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT s.id, s.agent_id, a.name, s.status, s.created_at, s.ended_at "
+        "FROM sessions s LEFT JOIN agents a ON a.id = s.agent_id "
+        "WHERE s.id = ?",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = {
+        "id": row[0], "agent_id": row[1], "agent_name": row[2],
+        "status": row[3], "created_at": row[4], "ended_at": row[5],
+    }
+
+    # Message queue breakdown
+    async with db.execute(
+        "SELECT status, COUNT(*) FROM message_queue "
+        "WHERE session_id = ? GROUP BY status",
+        (session_id,),
+    ) as cur:
+        queue_rows = await cur.fetchall()
+    session["queue"] = {r[0]: r[1] for r in queue_rows}
+
+    # Container info
+    async with db.execute(
+        "SELECT id, status, started_at, stopped_at, last_activity, error_message "
+        "FROM agent_containers WHERE session_id = ? "
+        "ORDER BY started_at DESC LIMIT 1",
+        (session_id,),
+    ) as cur:
+        c_row = await cur.fetchone()
+    if c_row:
+        session["container"] = {
+            "id": c_row[0], "status": c_row[1], "started_at": c_row[2],
+            "stopped_at": c_row[3], "last_activity": c_row[4],
+            "error_message": c_row[5],
+        }
+
+    # Message count
+    async with db.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+        (session_id,),
+    ) as cur:
+        session["message_count"] = (await cur.fetchone())[0]
+
+    return session
+
+
+@router.get("/admin/agents")
+async def admin_list_agents():
+    """List all agents with container status and active session count."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT a.id, a.name, a.agent_type, a.status, a.created_at, "
+        "  (SELECT c.status FROM agent_containers c "
+        "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
+        "  (SELECT COUNT(*) FROM sessions s "
+        "   JOIN agent_containers ac ON ac.session_id = s.id "
+        "   WHERE ac.agent_id = a.id AND ac.status IN ('running', 'idle', 'starting')) "
+        "   AS active_session_count "
+        "FROM agents a WHERE a.status != 'archived' "
+        "ORDER BY a.created_at DESC",
+    ) as cur:
+        rows = await cur.fetchall()
+
+    return [
+        {
+            "id": r[0], "name": r[1], "agent_type": r[2], "status": r[3],
+            "created_at": r[4], "container_status": r[5],
+            "active_session_count": r[6] or 0,
+        }
+        for r in rows
+    ]
+
+
 # --- Message History API ---
 
 
@@ -563,11 +744,18 @@ async def _cleanup_session(agent_id: str, session_id: str) -> None:
             worker.monitor_task = None
         worker.ws_manager.detach()
 
-        # Mark as idle — reaper will kill after timeout
+        # Mark container as idle — reaper will kill after timeout
         db = await get_db()
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await db.execute(
             "UPDATE agent_containers SET status = 'idle' WHERE id = ?",
             (worker.container_record_id,),
+        )
+        # Mark session as disconnected (container still alive, user may reconnect)
+        await db.execute(
+            "UPDATE sessions SET status = 'disconnected', ended_at = ? "
+            "WHERE id = ? AND ended_at IS NULL",
+            (now, session_id),
         )
         await db.commit()
 
@@ -629,6 +817,13 @@ async def _monitor_worker(agent_id: str) -> None:
     if current is not worker:
         return  # Worker was replaced (e.g., by _ensure_worker)
 
+    # Clean shutdown initiated by reaper or admin kill — skip crash recovery
+    if worker.shutting_down:
+        logger.info(
+            "Worker for agent %s shut down cleanly (code %s)", agent_id, returncode,
+        )
+        return  # Reaper/admin kill handles cleanup
+
     logger.warning(
         "Worker for agent %s exited with code %s", agent_id, returncode,
     )
@@ -688,10 +883,12 @@ async def _monitor_worker(agent_id: str) -> None:
 
 
 async def _reap_idle_workers() -> None:
-    """Background task: kill worker containers idle longer than IDLE_TIMEOUT_SECONDS.
+    """Background task: gracefully shut down worker containers idle longer than
+    IDLE_TIMEOUT_SECONDS.
 
-    Activity is tracked by last_activity in agent_containers (updated when
-    messages are flushed via IPC, not on WebSocket connect/disconnect).
+    Flow per container: send shutdown command via input.json → wait up to 60s
+    for clean exit → force-kill on timeout. Specific failure reasons are
+    propagated to the WebSocket client so the user knows exactly what happened.
     """
     while True:
         await asyncio.sleep(30)
@@ -702,31 +899,99 @@ async def _reap_idle_workers() -> None:
                 time.gmtime(time.time() - IDLE_TIMEOUT_SECONDS),
             )
             async with db.execute(
-                "SELECT id, agent_id FROM agent_containers "
+                "SELECT id, agent_id, session_id FROM agent_containers "
                 "WHERE status = 'idle' AND last_activity < ?",
                 (cutoff,),
             ) as cur:
                 rows = await cur.fetchall()
 
-            for record_id, agent_id in rows:
+            for record_id, agent_id, session_id in rows:
                 container_name = f"rhclaw-{agent_id[:8]}"
-                logger.info("Reaping idle container %s for agent %s", container_name, agent_id)
-                await kill_container(container_name)
+                worker = _active_workers.get(agent_id)
+                reason = "Session ended due to inactivity"
+                graceful = False
 
+                if worker:
+                    worker.shutting_down = True
+
+                    # Try graceful shutdown via input.json
+                    try:
+                        input_path = worker.host_dir / "input.json"
+                        shutdown_payload = json.dumps(
+                            [{"type": "system_command", "command": "shutdown"}]
+                        )
+                        atomic_write(input_path, shutdown_payload.encode())
+
+                        logger.info(
+                            "Sending shutdown to idle worker %s for agent %s",
+                            container_name, agent_id,
+                        )
+
+                        await db.execute(
+                            "UPDATE agent_containers SET status = 'stopping' WHERE id = ?",
+                            (record_id,),
+                        )
+                        await db.commit()
+
+                        # Wait for worker to exit cleanly
+                        try:
+                            await asyncio.wait_for(worker.process.wait(), timeout=60)
+                            graceful = True
+                            logger.info("Worker %s exited gracefully", container_name)
+                        except asyncio.TimeoutError:
+                            reason = "Session ended — worker did not respond to shutdown, container was force-stopped"
+                            logger.warning(
+                                "Worker %s did not exit in 60s, force-killing",
+                                container_name,
+                            )
+                            await kill_container(container_name)
+                    except Exception:
+                        reason = "Session ended — cleanup error, container was force-stopped"
+                        logger.exception(
+                            "Failed to send shutdown to worker %s, force-killing",
+                            container_name,
+                        )
+                        await kill_container(container_name)
+                else:
+                    # No in-memory worker (e.g. orchestrator restarted) — hard kill
+                    logger.info(
+                        "Reaping idle container %s (no in-memory state)", container_name,
+                    )
+                    await kill_container(container_name)
+
+                # Finalize DB state
                 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 await db.execute(
-                    "UPDATE agent_containers SET status = 'stopped', stopped_at = ? WHERE id = ?",
+                    "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
+                    "WHERE id = ?",
                     (now, record_id),
+                )
+                await db.execute(
+                    "UPDATE sessions SET status = 'idle_timeout', ended_at = ? "
+                    "WHERE id = ? AND ended_at IS NULL",
+                    (now, session_id),
                 )
                 await db.commit()
 
+                # Notify WebSocket client if still connected
+                if worker and worker.ws_manager.connected:
+                    try:
+                        await worker.ws_manager.send(
+                            SystemErrorFrame(error=reason, fatal=True).model_dump_json()
+                        )
+                    except Exception:
+                        pass
+                    await worker.ws_manager.close(
+                        WS_CLOSE_IDLE_TIMEOUT, "Idle timeout",
+                    )
+
                 # Clean up in-memory state
-                worker = _active_workers.pop(agent_id, None)
-                if worker:
-                    if worker.polling_task:
-                        worker.polling_task.cancel()
-                    if worker.monitor_task:
-                        worker.monitor_task.cancel()
+                w = _active_workers.pop(agent_id, None)
+                if w:
+                    if w.polling_task:
+                        w.polling_task.cancel()
+                    if w.monitor_task:
+                        w.monitor_task.cancel()
 
         except asyncio.CancelledError:
             raise
@@ -804,6 +1069,18 @@ async def websocket_endpoint(ws: WebSocket):
                 continue
 
             await _store_message(session_id, frame)
+
+            # Reset idle timer on every user message
+            worker = _active_workers.get(agent_id)
+            if worker:
+                now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                db = await get_db()
+                await db.execute(
+                    "UPDATE agent_containers SET last_activity = ? WHERE id = ?",
+                    (now, worker.container_record_id),
+                )
+                await db.commit()
+
             await _send_queue_status(ws, session_id, agent_id)
             await _ensure_worker(agent_id, session_id, ws)
 
