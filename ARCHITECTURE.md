@@ -48,19 +48,41 @@ Returns an array of active sessions with: `session_id`, `agent_type`, `container
 
 Returns: session metadata, container status, `message_queue` breakdown by status, active delegations, crash count.
 
+### Agent Files API
+
+HTTP endpoints for browsing and editing files in an agent's workspace directory. Prefixed with `/api/agents/{agent_id}/files`. The orchestrator resolves paths relative to the agent's `host_dir` from the `agents` table.
+
+**Security**: All endpoints must validate that the resolved absolute path stays within the agent's `host_dir` (path traversal protection via `Path.resolve()` + prefix check). Requests that escape the workspace return `403`.
+
+**`GET /api/agents/{agent_id}/files`** — List files in the workspace (or a subdirectory via `?path=memory/`).
+
+Returns a flat array of entries: `name`, `path` (relative to workspace root), `type` (`file` | `directory`), `size`, `modified_at`. Does not recurse into subdirectories unless `?recursive=true` is specified.
+
+**`GET /api/agents/{agent_id}/files/{path:path}`** — Read a file's content.
+
+Returns the raw file content with appropriate `Content-Type`. For text files (`.md`, `.json`, `.sql`, `.py`, `.txt`), returns `text/plain`. For binary files, returns `application/octet-stream`. Returns `404` if the file does not exist.
+
+**`PUT /api/agents/{agent_id}/files/{path:path}`** — Create or update a file.
+
+Accepts raw file content in the request body. Creates parent directories if they don't exist. If the agent has a running container, the change is visible immediately via the bind mount — identity file changes (`CLAUDE.md`, `SOUL.md`, `MEMORY.md`) take effect at the next context assembly (next message), no container restart needed. If the file being updated is `CLAUDE.md`, `SOUL.md`, or `MEMORY.md`, the orchestrator also updates the corresponding column in the `agents` table to keep the database in sync.
+
+**`DELETE /api/agents/{agent_id}/files/{path:path}`** — Delete a file.
+
+Returns `404` if the file does not exist. Refuses to delete identity files (`CLAUDE.md`, `SOUL.md`, `MEMORY.md`) — returns `403`. Refuses to delete directories (use a separate endpoint or require `?recursive=true` for safety).
+
 ### Component Topology
 
-- **Frontend (Stateless UI)**: Single-page app. Connects to one WebSocket per session. Renders streaming tokens, tool call indicators, typing status. Has a "Clear Context" button.
+- **Frontend (Stateless UI)**: Single-page app. Connects to one WebSocket per session. Renders streaming tokens, tool call indicators, typing status. Has a "Clear Context" button and a file browser for viewing/editing agent workspace files.
 - **Orchestrator (FastAPI)**: Central process. Manages WebSocket connections, SQLite state, container lifecycle, message routing, scheduled task queue, and inter-agent routing.
-- **Worker Agents (Podman containers)**: One container per active session. Rootless, no exposed ports. Each has a bind-mounted host directory for file-based IPC and persistent memory. Runs a Python process using the Claude Agent SDK.
+- **Worker Agents (Podman containers)**: One container per active agent. Rootless, no exposed ports. Each has a bind-mounted agent workspace directory for file-based IPC, persistent memory, and identity files. Runs a Python process using the Claude Agent SDK.
 - **Embedding Service (Ollama container)**: Long-lived singleton container running an Ollama instance with a pulled embedding model. Workers call it over HTTP (`http://ollama:11434/api/embed`) on the shared Podman network to generate and query embeddings. Not per-session — shared by all workers.
 
 ### Container Lifecycle
 
-- **Session Start**: Orchestrator spawns a Podman container via `asyncio.create_subprocess_exec`. Container runs a long-lived polling loop. Orchestrator holds a reference to the async subprocess (pid, stdout pipe). Container ID is obtained via `--cidfile` flag (not `podman inspect`, which races with startup).
+- **Session Start**: Orchestrator looks up the agent's `host_dir` from the `agents` table and spawns a Podman container via `asyncio.create_subprocess_exec`, bind-mounting that directory to `/workspace`. The agent's workspace is persistent and shared across all sessions for that agent — `worker_db.sqlite`, `memory/`, `sessions/`, and identity files (`CLAUDE.md`, `SOUL.md`, `MEMORY.md`) survive container restarts. Container runs a long-lived polling loop. Orchestrator holds a reference to the async subprocess (pid, stdout pipe). Container ID is obtained via `--cidfile` flag (not `podman inspect`, which races with startup).
 - **Session Active**: Both sides run 0.5s polling loops. Worker polls for `input.json`, processes all messages in the batch, deletes the file, and streams JSONL to stdout. Orchestrator polls for `input.json` deletion (ACK) and `QUEUED` message flushing, and separately reads stdout via async `readline()` to forward events to the WebSocket.
-- **Session Idle** (no messages for 10 min): Container remains alive (no cold-start penalty on next message). Memory summarization is not triggered on idle — it occurs on session end or context overflow (see Memory Management Flow). If the session remains idle for the max idle TTL (default: 2 hours), the Periodic Reaper triggers a graceful shutdown (see Periodic Reaper).
-- **Session End** (UI disconnect or explicit "Clear Context"): Orchestrator issues `podman stop`, then `podman kill` if unresponsive, then `podman rm -f` to clean up. The `--rm` flag is not used so that the container survives orchestrator crashes and can be discovered during boot recovery (see Orchestrator Boot Recovery). Host directory is retained for memory persistence.
+- **Session Idle** (no messages for 10 min): Container remains alive (no cold-start penalty on next message). Memory summarization is not triggered on idle — it occurs on session end or context overflow (see Memory Management Flow). If the session remains idle for the max idle TTL (default: 2 hours), the Periodic Reaper triggers a graceful shutdown (see Periodic Reaper). The agent's workspace persists regardless — only the container is terminated.
+- **Session End** (UI disconnect or explicit "Clear Context"): Orchestrator issues `podman stop`, then `podman kill` if unresponsive, then `podman rm -f` to clean up. The `--rm` flag is not used so that the container survives orchestrator crashes and can be discovered during boot recovery (see Orchestrator Boot Recovery). The agent's `host_dir` is never deleted on session end — it is the agent's persistent workspace across all sessions.
 
 ### Container Configuration
 
@@ -68,14 +90,14 @@ Containers are launched with the following constraints:
 
 - `--network rhclaw-internal` — workers join a shared Podman network (`podman network create rhclaw-internal`). This provides outbound HTTP/HTTPS access (required for the Claude Agent SDK's `WebSearch` and `WebFetch` tools) and inter-container DNS resolution (workers reach the Ollama embedding service at `ollama:11434`). The shared network does not expose host-local services to workers — a compromised worker cannot reach ports on the host machine, only other containers on the same network (see Security & Blast Radius Isolation below).
 - `--read-only` — root filesystem is read-only.
-- `--label rhclaw.managed=true`, `--label rhclaw.session_id=<id>` — labels for boot recovery container discovery (see Orchestrator Boot Recovery).
+- `--label rhclaw.managed=true`, `--label rhclaw.agent_id=<id>`, `--label rhclaw.session_id=<id>` — labels for boot recovery container discovery (see Orchestrator Boot Recovery).
 - `--memory 2g`, `--cpus 2`, `--pids-limit 256`
 - `--tmpfs /tmp:rw,size=512m`, `--tmpfs /var/tmp:rw,size=64m`
-- `-v <host_dir>:/workspace:Z` — bind mount for IPC, memory, and worker database.
+- `-v <agent_host_dir>:/workspace:Z` — bind mount of the agent's persistent workspace directory (`data/agents/<agent_id>/`) for IPC, memory, identity files, and worker database.
 
 Writable paths inside the container:
 
-- `/workspace` (bind mount): `input.json`, `worker_db.sqlite`, `sessions/` (SDK session JSONL files), `memory/`
+- `/workspace` (bind mount): `input.json`, `worker_db.sqlite`, `sessions/` (SDK session JSONL files), `memory/`, `agents.json` (read-only from worker's perspective)
 - `/tmp`, `/var/tmp` (tmpfs): Python temp files, library caches
 - `MEMORY.md`, `CLAUDE.md`, `SOUL.md` are **read-only identity files** set by the user/operator. The agent reads them at context assembly time but must never modify them.
 - All other worker filesystem writes must be restricted to the paths listed above. `worker_db.sqlite` must reside inside `/workspace` for `--read-only` compatibility.
@@ -100,11 +122,11 @@ Because worker agents can fetch arbitrary external URLs via the Claude Agent SDK
 
 The mitigation strategy is **blast radius isolation** rather than network blocking. Each worker runs in a per-session rootless Podman container with strict boundaries:
 
-- **Filesystem isolation**: `--read-only` root filesystem. The only writable paths are the `/workspace` bind mount (scoped to that session's host directory) and ephemeral `tmpfs` mounts (`/tmp`, `/var/tmp`). A compromised worker cannot read or write files belonging to other sessions, other users, or the host machine.
+- **Filesystem isolation**: `--read-only` root filesystem. The only writable paths are the `/workspace` bind mount (scoped to that agent's persistent workspace directory) and ephemeral `tmpfs` mounts (`/tmp`, `/var/tmp`). A compromised worker cannot read or write files belonging to other agents, other users, or the host machine.
 - **Process isolation**: `--pids-limit 256` prevents fork bombs. The container runs rootless with no elevated capabilities.
 - **Memory/CPU isolation**: `--memory 2g`, `--cpus 2` prevent resource exhaustion attacks from affecting the host or other containers.
 - **Network isolation**: Workers join the `rhclaw-internal` Podman network, which provides outbound internet access and inter-container DNS (for reaching the Ollama embedding service). No ports are exposed on worker containers. The shared network does not route to host-local services — a compromised worker cannot reach ports on the host machine. The only communication channel back to the orchestrator is stdout (JSONL). The only other reachable container is the Ollama embedding service, which is a stateless HTTP API with no access to session data, credentials, or other workers.
-- **Session ephemerality**: Containers are destroyed on session end. A compromised container does not persist beyond its session lifecycle. The host directory is retained for memory, but it contains only that session's conversation history and summaries — no credentials, no cross-session data.
+- **Session ephemerality**: Containers are destroyed on session end. A compromised container does not persist beyond its session lifecycle. The agent's workspace directory is retained for memory and identity persistence, but it contains only that agent's conversation history and summaries — no credentials, no cross-agent data.
 - **Orchestrator as trust boundary**: The orchestrator validates all JSONL events from workers. Delegation requests are routed through the orchestrator, not directly between containers. A compromised worker cannot directly address or inject messages into another worker's `input.json`.
 
 The net effect: a prompt-injected agent can waste its own session's tokens and produce garbage output, but it cannot escape its container, access other sessions, or reach internal systems.
@@ -115,7 +137,7 @@ All inter-agent delegation spawns ephemeral containers. The orchestrator never r
 
 1. Worker A emits a `delegate` event to stdout with the target agent type and a self-contained payload.
 2. Orchestrator intercepts the delegate event from Worker A's stdout stream.
-3. Orchestrator validates the `target` against a list of known agent types (security boundary — prevents a prompt-injected worker from addressing arbitrary targets).
+3. Orchestrator validates the `target` against the `agents` table by name (security boundary — prevents a prompt-injected worker from addressing arbitrary or nonexistent targets).
 4. Orchestrator inserts a row into `active_delegations` with `status = 'pending'` and `timeout_at = now + 5 minutes`.
 5. Orchestrator spawns a delegation container with the target agent type's base config (`CLAUDE.md`, `SOUL.md`). The container gets a temporary host directory — no user memory, no session history. The delegation payload must be self-contained. Updates `active_delegations` with the `container_id` and `status = 'running'`.
 6. Orchestrator writes the delegation payload to the delegation container's `input.json`.
@@ -125,7 +147,7 @@ All inter-agent delegation spawns ephemeral containers. The orchestrator never r
 10. Worker A receives the delegation response and continues processing.
 11. If the delegation container crashes or times out, the orchestrator sets `active_delegations.status` to `failed` or `timed_out` and queues a `delegation_response` with error payload so Worker A can report the failure to the user.
 
-The delegation container follows the same lifecycle as scheduled task containers: spawn, deliver input, read stdout, collect result, destroy. The `agent_containers` table distinguishes these via `container_type`: `delegation` containers get a temporary host directory with no session data (the delegation payload must be self-contained), while `scheduled_task` containers bind-mount the session's host directory because tasks like memory compaction need to read/write that session's files (see Data Models).
+The delegation container follows the same lifecycle as scheduled task containers: spawn, deliver input, read stdout, collect result, destroy. The `agent_containers` table distinguishes these via `container_type`: `delegation` containers get a temporary host directory with no agent data (the delegation payload must be self-contained), while `scheduled_task` containers bind-mount the agent's workspace directory because tasks like memory compaction need to read/write that agent's files (see Data Models).
 
 ### SDK Subagents vs. Worker Delegation
 
@@ -137,13 +159,13 @@ Worker-to-worker delegation (described above) is for cross-container, cross-capa
 
 If the orchestrator process crashes or the host reboots, messages marked `IN-FLIGHT` in `message_queue` are orphaned — the worker that was supposed to process them may still be running (orchestrator crash) or gone (host reboot), and the flush logic only looks for `QUEUED` messages. On startup, before accepting WebSocket connections, the orchestrator runs state reconciliation. The ordering of these steps is critical — containers must be killed before files are touched, because workers are separate Podman processes that survive an orchestrator crash.
 
-Containers are launched with `--label rhclaw.managed=true --label rhclaw.session_id=<id>` so the orchestrator can identify its own containers on recovery.
+Containers are launched with `--label rhclaw.managed=true --label rhclaw.agent_id=<id> --label rhclaw.session_id=<id>` so the orchestrator can identify its own containers on recovery.
 
 1. Connect to SQLite.
 2. Run `podman ps -a --filter label=rhclaw.managed=true -q` to find all managed containers (running or stopped).
 3. Run `podman rm -f <id>` for each. After this step, no workers are running — all subsequent file operations are safe.
 4. Execute: `UPDATE message_queue SET status = 'QUEUED', flushed_at = NULL WHERE status = 'IN-FLIGHT';`
-5. Delete all `input.json` files in host directories. Safe because step 3 guarantees no worker is mid-read.
+5. Delete all `input.json` files in agent workspace directories (`data/agents/*/input.json`). Safe because step 3 guarantees no worker is mid-read.
 6. Set all `agent_containers` rows with status `running`, `starting`, or `stopping` to `stopped`.
 7. Clean up any orphaned delegation container host directories (`container_type = 'delegation'`).
 8. Mark all in-flight delegations as failed: `UPDATE active_delegations SET status = 'failed' WHERE status IN ('pending', 'running');`
@@ -157,7 +179,7 @@ When the orchestrator resumes normal operation and new WebSocket connections arr
 1. The JSONL stream reader yields a fatal `system_error` event when it detects unexpected EOF (non-zero exit code from worker process).
 2. The orchestrator forwards the error to the client WebSocket and updates `agent_containers.status` to `error` in the database.
 3. Orchestrator runs `podman rm -f` to clean up the dead container.
-4. If the WebSocket is still connected, the orchestrator respawns the container with the same `session_id` (preserving the host directory and memory), restarts the stdout reader, and notifies the client.
+4. If the WebSocket is still connected, the orchestrator respawns the container for the same agent (mounting the same `host_dir`), restarts the stdout reader, and notifies the client.
 5. If the WebSocket is disconnected, the crash is logged but no respawn occurs.
 6. Circuit breaker: if 3+ crashes occur within 10 minutes for the same session, the session is marked as `error` and retrying stops. The client is notified that the agent is unavailable.
 
@@ -178,10 +200,25 @@ Both the idle grace period (10 minutes, existing behavior — no action taken) a
 ### Orchestrator SQLite Schema
 
 ```sql
+-- User-created agent instances (persistent identity + workspace)
+CREATE TABLE agents (
+    id          TEXT PRIMARY KEY,  -- UUID
+    name        TEXT NOT NULL UNIQUE,  -- user-facing name (e.g., "coder", "researcher", "bob")
+    agent_type  TEXT NOT NULL DEFAULT 'default',  -- references agent_templates/ for seed files
+    host_dir    TEXT NOT NULL,     -- absolute path to persistent workspace (e.g., data/agents/<id>/)
+    claude_md   TEXT,             -- user-customized CLAUDE.md content (NULL = use agent_type default)
+    soul_md     TEXT,             -- user-customized SOUL.md content (NULL = use agent_type default)
+    memory_md   TEXT,             -- user-customized MEMORY.md content (NULL = use agent_type default)
+    container_memory TEXT NOT NULL DEFAULT '2g',  -- podman --memory flag
+    container_cpus   TEXT NOT NULL DEFAULT '2',   -- podman --cpus flag
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    status      TEXT NOT NULL DEFAULT 'active'  -- active | archived
+);
+
 -- Conversation sessions
 CREATE TABLE sessions (
     id          TEXT PRIMARY KEY,  -- UUID
-    agent_id    TEXT NOT NULL,     -- which agent type/identity
+    agent_id    TEXT NOT NULL REFERENCES agents(id),  -- which agent instance owns this session
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     ended_at    TEXT,
     status      TEXT NOT NULL DEFAULT 'active'  -- active | idle | terminated
@@ -201,25 +238,25 @@ CREATE INDEX idx_messages_session ON messages(session_id, created_at);
 -- Container state tracking
 CREATE TABLE agent_containers (
     id              TEXT PRIMARY KEY,  -- UUID
+    agent_id        TEXT NOT NULL REFERENCES agents(id),  -- which agent instance this container serves
     session_id      TEXT NOT NULL REFERENCES sessions(id),
     container_id    TEXT,              -- podman container ID (set after launch)
     pid             INTEGER,           -- OS process ID of the podman run process
-    agent_type      TEXT NOT NULL,     -- agent identity/role
     container_type  TEXT NOT NULL DEFAULT 'session',  -- session | delegation | scheduled_task
-    host_dir        TEXT NOT NULL,     -- absolute path to mounted directory
     status          TEXT NOT NULL DEFAULT 'starting',  -- starting | running | idle | stopping | stopped | error
     started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     stopped_at      TEXT,
     last_activity   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     error_message   TEXT
 );
+CREATE INDEX idx_agent_containers_agent ON agent_containers(agent_id);
 CREATE INDEX idx_agent_containers_session ON agent_containers(session_id);
 CREATE INDEX idx_agent_containers_status ON agent_containers(status);
 
 -- Scheduled tasks
 CREATE TABLE scheduled_tasks (
     id              TEXT PRIMARY KEY,  -- UUID
-    session_id      TEXT NOT NULL REFERENCES sessions(id),  -- links task to session's host_dir for /workspace bind mount
+    agent_id        TEXT NOT NULL REFERENCES agents(id),     -- links task to agent's host_dir for /workspace bind mount
     agent_type      TEXT NOT NULL,     -- which agent handles this
     task_type       TEXT NOT NULL,     -- e.g., "data_refresh", "cleanup"
     payload         TEXT NOT NULL,     -- JSON
@@ -233,7 +270,7 @@ CREATE TABLE scheduled_tasks (
     timeout_seconds INTEGER NOT NULL DEFAULT 900  -- 15 minutes; configurable per task_type
 );
 CREATE INDEX idx_scheduled_tasks_status ON scheduled_tasks(status, scheduled_at);
-CREATE INDEX idx_scheduled_tasks_session ON scheduled_tasks(session_id);
+CREATE INDEX idx_scheduled_tasks_agent ON scheduled_tasks(agent_id);
 
 -- Delegation tracking
 CREATE TABLE active_delegations (
@@ -423,17 +460,47 @@ The orchestrator's stream reader intercepts `task_result` events, writes `payloa
 
 ## 4. Memory Management Flow
 
-### Identity Files (Read-Only)
+### Agent Workspace & Identity Files
 
-`CLAUDE.md`, `SOUL.md`, and `MEMORY.md` are set by the user/operator and placed in the agent template directory. They are copied into the worker's `/workspace` at container creation time. The agent reads them at context assembly but must never modify them.
+When a user creates an agent, the orchestrator:
 
-- `CLAUDE.md` — agent instructions and behavioral rules.
-- `SOUL.md` — agent personality and communication style.
-- `MEMORY.md` — persistent identity context (who the agent is, who the user is, special preferences). This is not a log or summary dump.
+1. Creates a persistent workspace directory at `data/agents/<agent_id>/`.
+2. Seeds it with identity files from `agent_templates/<agent_type>/` (or from user-provided content in the `agents` table if customized): `CLAUDE.md`, `SOUL.md`, `MEMORY.md`.
+3. Creates empty subdirectories: `sessions/`, `memory/`.
+
+The workspace layout:
+
+- `data/agents/<agent_id>/CLAUDE.md` — agent instructions and behavioral rules.
+- `data/agents/<agent_id>/SOUL.md` — agent personality and communication style.
+- `data/agents/<agent_id>/MEMORY.md` — persistent identity context (who the agent is, who the user is, special preferences). This is not a log or summary dump.
+- `data/agents/<agent_id>/sessions/` — SDK session JSONL files.
+- `data/agents/<agent_id>/memory/` — daily memory summary files.
+- `data/agents/<agent_id>/worker_db.sqlite` — worker database (FTS, vectors, deduplication).
+- `data/agents/<agent_id>/agents.json` — manifest of all other agents available for delegation (written by the orchestrator).
+
+Identity files are read-only from the worker's perspective. The agent reads them at context assembly but must never modify them. If the user updates an agent's identity files via the UI, the orchestrator writes the new content to the `agents` table and to the workspace directory on disk. Changes take effect on the next container spawn (not mid-session).
+
+### Agent Discovery
+
+Workers need to know which other agents exist in order to decide delegation targets. The orchestrator writes an `agents.json` manifest to each agent's workspace directory. The file contains an array of all agents except the current one:
+
+```json
+[
+  {"name": "coder", "description": "Writes and debugs code", "agent_type": "coder"},
+  {"name": "researcher", "description": "Finds and summarizes information", "agent_type": "researcher"}
+]
+```
+
+The orchestrator writes/refreshes `agents.json`:
+
+- At container spawn time (guaranteed fresh on every startup).
+- When an agent is created or deleted — the orchestrator updates `agents.json` in all active agent workspace directories. For agents with a running container, the update is picked up at the worker's next context assembly. No `system_command` is needed — the worker reads the file from disk each time.
+
+The worker reads `/workspace/agents.json` at context assembly time and includes the available agents in the system prompt so the LLM knows who it can delegate to. This file is read-only from the worker's perspective. The data is non-sensitive (names and descriptions only, no workspace paths or credentials), so there is no isolation concern.
 
 ### Session Storage
 
-Session history is managed by the Claude Agent SDK's native session persistence. The SDK stores sessions as JSONL files. The worker configures the SDK's session storage path to write to `/workspace/sessions/` (the bind mount), so session data survives container restarts. The worker uses `resume: sessionId` on subsequent `query()` calls to maintain conversation continuity within a session.
+Session history is managed by the Claude Agent SDK's native session persistence. The SDK stores sessions as JSONL files. The worker configures the SDK's session storage path to write to `/workspace/sessions/` (the bind mount). Since the workspace is per-agent and persists across sessions, all session JSONL files accumulate in the same directory. The worker uses `resume: sessionId` on subsequent `query()` calls to maintain conversation continuity within a session.
 
 ### On Message Receipt (Context Retrieval)
 
@@ -504,7 +571,13 @@ When a session ends (UI disconnect or "Clear Context"):
   - `agent.py` — Claude Agent SDK integration (including SDK subagent definitions, which are internal to the worker and invisible to the orchestrator)
   - `migrations/` — Numbered SQL migration files for worker_db.sqlite
   - `Containerfile` — Podman image definition
-- `agent_templates/` — Per-agent-type template files
+- `data/agents/<agent_id>/` — Per-agent persistent workspace (created when user creates an agent)
+  - `CLAUDE.md`, `SOUL.md`, `MEMORY.md` — identity files (seeded from templates, updatable via UI)
+  - `agents.json` — manifest of available delegation targets (written by orchestrator)
+  - `sessions/` — SDK session JSONL files
+  - `memory/` — daily memory summary files
+  - `worker_db.sqlite` — worker database
+- `agent_templates/` — Seed templates for new agents, one subdirectory per agent type
   - `default/CLAUDE.md`
   - `default/SOUL.md`
   - `default/MEMORY.md`
