@@ -160,6 +160,20 @@ async def main() -> None:
     conn.execute("UPDATE worker_responses SET status = 'sent' WHERE status = 'pending'")
     conn.commit()
 
+    # Ollama smoke test — non-fatal, workers function without embeddings
+    try:
+        from worker.embed import embed
+        vec = await embed("smoke test")
+        sys.stderr.write(
+            f"worker: Ollama connectivity OK — embedding dim={len(vec)}\n"
+        )
+        sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(
+            f"worker: Ollama not reachable: {e} — embeddings disabled\n"
+        )
+        sys.stderr.flush()
+
     sys.stderr.write("worker: ready, polling for input.json\n")
     sys.stderr.flush()
 
