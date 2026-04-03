@@ -1,7 +1,7 @@
 """Claude Agent SDK integration.
 
-Translates SDK messages into the JSONL protocol expected by the orchestrator's
-stream reader (token, tool_call, tool_result, complete events on stdout).
+Translates SDK messages into events (token, tool_call, tool_result, complete)
+persisted via the worker's emit() callback for the orchestrator to consume.
 """
 
 import json
@@ -70,9 +70,12 @@ async def run_query(
 
     # Emit tool events via hooks so the frontend can display them
     async def on_pre_tool(input_data, tool_use_id, context):
+        tool_name = input_data.get("tool_name", "unknown")
+        sys.stderr.write(f"agent: tool_call {tool_name} id={tool_use_id[:12]}\n")
+        sys.stderr.flush()
         emit({
             "type": "tool_call",
-            "tool_name": input_data.get("tool_name", "unknown"),
+            "tool_name": tool_name,
             "tool_input": input_data.get("tool_input", {}),
             "tool_call_id": tool_use_id,
             "message_id": message_id,
@@ -83,6 +86,8 @@ async def run_query(
         output = input_data.get("output", "")
         if isinstance(output, dict):
             output = json.dumps(output)
+        sys.stderr.write(f"agent: tool_result id={tool_use_id[:12]}\n")
+        sys.stderr.flush()
         emit({
             "type": "tool_result",
             "tool_call_id": tool_use_id,
@@ -140,12 +145,19 @@ async def run_query(
                         "message_id": message_id,
                         "seq": seq,
                     })
+            sys.stderr.write(f"agent: AssistantMessage seq={seq}\n")
+            sys.stderr.flush()
 
         elif isinstance(msg, ResultMessage):
-            # ResultMessage signals completion; text already captured above
-            pass
+            sys.stderr.write("agent: ResultMessage (query complete)\n")
+            sys.stderr.flush()
 
     full_text = "\n\n".join(full_text_parts)
+    sys.stderr.write(
+        f"agent: emitting complete, {len(full_text_parts)} text blocks, "
+        f"{total_usage.get('input_tokens', 0)}+{total_usage.get('output_tokens', 0)} tokens\n"
+    )
+    sys.stderr.flush()
     emit({
         "type": "complete",
         "content": full_text,

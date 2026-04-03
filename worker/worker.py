@@ -12,32 +12,65 @@ from worker.agent import run_query
 
 WORKSPACE = Path("/workspace")
 INPUT_PATH = WORKSPACE / "input.json"
-OUTPUT_PATH = WORKSPACE / "output.jsonl"
+RESPONSE_PATH = WORKSPACE / "response.json"
 POLL_INTERVAL = 0.5
 
 # SDK manages sessions internally via JSONL files in /workspace/sessions/.
 # We track the session_id so we can resume on subsequent queries.
 _session_id: str | None = None
 
-# Persistent file handle for output — opened once, kept open for the
-# lifetime of the worker so the orchestrator can tail it.
-_output_fh = None
+# Module-level DB connection, set in main().
+_conn = None
 
 
-def _ensure_output_fh():
-    global _output_fh
-    if _output_fh is None:
-        _output_fh = open(OUTPUT_PATH, "a")
-    return _output_fh
+def atomic_write(path: Path, data: bytes) -> None:
+    """Write data to path atomically via temp file + rename."""
+    temp_path = path.parent / f"{path.name}.tmp.{os.getpid()}"
+    try:
+        fd = os.open(str(temp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(str(temp_path), str(path))
+    except BaseException:
+        try:
+            os.unlink(str(temp_path))
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def flush_responses() -> None:
+    """Flush pending worker_responses rows to response.json if absent."""
+    if RESPONSE_PATH.exists():
+        return
+    rows = _conn.execute(
+        "SELECT id, event FROM worker_responses "
+        "WHERE status = 'pending' ORDER BY id",
+    ).fetchall()
+    if not rows:
+        return
+    events = [json.loads(row[1]) for row in rows]
+    atomic_write(RESPONSE_PATH, json.dumps(events).encode())
+    ids = [row[0] for row in rows]
+    placeholders = ",".join("?" * len(ids))
+    _conn.execute(
+        f"UPDATE worker_responses SET status = 'sent' WHERE id IN ({placeholders})",
+        ids,
+    )
+    _conn.commit()
 
 
 def emit(event: dict[str, Any]) -> None:
-    """Write a JSONL event to /workspace/output.jsonl."""
-    line = json.dumps(event) + "\n"
-    fh = _ensure_output_fh()
-    fh.write(line)
-    fh.flush()
-    os.fsync(fh.fileno())
+    """Insert event into worker_responses and attempt to flush."""
+    _conn.execute(
+        "INSERT INTO worker_responses (message_id, event) VALUES (?, ?)",
+        (event.get("message_id", ""), json.dumps(event)),
+    )
+    _conn.commit()
+    flush_responses()
 
 
 def _is_processed(conn, message_id: str) -> bool:
@@ -106,20 +139,30 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 
 
 async def main() -> None:
+    global _conn
+
     sys.stderr.write("worker: starting, connecting to database\n")
     sys.stderr.flush()
 
-    conn = db.connect()
+    _conn = db.connect()
+    conn = _conn
     db.run_migrations(conn)
 
-    # Truncate output file on startup so the orchestrator starts fresh
-    OUTPUT_PATH.write_text("")
+    # Clean up stale state from a previous run
+    if RESPONSE_PATH.exists():
+        os.remove(RESPONSE_PATH)
+    conn.execute("UPDATE worker_responses SET status = 'sent' WHERE status = 'pending'")
+    conn.commit()
 
     sys.stderr.write("worker: ready, polling for input.json\n")
     sys.stderr.flush()
 
     while True:
         await asyncio.sleep(POLL_INTERVAL)
+
+        # Flush any pending responses each iteration (catches events
+        # that couldn't be flushed because response.json still existed)
+        flush_responses()
 
         if not INPUT_PATH.exists():
             continue

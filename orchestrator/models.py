@@ -22,26 +22,12 @@ class ErrorFrame(BaseModel):
     retry_after_seconds: float | None = None
 
 
-class TokenFrame(BaseModel):
-    type: Literal["token"] = "token"
-    content: str
-    message_id: str
-    seq: int
-
-
 class StatusFrame(BaseModel):
     type: Literal["status"] = "status"
     status: Literal[
         "thinking", "generating", "done", "error", "idle", "context_cleared"
     ]
     message_id: str
-
-
-class CompleteFrame(BaseModel):
-    type: Literal["complete"] = "complete"
-    content: str
-    message_id: str
-    usage: dict | None = None
 
 
 class CreateAgentRequest(BaseModel):
@@ -67,21 +53,6 @@ class UpdateAgentRequest(BaseModel):
     claude_md: str | None = None
     soul_md: str | None = None
     memory_md: str | None = None
-
-
-class ToolCallFrame(BaseModel):
-    type: Literal["tool_call"] = "tool_call"
-    tool_name: str
-    tool_input: dict
-    tool_call_id: str
-    message_id: str
-
-
-class ToolResultFrame(BaseModel):
-    type: Literal["tool_result"] = "tool_result"
-    tool_call_id: str
-    output: str
-    message_id: str
 
 
 class SystemCommandFrame(BaseModel):

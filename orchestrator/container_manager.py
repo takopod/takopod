@@ -128,6 +128,11 @@ async def spawn_container(
     await db.commit()
 
     container_name = f"rhclaw-{agent_id[:8]}"
+
+    # Kill any orphaned container with the same name (e.g., left over
+    # after an orchestrator restart / uvicorn --reload).
+    await _run([PODMAN, "rm", "-f", container_name], check=False)
+
     cmd = [
         PODMAN, "run", "--rm",
         "--name", container_name,

@@ -35,7 +35,7 @@ from orchestrator.models import (
     UpdateAgentRequest,
     UserMessageFrame,
 )
-from orchestrator.stream_reader import StreamReader
+from orchestrator.ws_manager import WebSocketManager
 
 router = APIRouter(prefix="/api")
 
@@ -57,7 +57,7 @@ class WorkerState:
     process: asyncio.subprocess.Process
     host_dir: Path
     session_id: str
-    stream_reader: StreamReader
+    ws_manager: WebSocketManager
     polling_task: asyncio.Task | None = None
 
 
@@ -181,7 +181,6 @@ async def delete_agent(agent_id: str):
     if worker:
         if worker.polling_task:
             worker.polling_task.cancel()
-        worker.stream_reader.cancel()
         container_name = f"rhclaw-{agent_id[:8]}"
         await kill_container(container_name)
 
@@ -383,7 +382,6 @@ async def delete_container(container_id: str):
     if worker:
         if worker.polling_task:
             worker.polling_task.cancel()
-        worker.stream_reader.cancel()
 
     return {"status": "ok", "container_id": container_id}
 
@@ -492,7 +490,7 @@ async def _send_queue_status(ws: WebSocket, session_id: str, agent_id: str) -> N
     status = QueueStatusFrame(**counts)
     worker = _active_workers.get(agent_id)
     if worker:
-        await worker.stream_reader.send(status.model_dump_json())
+        await worker.ws_manager.send(status.model_dump_json())
     else:
         await ws.send_text(status.model_dump_json())
 
@@ -508,9 +506,8 @@ async def _ensure_worker(
             worker.polling_task.cancel()
 
         worker.session_id = session_id
-        worker.stream_reader.attach(ws, session_id)
-        worker.stream_reader.restart_if_dead()
-        worker.polling_task = start_polling_loop(session_id, worker.host_dir, worker.stream_reader)
+        worker.ws_manager.attach(ws, session_id)
+        worker.polling_task = start_polling_loop(session_id, worker.host_dir, worker.ws_manager)
 
         # Mark as running again (was idle)
         db = await get_db()
@@ -522,18 +519,16 @@ async def _ensure_worker(
         return
 
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
-    output_path = host_dir / "output.jsonl"
-    reader = StreamReader(output_path, session_id)
-    reader.attach(ws, session_id)
-    reader.start()
+    ws_mgr = WebSocketManager(session_id)
+    ws_mgr.attach(ws, session_id)
 
     _active_workers[agent_id] = WorkerState(
         container_record_id=record_id,
         process=process,
         host_dir=host_dir,
         session_id=session_id,
-        stream_reader=reader,
-        polling_task=start_polling_loop(session_id, host_dir, reader),
+        ws_manager=ws_mgr,
+        polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
     )
 
 
@@ -544,7 +539,7 @@ async def _cleanup_session(agent_id: str, session_id: str) -> None:
         if worker.polling_task:
             worker.polling_task.cancel()
             worker.polling_task = None
-        worker.stream_reader.detach()
+        worker.ws_manager.detach()
 
         # Mark as idle — reaper will kill after timeout
         db = await get_db()
@@ -595,7 +590,6 @@ async def _reap_idle_workers() -> None:
                 if worker:
                     if worker.polling_task:
                         worker.polling_task.cancel()
-                    worker.stream_reader.cancel()
 
         except asyncio.CancelledError:
             raise

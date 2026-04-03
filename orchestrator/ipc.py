@@ -13,7 +13,7 @@ from orchestrator.db import get_db
 from orchestrator.models import QueueStatusFrame
 
 if typing.TYPE_CHECKING:
-    from orchestrator.stream_reader import StreamReader
+    from orchestrator.ws_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
 
@@ -77,22 +77,221 @@ def atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
-async def _send_queue_status(reader: StreamReader, session_id: str) -> None:
+# --- DB persistence (moved from stream_reader.py) ---
+
+
+async def _db_get_metadata(db, row_id: str) -> tuple[str, dict] | None:
+    async with db.execute(
+        "SELECT content, metadata FROM messages WHERE id = ?", (row_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        logger.warning("Message %s not found for update", row_id)
+        return None
+    content = row[0] or ""
+    try:
+        meta = json.loads(row[1]) if row[1] else {}
+    except json.JSONDecodeError:
+        meta = {}
+    return content, meta
+
+
+async def _db_ensure_row(row_id: str, session_id: str) -> None:
+    metadata = json.dumps({"blocks": []})
+    try:
+        db = await get_db()
+        await db.execute(
+            "INSERT OR IGNORE INTO messages "
+            "(id, session_id, role, content, status, metadata) "
+            "VALUES (?, ?, 'assistant', '', 'streaming', ?)",
+            (row_id, session_id, metadata),
+        )
+        await db.commit()
+    except Exception:
+        logger.exception("Failed to insert message %s", row_id)
+
+
+async def _db_append_token(row_id: str, content: str) -> None:
+    try:
+        db = await get_db()
+        row = await _db_get_metadata(db, row_id)
+        if row is None:
+            return
+        current_content, meta = row
+
+        blocks = meta.get("blocks", [])
+        if blocks and blocks[-1]["type"] == "text":
+            blocks[-1]["text"] += content
+        else:
+            blocks.append({"type": "text", "text": content})
+        meta["blocks"] = blocks
+
+        await db.execute(
+            "UPDATE messages SET content = ?, metadata = ? WHERE id = ?",
+            (current_content + content, json.dumps(meta), row_id),
+        )
+        await db.commit()
+    except Exception:
+        logger.exception("Failed to append token to %s", row_id)
+
+
+async def _db_append_block(row_id: str, block: dict) -> None:
+    try:
+        db = await get_db()
+        row = await _db_get_metadata(db, row_id)
+        if row is None:
+            return
+        _, meta = row
+
+        meta.setdefault("blocks", []).append(block)
+
+        await db.execute(
+            "UPDATE messages SET metadata = ? WHERE id = ?",
+            (json.dumps(meta), row_id),
+        )
+        await db.commit()
+    except Exception:
+        logger.exception("Failed to append block to %s", row_id)
+
+
+async def _db_update_tool_result(
+    row_id: str, tool_call_id: str, output: str,
+) -> None:
+    try:
+        db = await get_db()
+        row = await _db_get_metadata(db, row_id)
+        if row is None:
+            return
+        _, meta = row
+
+        for block in meta.get("blocks", []):
+            if (
+                block["type"] == "tool_call"
+                and block["tool"].get("tool_call_id") == tool_call_id
+            ):
+                block["tool"]["output"] = output
+                break
+
+        await db.execute(
+            "UPDATE messages SET metadata = ? WHERE id = ?",
+            (json.dumps(meta), row_id),
+        )
+        await db.commit()
+    except Exception:
+        logger.exception("Failed to update tool result in %s", row_id)
+
+
+async def _db_complete(
+    row_id: str, content: str, usage: dict | None,
+) -> None:
+    try:
+        db = await get_db()
+        row = await _db_get_metadata(db, row_id)
+        if row is None:
+            return
+        _, meta = row
+
+        if usage:
+            meta["usage"] = usage
+
+        await db.execute(
+            "UPDATE messages SET content = ?, status = 'complete', metadata = ? "
+            "WHERE id = ?",
+            (content, json.dumps(meta), row_id),
+        )
+        await db.commit()
+    except Exception:
+        logger.exception("Failed to complete message %s", row_id)
+
+
+# --- Event processing ---
+
+
+async def _process_event(
+    event: dict, session_id: str, ws_mgr: WebSocketManager,
+) -> str | None:
+    """Process a single worker event. Returns the message_id if DB was touched."""
+    event_type = event.get("type")
+
+    # Forward context_cleared directly — it has no message_id
+    if event_type == "status" and event.get("status") == "context_cleared":
+        await ws_mgr.send(json.dumps(event))
+        return None
+
+    message_id = event.get("message_id", "")
+    if not message_id:
+        return None
+
+    row_id = f"assistant-{message_id}"
+
+    if event_type == "status" and event.get("status") == "thinking":
+        await _db_ensure_row(row_id, session_id)
+
+    elif event_type == "token":
+        await _db_ensure_row(row_id, session_id)
+        await _db_append_token(row_id, event.get("content", ""))
+
+    elif event_type == "tool_call":
+        await _db_ensure_row(row_id, session_id)
+        block = {
+            "type": "tool_call",
+            "tool": {
+                "tool_name": event.get("tool_name", "unknown"),
+                "tool_input": event.get("tool_input", {}),
+                "tool_call_id": event.get("tool_call_id", ""),
+            },
+        }
+        await _db_append_block(row_id, block)
+
+    elif event_type == "tool_result":
+        await _db_update_tool_result(
+            row_id, event.get("tool_call_id", ""), event.get("output", ""),
+        )
+
+    elif event_type == "complete":
+        await _db_complete(
+            row_id, event.get("content", ""), event.get("usage"),
+        )
+
+    elif event_type == "status" and event.get("status") == "done":
+        # Worker finished processing — no DB action needed
+        pass
+
+    elif event_type == "system_error":
+        logger.warning(
+            "Worker error for session %s: %s", session_id, event.get("error"),
+        )
+
+    else:
+        # Ignore unknown events (e.g. "generating" status)
+        return None
+
+    return row_id
+
+
+# --- Queue status ---
+
+
+async def _send_queue_status(ws_mgr: WebSocketManager, session_id: str) -> None:
     counts = await get_queue_counts(session_id)
     frame = QueueStatusFrame(**counts)
-    await reader.send(frame.model_dump_json())
+    await ws_mgr.send(frame.model_dump_json())
+
+
+# --- Polling loop ---
 
 
 async def _polling_loop(
-    session_id: str, host_dir: Path, reader: StreamReader
+    session_id: str, host_dir: Path, ws_mgr: WebSocketManager
 ) -> None:
     input_path = host_dir / "input.json"
+    response_path = host_dir / "response.json"
     db = await get_db()
 
     while True:
         await asyncio.sleep(0.5)
         try:
-            # ACK check: IN-FLIGHT messages + input.json gone = PROCESSED
+            # --- Input ACK: IN-FLIGHT messages + input.json gone = PROCESSED ---
             async with db.execute(
                 "SELECT COUNT(*) FROM message_queue "
                 "WHERE session_id = ? AND status = 'IN-FLIGHT'",
@@ -109,9 +308,9 @@ async def _polling_loop(
                     (now, session_id),
                 )
                 await db.commit()
-                await _send_queue_status(reader, session_id)
+                await _send_queue_status(ws_mgr, session_id)
 
-            # Flush check: QUEUED messages + no input.json = write input.json
+            # --- Input flush: QUEUED messages + no input.json = write input.json ---
             async with db.execute(
                 "SELECT id, payload FROM message_queue "
                 "WHERE session_id = ? AND status = 'QUEUED' "
@@ -142,7 +341,42 @@ async def _polling_loop(
                     (now, session_id),
                 )
                 await db.commit()
-                await _send_queue_status(reader, session_id)
+                await _send_queue_status(ws_mgr, session_id)
+
+            # --- Response polling: read response.json from worker ---
+            if response_path.exists():
+                try:
+                    with open(response_path) as f:
+                        events = json.load(f)
+                    os.remove(response_path)
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.warning("Error reading response.json: %s", e)
+                    try:
+                        os.remove(response_path)
+                    except OSError:
+                        pass
+                    events = []
+
+                # Process events and collect unique message_ids for notification
+                notified: set[str] = set()
+                for event in events:
+                    try:
+                        row_id = await _process_event(event, session_id, ws_mgr)
+                        if row_id:
+                            notified.add(row_id)
+                    except Exception:
+                        logger.exception(
+                            "Error processing response event for session %s",
+                            session_id,
+                        )
+
+                # Send one message_updated notification per unique message
+                for row_id in notified:
+                    frame = json.dumps({
+                        "type": "message_updated",
+                        "message_id": row_id,
+                    })
+                    await ws_mgr.send(frame)
 
         except (ConnectionError, RuntimeError):
             # WebSocket disconnected
@@ -154,9 +388,9 @@ async def _polling_loop(
 
 
 def start_polling_loop(
-    session_id: str, host_dir: Path, reader: StreamReader
+    session_id: str, host_dir: Path, ws_mgr: WebSocketManager
 ) -> asyncio.Task:
     return asyncio.create_task(
-        _polling_loop(session_id, host_dir, reader),
+        _polling_loop(session_id, host_dir, ws_mgr),
         name=f"poll-{session_id[:8]}",
     )
