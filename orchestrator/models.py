@@ -67,3 +67,44 @@ class UpdateAgentRequest(BaseModel):
     claude_md: str | None = None
     soul_md: str | None = None
     memory_md: str | None = None
+
+
+class ToolCallFrame(BaseModel):
+    type: Literal["tool_call"] = "tool_call"
+    tool_name: str
+    tool_input: dict
+    tool_call_id: str
+    message_id: str
+
+
+class ToolResultFrame(BaseModel):
+    type: Literal["tool_result"] = "tool_result"
+    tool_call_id: str
+    output: str
+    message_id: str
+
+
+class SystemCommandFrame(BaseModel):
+    type: Literal["system_command"]
+    command: Literal["clear_context"]
+
+
+class FileEntry(BaseModel):
+    name: str
+    path: str
+    type: Literal["file", "directory"]
+    size: int | None = None
+    modified_at: str | None = None
+
+
+class ContainerResponse(BaseModel):
+    id: str
+    agent_id: str
+    agent_name: str | None = None
+    session_id: str
+    container_type: str
+    status: str
+    started_at: str
+    stopped_at: str | None = None
+    last_activity: str
+    pid: int | None = None

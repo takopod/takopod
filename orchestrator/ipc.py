@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,20 @@ async def queue_message(session_id: str, message_id: str, content: str) -> None:
     await db.execute(
         "INSERT INTO message_queue (id, session_id, payload) VALUES (?, ?, ?)",
         (message_id, session_id, payload),
+    )
+    await db.commit()
+
+
+async def queue_system_command(session_id: str, command: str) -> None:
+    db = await get_db()
+    cmd_id = str(uuid.uuid4())
+    payload = json.dumps({
+        "type": "system_command",
+        "command": command,
+    })
+    await db.execute(
+        "INSERT INTO message_queue (id, session_id, payload) VALUES (?, ?, ?)",
+        (cmd_id, session_id, payload),
     )
     await db.commit()
 
@@ -115,6 +130,12 @@ async def _polling_loop(
                     f"UPDATE message_queue SET status = 'IN-FLIGHT', flushed_at = ? "
                     f"WHERE id IN ({placeholders})",
                     (now, *ids),
+                )
+                # Update last_activity on the container (drives idle reaper)
+                await db.execute(
+                    "UPDATE agent_containers SET last_activity = ? "
+                    "WHERE session_id = ? AND status IN ('running', 'idle')",
+                    (now, session_id),
                 )
                 await db.commit()
                 await _send_queue_status(ws, session_id)

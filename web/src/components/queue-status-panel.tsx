@@ -7,7 +7,7 @@ interface QueueStatusPanelProps {
   connected: boolean
 }
 
-export function QueueStatusPanel({ status, connected }: QueueStatusPanelProps) {
+export function QueueStatusPanel({ status, connected: _connected }: QueueStatusPanelProps) {
   return (
     <div className="flex flex-1 items-start justify-center p-6">
       <Card className="w-full max-w-sm">

@@ -1,4 +1,4 @@
-.PHONY: install build build-worker dev dev-api dev-web clean
+.PHONY: install build build-worker dev dev-api dev-web prod clean
 
 install:
 	uv sync
@@ -22,6 +22,9 @@ dev-api:
 
 dev-web:
 	cd web && npx vite --strictPort
+
+prod: build build-worker
+	uv run uvicorn orchestrator.main:app --host 0.0.0.0 --port 8000
 
 clean:
 	rm -rf web/dist data/

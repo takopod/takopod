@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { ChatInput } from "@/components/chat-input"
+import { ContainersView } from "@/components/containers-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification } from "@/components/error-notification"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
@@ -16,7 +17,7 @@ import {
 import { useTheme } from "@/components/theme-provider"
 import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
-import { Moon, Plus, Sun } from "lucide-react"
+import { Box, Moon, Plus, RotateCcw, Sun } from "lucide-react"
 
 function NavLink({
   to,
@@ -41,54 +42,35 @@ function NavLink({
   )
 }
 
-function ChatView({
-  selectedAgentId,
-}: {
-  selectedAgentId: string | null
-}) {
-  const { messages, queueStatus, error, connected, sendMessage } =
-    useWebSocket(selectedAgentId)
-
-  if (!selectedAgentId) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-muted-foreground">
-        <p className="text-sm">Select an agent or create one to get started.</p>
-      </div>
-    )
-  }
-
-  return (
-    <>
-      <ChatMessageList messages={messages} />
-      <ErrorNotification error={error} />
-      <ChatInput onSend={sendMessage} disabled={!connected} />
-    </>
-  )
-}
-
-function QueueView({
-  selectedAgentId,
-}: {
-  selectedAgentId: string | null
-}) {
-  const { queueStatus, connected } = useWebSocket(selectedAgentId)
-
-  return <QueueStatusPanel status={queueStatus} connected={connected} />
-}
-
 export function App() {
   const { theme, setTheme } = useTheme()
   const location = useLocation()
   const navigate = useNavigate()
   const [agents, setAgents] = useState<Agent[]>([])
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
+    () => localStorage.getItem("rhclaw:selectedAgentId"),
+  )
+
+  useEffect(() => {
+    if (selectedAgentId) {
+      localStorage.setItem("rhclaw:selectedAgentId", selectedAgentId)
+    } else {
+      localStorage.removeItem("rhclaw:selectedAgentId")
+    }
+  }, [selectedAgentId])
+
+  const { messages, queueStatus, error, connected, sendMessage, sendSystemCommand } =
+    useWebSocket(selectedAgentId)
 
   const fetchAgents = useCallback(async () => {
     const res = await fetch("/api/agents")
     if (res.ok) {
       const data: Agent[] = await res.json()
       setAgents(data)
-      if (!selectedAgentId && data.length > 0) {
+      if (selectedAgentId && !data.some((a) => a.id === selectedAgentId)) {
+        // Stored agent no longer exists — clear stale selection
+        setSelectedAgentId(data.length > 0 ? data[0].id : null)
+      } else if (!selectedAgentId && data.length > 0) {
         setSelectedAgentId(data[0].id)
       }
     }
@@ -153,33 +135,40 @@ export function App() {
             >
               Agents
             </NavLink>
+            <NavLink to="/containers" match={currentPath === "/containers"}>
+              Containers
+            </NavLink>
             <NavLink to="/queue" match={currentPath === "/queue"}>
               Queue Status
             </NavLink>
           </div>
-          <div className="mt-auto px-3 py-4">
-            <Select
-              value={selectedAgentId ?? undefined}
-              onValueChange={setSelectedAgentId}
+          <div className="mt-auto flex flex-col gap-2 px-3 py-4">
+            {agents.length > 0 && (
+              <Select
+                value={selectedAgentId ?? undefined}
+                onValueChange={setSelectedAgentId}
+              >
+                <SelectTrigger className="w-full text-xs">
+                  <SelectValue placeholder="Select agent" />
+                </SelectTrigger>
+                <SelectContent>
+                  {agents.map((agent) => (
+                    <SelectItem key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={handleCreateAgent}
             >
-              <SelectTrigger className="w-full text-xs">
-                <SelectValue placeholder="Select agent" />
-              </SelectTrigger>
-              <SelectContent>
-                {agents.map((agent) => (
-                  <SelectItem key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </SelectItem>
-                ))}
-                <button
-                  onClick={handleCreateAgent}
-                  className="flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <Plus className="size-3.5" />
-                  Create Agent
-                </button>
-              </SelectContent>
-            </Select>
+              <Plus className="mr-1.5 size-3.5" />
+              Create Agent
+            </Button>
           </div>
         </nav>
 
@@ -187,7 +176,37 @@ export function App() {
           <Routes>
             <Route
               path="/"
-              element={<ChatView selectedAgentId={selectedAgentId} />}
+              element={
+                !selectedAgentId ? (
+                  <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                    <p className="text-sm">Select an agent or create one to get started.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-end border-b px-4 py-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => sendSystemCommand("clear_context")}
+                        disabled={!connected}
+                      >
+                        <RotateCcw className="mr-1.5 size-3.5" />
+                        Clear Context
+                      </Button>
+                    </div>
+                    <ChatMessageList messages={messages} />
+                    {(queueStatus.queued > 0 || queueStatus.in_flight > 0) &&
+                      !messages.some((m) => m.streaming) && (
+                        <div className="flex items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
+                          <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
+                          Processing...
+                        </div>
+                      )}
+                    <ErrorNotification error={error} />
+                    <ChatInput onSend={sendMessage} disabled={!connected} />
+                  </>
+                )
+              }
             />
             <Route
               path="/agents"
@@ -217,8 +236,14 @@ export function App() {
               }
             />
             <Route
+              path="/containers"
+              element={<ContainersView />}
+            />
+            <Route
               path="/queue"
-              element={<QueueView selectedAgentId={selectedAgentId} />}
+              element={
+                <QueueStatusPanel status={queueStatus} connected={connected} />
+              }
             />
           </Routes>
         </main>

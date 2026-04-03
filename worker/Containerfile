@@ -1,4 +1,7 @@
 FROM python:3.12-slim
+RUN pip install --no-cache-dir "anthropic[vertex]"
 WORKDIR /app
-COPY stub_worker.py .
-CMD ["python", "-u", "stub_worker.py"]
+COPY worker.py agent.py db.py __init__.py ./worker/
+COPY migrations/ ./worker/migrations/
+ENV PYTHONPATH=/app
+CMD ["python", "-u", "-m", "worker.worker"]

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -6,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from orchestrator.container_manager import build_image, ensure_network
 from orchestrator.db import connect, disconnect, run_migrations
-from orchestrator.routes import router
+from orchestrator.routes import _reap_idle_workers, router
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
@@ -25,7 +26,9 @@ async def lifespan(app: FastAPI):
     if WEB_DIST.is_dir():
         app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="static")
 
+    reaper_task = asyncio.create_task(_reap_idle_workers(), name="idle-reaper")
     yield
+    reaper_task.cancel()
     await disconnect()
 
 

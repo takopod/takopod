@@ -37,12 +37,36 @@ export interface CompleteFrame {
   usage?: { input_tokens: number; output_tokens: number }
 }
 
+export interface ToolCallFrame {
+  type: "tool_call"
+  tool_name: string
+  tool_input: Record<string, unknown>
+  tool_call_id: string
+  message_id: string
+}
+
+export interface ToolResultFrame {
+  type: "tool_result"
+  tool_call_id: string
+  output: string
+  message_id: string
+}
+
 export type ServerFrame =
   | QueueStatusFrame
   | ErrorFrame
   | TokenFrame
   | StatusFrame
   | CompleteFrame
+  | ToolCallFrame
+  | ToolResultFrame
+
+export interface ToolCallInfo {
+  tool_name: string
+  tool_input: Record<string, unknown>
+  tool_call_id: string
+  output?: string
+}
 
 export interface ChatMessage {
   id: string
@@ -50,6 +74,15 @@ export interface ChatMessage {
   content: string
   timestamp: number
   streaming?: boolean
+  toolCalls?: ToolCallInfo[]
+}
+
+export interface FileEntry {
+  name: string
+  path: string
+  type: "file" | "directory"
+  size?: number
+  modified_at?: string
 }
 
 export interface Agent {

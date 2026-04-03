@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -141,6 +142,9 @@ async def spawn_container(
         "--tmpfs", "/tmp:rw,size=512m",
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
+        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
+        "-e", f"GOOGLE_CLOUD_PROJECT={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+        "-e", f"GOOGLE_CLOUD_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
         IMAGE,
     ]
 

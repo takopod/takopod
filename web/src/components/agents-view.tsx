@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { FileBrowser } from "@/components/file-browser"
 import type { Agent } from "@/lib/types"
 import { ArrowLeft } from "lucide-react"
 
@@ -32,9 +33,11 @@ export function AgentsView({ agents, onSelectAgent }: AgentsViewProps) {
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
 
-  const openFile = FILE_MAP.find((f) => f.key === file)
-    ? (file as FileKey)
-    : null
+  const showFileBrowser = file === "files"
+  const openFile =
+    !showFileBrowser && FILE_MAP.find((f) => f.key === file)
+      ? (file as FileKey)
+      : null
 
   const fetchDetail = useCallback(async (id: string) => {
     const res = await fetch(`/api/agents/${id}`)
@@ -105,6 +108,8 @@ export function AgentsView({ agents, onSelectAgent }: AgentsViewProps) {
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
             Select an agent to view and edit its files.
           </div>
+        ) : showFileBrowser ? (
+          <FileBrowser agentId={agentId} />
         ) : !openFile ? (
           <div className="p-6">
             <div className="mb-6 flex items-center justify-between">
@@ -132,6 +137,12 @@ export function AgentsView({ agents, onSelectAgent }: AgentsViewProps) {
                   {label}
                 </Link>
               ))}
+              <Link
+                to={`/agents/${agentId}/files`}
+                className="rounded-md px-3 py-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                Browse All Files
+              </Link>
             </div>
           </div>
         ) : (
