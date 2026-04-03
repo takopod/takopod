@@ -101,6 +101,18 @@ export function App() {
     navigate("/")
   }
 
+  const handleDeleteAgent = async (id: string) => {
+    const res = await fetch(`/api/agents/${id}`, { method: "DELETE" })
+    if (res.ok) {
+      setAgents((prev) => prev.filter((a) => a.id !== id))
+      if (selectedAgentId === id) {
+        const remaining = agents.filter((a) => a.id !== id)
+        setSelectedAgentId(remaining.length > 0 ? remaining[0].id : null)
+      }
+      navigate("/agents")
+    }
+  }
+
   const currentPath = location.pathname
 
   return (
@@ -214,6 +226,7 @@ export function App() {
                 <AgentsView
                   agents={agents}
                   onSelectAgent={handleSelectAgentFromView}
+                  onDeleteAgent={handleDeleteAgent}
                 />
               }
             />
@@ -223,6 +236,7 @@ export function App() {
                 <AgentsView
                   agents={agents}
                   onSelectAgent={handleSelectAgentFromView}
+                  onDeleteAgent={handleDeleteAgent}
                 />
               }
             />
@@ -232,6 +246,7 @@ export function App() {
                 <AgentsView
                   agents={agents}
                   onSelectAgent={handleSelectAgentFromView}
+                  onDeleteAgent={handleDeleteAgent}
                 />
               }
             />

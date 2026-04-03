@@ -164,6 +164,40 @@ async def update_agent(agent_id: str, req: UpdateAgentRequest) -> AgentDetailRes
     return await get_agent(agent_id)
 
 
+@router.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    """Archive an agent and kill its running container if any."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT id FROM agents WHERE id = ? AND status = 'active'",
+        (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Kill running container
+    worker = _active_workers.pop(agent_id, None)
+    if worker:
+        if worker.polling_task:
+            worker.polling_task.cancel()
+        worker.stream_reader.cancel()
+        container_name = f"rhclaw-{agent_id[:8]}"
+        await kill_container(container_name)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await db.execute(
+            "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
+            "WHERE id = ?",
+            (now, worker.container_record_id),
+        )
+
+    await db.execute(
+        "UPDATE agents SET status = 'archived' WHERE id = ?", (agent_id,),
+    )
+    await db.commit()
+    return {"status": "ok", "agent_id": agent_id}
+
+
 # --- Agent Files API ---
 
 IDENTITY_FILES = {"CLAUDE.md", "SOUL.md", "MEMORY.md"}

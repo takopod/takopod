@@ -132,7 +132,6 @@ async def spawn_container(
         PODMAN, "run", "--rm",
         "--name", container_name,
         "--network", NETWORK,
-        "--read-only",
         "--label", "rhclaw.managed=true",
         "--label", f"rhclaw.agent_id={agent_id}",
         "--label", f"rhclaw.session_id={session_id}",
@@ -143,8 +142,9 @@ async def spawn_container(
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
         "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
-        "-e", f"GOOGLE_CLOUD_PROJECT={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
-        "-e", f"GOOGLE_CLOUD_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
+        "-e", "CLAUDE_CODE_USE_VERTEX=1",
+        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
+        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
         IMAGE,
     ]
 

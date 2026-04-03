@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { FileBrowser } from "@/components/file-browser"
 import type { Agent } from "@/lib/types"
-import { ArrowLeft } from "lucide-react"
+import { ArrowLeft, Trash2 } from "lucide-react"
 
 interface AgentDetail extends Agent {
   claude_md: string
@@ -23,9 +23,10 @@ const FILE_MAP: { key: FileKey; label: string }[] = [
 interface AgentsViewProps {
   agents: Agent[]
   onSelectAgent: (id: string) => void
+  onDeleteAgent: (id: string) => void
 }
 
-export function AgentsView({ agents, onSelectAgent }: AgentsViewProps) {
+export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewProps) {
   const { agentId, file } = useParams<{ agentId?: string; file?: string }>()
   const navigate = useNavigate()
   const [detail, setDetail] = useState<AgentDetail | null>(null)
@@ -119,13 +120,27 @@ export function AgentsView({ agents, onSelectAgent }: AgentsViewProps) {
                   Type: {detail.agent_type}
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onSelectAgent(detail.id)}
-              >
-                Chat
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onSelectAgent(detail.id)}
+                >
+                  Chat
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    if (confirm(`Delete agent "${detail.name}"?`)) {
+                      onDeleteAgent(detail.id)
+                    }
+                  }}
+                >
+                  <Trash2 className="mr-1.5 size-3.5" />
+                  Delete
+                </Button>
+              </div>
             </div>
             <div className="flex flex-col gap-1">
               {FILE_MAP.map(({ key, label }) => (
