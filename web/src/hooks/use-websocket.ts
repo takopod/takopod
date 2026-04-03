@@ -51,6 +51,36 @@ export function useWebSocket() {
       } else if (frame.type === "error") {
         setError(frame)
         clearError()
+      } else if (frame.type === "status" && frame.status === "thinking") {
+        const assistantId = `assistant-${frame.message_id}`
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantId,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            streaming: true,
+          },
+        ])
+      } else if (frame.type === "token") {
+        const assistantId = `assistant-${frame.message_id}`
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantId
+              ? { ...msg, content: msg.content + frame.content }
+              : msg,
+          ),
+        )
+      } else if (frame.type === "complete") {
+        const assistantId = `assistant-${frame.message_id}`
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantId
+              ? { ...msg, content: frame.content, streaming: false }
+              : msg,
+          ),
+        )
       }
     }
 

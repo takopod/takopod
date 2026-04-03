@@ -7,7 +7,7 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages.length])
+  }, [messages])
 
   if (messages.length === 0) {
     return (
@@ -21,9 +21,22 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
     <ScrollArea className="flex-1 p-4">
       <div className="flex flex-col gap-3">
         {messages.map((msg) => (
-          <div key={msg.id} className="flex justify-end">
-            <div className="max-w-[75%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">
-              {msg.content}
+          <div
+            key={msg.id}
+            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${
+                msg.role === "user"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-foreground"
+              }`}
+            >
+              {msg.streaming && !msg.content ? (
+                <span className="inline-block animate-pulse">...</span>
+              ) : (
+                msg.content
+              )}
             </div>
           </div>
         ))}

@@ -17,11 +17,37 @@ export interface ErrorFrame {
   retry_after_seconds?: number
 }
 
-export type ServerFrame = QueueStatusFrame | ErrorFrame
+export interface TokenFrame {
+  type: "token"
+  content: string
+  message_id: string
+  seq: number
+}
+
+export interface StatusFrame {
+  type: "status"
+  status: string
+  message_id: string
+}
+
+export interface CompleteFrame {
+  type: "complete"
+  content: string
+  message_id: string
+  usage?: { input_tokens: number; output_tokens: number }
+}
+
+export type ServerFrame =
+  | QueueStatusFrame
+  | ErrorFrame
+  | TokenFrame
+  | StatusFrame
+  | CompleteFrame
 
 export interface ChatMessage {
   id: string
-  role: "user"
+  role: "user" | "assistant"
   content: string
   timestamp: number
+  streaming?: boolean
 }

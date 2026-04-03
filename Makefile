@@ -1,4 +1,4 @@
-.PHONY: install build dev dev-api dev-web clean
+.PHONY: install build build-worker dev dev-api dev-web clean
 
 install:
 	uv sync
@@ -6,6 +6,9 @@ install:
 
 build:
 	cd web && npm run build
+
+build-worker:
+	/opt/podman/bin/podman build -t rhclaw-worker -f worker/Containerfile worker/
 
 dev:
 	@lsof -ti:8000 -ti:5173 | xargs kill 2>/dev/null || true
