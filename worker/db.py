@@ -19,6 +19,12 @@ def connect() -> sqlite3.Connection:
     _db = sqlite3.connect(str(DB_PATH))
     _db.execute("PRAGMA journal_mode=WAL")
     _db.execute("PRAGMA foreign_keys=ON")
+
+    import sqlite_vec
+    _db.enable_load_extension(True)
+    sqlite_vec.load(_db)
+    _db.enable_load_extension(False)
+
     return _db
 
 

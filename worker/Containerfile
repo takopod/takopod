@@ -16,10 +16,10 @@ RUN apt-get update && \
 RUN npm install -g @anthropic-ai/claude-code
 
 # Install Python Agent SDK
-RUN pip install --no-cache-dir claude-agent-sdk
+RUN pip install --no-cache-dir claude-agent-sdk sqlite-vec
 
 WORKDIR /app
-COPY worker.py agent.py db.py embed.py __init__.py ./worker/
+COPY worker.py agent.py db.py embed.py search.py __init__.py ./worker/
 COPY migrations/ ./worker/migrations/
 ENV PYTHONPATH=/app
 CMD ["python", "-u", "-m", "worker.worker"]

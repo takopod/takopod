@@ -121,13 +121,31 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         return
 
     content = msg.get("content", "")
+    session_id_for_index = msg.get("session_id", "")
     sys.stderr.write(f"worker: query message_id={message_id} content={content!r}\n")
     sys.stderr.flush()
     emit({"type": "status", "status": "thinking", "message_id": message_id})
 
+    # Retrieve relevant past context via hybrid search
+    retrieved_context = None
     try:
-        new_session_id, _usage = await run_query(
+        from worker.search import search_hybrid, format_context
+        results = await search_hybrid(conn, content)
+        retrieved_context = format_context(results)
+        if retrieved_context:
+            sys.stderr.write(
+                f"worker: retrieved {len(results)} search results for context\n"
+            )
+            sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"worker: search failed, proceeding without context: {e}\n")
+        sys.stderr.flush()
+
+    response_text = ""
+    try:
+        new_session_id, _usage, response_text = await run_query(
             message_id, content, _session_id, emit,
+            retrieved_context=retrieved_context,
         )
         _session_id = new_session_id
     except Exception as e:
@@ -142,6 +160,19 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 
     _mark_processed(conn, message_id)
     emit({"type": "status", "status": "done", "message_id": message_id})
+
+    # Index the conversation turn for future retrieval
+    try:
+        from worker.search import index_message, index_vector
+        _, user_ts = index_message(conn, message_id, session_id_for_index, "user", content)
+        await index_vector(conn, message_id, session_id_for_index, "user", content, user_ts)
+        if response_text:
+            resp_id = message_id + "-response"
+            _, resp_ts = index_message(conn, resp_id, session_id_for_index, "assistant", response_text)
+            await index_vector(conn, resp_id, session_id_for_index, "assistant", response_text, resp_ts)
+    except Exception as e:
+        sys.stderr.write(f"worker: indexing failed: {e}\n")
+        sys.stderr.flush()
 
 
 async def main() -> None:

@@ -24,6 +24,7 @@ async def queue_message(session_id: str, message_id: str, content: str) -> None:
         "message_id": message_id,
         "type": "user_message",
         "content": content,
+        "session_id": session_id,
     })
     await db.execute(
         "INSERT INTO message_queue (id, session_id, payload) VALUES (?, ?, ?)",

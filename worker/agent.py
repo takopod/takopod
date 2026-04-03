@@ -25,8 +25,8 @@ MAX_TURNS = 25
 Emit = Callable[[dict[str, Any]], None]
 
 
-def _build_system_prompt() -> str:
-    """Assemble system prompt from CLAUDE.md, SOUL.md, and agents.json."""
+def _build_system_prompt(retrieved_context: str | None = None) -> str:
+    """Assemble system prompt from CLAUDE.md, SOUL.md, agents.json, and retrieved context."""
     parts: list[str] = []
 
     claude_md = WORKSPACE / "CLAUDE.md"
@@ -53,6 +53,13 @@ def _build_system_prompt() -> str:
         except (json.JSONDecodeError, KeyError):
             pass
 
+    if retrieved_context:
+        parts.append(
+            "## Relevant Past Conversations\n\n"
+            "The following excerpts are from previous conversations and may be relevant:\n\n"
+            + retrieved_context
+        )
+
     return "\n\n".join(parts)
 
 
@@ -61,12 +68,17 @@ async def run_query(
     content: str,
     session_id: str | None,
     emit: Emit,
-) -> tuple[str | None, dict[str, Any]]:
+    retrieved_context: str | None = None,
+) -> tuple[str | None, dict[str, Any], str]:
     """Run a query through the Claude Agent SDK.
 
-    Returns (captured_session_id, usage_dict).
+    Returns (captured_session_id, usage_dict, full_response_text).
     """
-    system_prompt = _build_system_prompt()
+    system_prompt = _build_system_prompt(retrieved_context)
+    sys.stderr.write(
+        f"agent: system_prompt ({len(system_prompt)} chars):\n{system_prompt}\n"
+    )
+    sys.stderr.flush()
 
     # Emit tool events via hooks so the frontend can display them
     async def on_pre_tool(input_data, tool_use_id, context):
@@ -114,6 +126,12 @@ async def run_query(
         opts_kwargs["resume"] = session_id
 
     options = ClaudeAgentOptions(**opts_kwargs)
+
+    # Log the full query() call for debugging
+    log_kwargs = {k: v for k, v in opts_kwargs.items() if k != "hooks"}
+    log_kwargs["prompt"] = content
+    sys.stderr.write(f"agent: query() call:\n{json.dumps(log_kwargs, indent=2)}\n")
+    sys.stderr.flush()
 
     captured_session_id = session_id
     total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
@@ -165,4 +183,4 @@ async def run_query(
         "usage": total_usage,
     })
 
-    return captured_session_id, total_usage
+    return captured_session_id, total_usage, full_text
