@@ -103,13 +103,20 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
 async def list_agents() -> list[AgentResponse]:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, agent_type, status, created_at FROM agents "
-        "WHERE status = 'active' ORDER BY created_at"
+        "SELECT a.id, a.name, a.agent_type, a.status, a.created_at, "
+        "  (SELECT c.status FROM agent_containers c "
+        "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
+        "  (SELECT COUNT(*) FROM sessions s "
+        "   JOIN agent_containers ac ON ac.session_id = s.id "
+        "   WHERE ac.agent_id = a.id AND ac.status IN ('running', 'idle', 'starting')) "
+        "   AS active_session_count "
+        "FROM agents a WHERE a.status = 'active' ORDER BY a.created_at"
     ) as cur:
         rows = await cur.fetchall()
     return [
         AgentResponse(
-            id=r[0], name=r[1], agent_type=r[2], status=r[3], created_at=r[4]
+            id=r[0], name=r[1], agent_type=r[2], status=r[3], created_at=r[4],
+            container_status=r[5], active_session_count=r[6] or 0,
         )
         for r in rows
     ]
@@ -398,11 +405,11 @@ async def delete_container(container_id: str):
     return {"status": "ok", "container_id": container_id}
 
 
-# --- Admin API ---
+# --- Sessions API ---
 
 
-@router.post("/admin/sessions/{session_id}/kill")
-async def admin_kill_session(session_id: str):
+@router.post("/sessions/{session_id}/kill")
+async def kill_session(session_id: str):
     """Force-terminate a session: graceful shutdown with 10s timeout, then kill."""
     db = await get_db()
     async with db.execute(
@@ -470,8 +477,8 @@ async def admin_kill_session(session_id: str):
     return {"status": "ok", "session_id": session_id, "graceful": graceful}
 
 
-@router.get("/admin/sessions")
-async def admin_list_sessions(status: str | None = None, limit: int = 50):
+@router.get("/sessions")
+async def list_sessions(status: str | None = None, limit: int = 50):
     """List sessions, optionally filtered by status."""
     db = await get_db()
     query = (
@@ -497,8 +504,8 @@ async def admin_list_sessions(status: str | None = None, limit: int = 50):
     ]
 
 
-@router.get("/admin/sessions/{session_id}")
-async def admin_session_detail(session_id: str):
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str):
     """Detailed session state: metadata, container info, message queue breakdown."""
     db = await get_db()
     async with db.execute(
@@ -548,33 +555,6 @@ async def admin_session_detail(session_id: str):
         session["message_count"] = (await cur.fetchone())[0]
 
     return session
-
-
-@router.get("/admin/agents")
-async def admin_list_agents():
-    """List all agents with container status and active session count."""
-    db = await get_db()
-    async with db.execute(
-        "SELECT a.id, a.name, a.agent_type, a.status, a.created_at, "
-        "  (SELECT c.status FROM agent_containers c "
-        "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
-        "  (SELECT COUNT(*) FROM sessions s "
-        "   JOIN agent_containers ac ON ac.session_id = s.id "
-        "   WHERE ac.agent_id = a.id AND ac.status IN ('running', 'idle', 'starting')) "
-        "   AS active_session_count "
-        "FROM agents a WHERE a.status != 'archived' "
-        "ORDER BY a.created_at DESC",
-    ) as cur:
-        rows = await cur.fetchall()
-
-    return [
-        {
-            "id": r[0], "name": r[1], "agent_type": r[2], "status": r[3],
-            "created_at": r[4], "container_status": r[5],
-            "active_session_count": r[6] or 0,
-        }
-        for r in rows
-    ]
 
 
 # --- Message History API ---

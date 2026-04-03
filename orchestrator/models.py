@@ -41,6 +41,8 @@ class AgentResponse(BaseModel):
     agent_type: str
     status: str
     created_at: str
+    container_status: str | None = None
+    active_session_count: int = 0
 
 
 class AgentDetailResponse(AgentResponse):
