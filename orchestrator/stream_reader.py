@@ -32,6 +32,8 @@ class StreamReader:
         self._ws: WebSocket | None = None
         self._ws_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
+        # Accumulate blocks per message_id for persistence on complete
+        self._blocks: dict[str, list[dict]] = {}
 
     def attach(self, ws: WebSocket, session_id: str) -> None:
         """Attach a WebSocket to receive forwarded events."""
@@ -60,71 +62,199 @@ class StreamReader:
     def start(self) -> asyncio.Task:
         self._task = asyncio.create_task(
             self._tail_loop(),
-            name="stream-reader",
+            name=f"stream-reader-{self.session_id[:8]}",
         )
+        self._task.add_done_callback(self._on_task_done)
         return self._task
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error(
+                "Stream reader task crashed for session %s: %s",
+                self.session_id, exc,
+            )
 
     def cancel(self) -> None:
         if self._task:
             self._task.cancel()
 
+    def restart_if_dead(self) -> None:
+        """Restart the tail loop if the task has exited unexpectedly."""
+        if self._task is not None and not self._task.done():
+            return
+        if self._task and self._task.done() and not self._task.cancelled():
+            exc = self._task.exception()
+            if exc:
+                logger.error(
+                    "Stream reader was dead (crashed: %s), restarting",
+                    exc,
+                )
+            else:
+                logger.warning("Stream reader was dead (exited cleanly), restarting")
+        else:
+            logger.info("Stream reader not started, starting")
+        self.start()
+
+    async def _process_event(self, line: str) -> None:
+        """Parse, forward, and persist a single JSONL event."""
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return
+
+        await self.send(line)
+
+        event_type = event.get("type")
+        message_id = event.get("message_id", "")
+
+        if event_type == "token":
+            blocks = self._blocks.setdefault(message_id, [])
+            if blocks and blocks[-1]["type"] == "text":
+                blocks[-1]["text"] += event.get("content", "")
+            else:
+                blocks.append({"type": "text", "text": event.get("content", "")})
+
+        elif event_type == "tool_call":
+            logger.info(
+                "Tool call: %s (id=%s) for session %s",
+                event.get("tool_name"), event.get("tool_call_id"),
+                self.session_id,
+            )
+            self._blocks.setdefault(message_id, []).append({
+                "type": "tool_call",
+                "tool": {
+                    "tool_name": event.get("tool_name", "unknown"),
+                    "tool_input": event.get("tool_input", {}),
+                    "tool_call_id": event.get("tool_call_id", ""),
+                },
+            })
+
+        elif event_type == "tool_result":
+            logger.info(
+                "Tool result: id=%s for session %s",
+                event.get("tool_call_id"), self.session_id,
+            )
+            tc_id = event.get("tool_call_id")
+            for block in self._blocks.get(message_id, []):
+                if block["type"] == "tool_call" and block["tool"].get("tool_call_id") == tc_id:
+                    block["tool"]["output"] = event.get("output", "")
+                    break
+
+        elif event_type == "system_error":
+            logger.warning(
+                "Worker error for session %s: %s",
+                self.session_id, event.get("error"),
+            )
+
+        if event_type == "complete":
+            blocks = self._blocks.pop(message_id, None)
+            metadata = {}
+            if event.get("usage"):
+                metadata["usage"] = event["usage"]
+            if blocks:
+                metadata["blocks"] = blocks
+            try:
+                db = await get_db()
+                await db.execute(
+                    "INSERT INTO messages (id, session_id, role, content, metadata) "
+                    "VALUES (?, ?, 'assistant', ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        self.session_id,
+                        event.get("content", ""),
+                        json.dumps(metadata) if metadata else None,
+                    ),
+                )
+                await db.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to persist complete event for session %s",
+                    self.session_id,
+                )
+
+    _POLL_MIN = 0.5   # 500ms when active
+    _POLL_MAX = 5.0   # 5s when idle
+
     async def _tail_loop(self) -> None:
-        """Tail the output JSONL file, forwarding events as they appear."""
-        # Wait for the file to exist (container is starting up)
+        """Tail the output JSONL file, forwarding events as they appear.
+
+        Uses a close-and-reopen pattern instead of a long-lived file handle.
+        On macOS with podman bind mounts (virtiofs), a persistent handle
+        caches file metadata and misses data written by the container after
+        the host-side handle hits EOF.  Reopening on each poll gives us
+        close-to-open consistency.
+
+        Polls with exponential backoff: 500ms while active, doubling up to
+        5s when idle, resetting to 500ms when new data arrives.
+        """
         while not self.output_path.exists():
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
 
-        with open(self.output_path) as fh:
-            # Seek to end — we only care about new events
-            fh.seek(0, 2)
+        pos = self.output_path.stat().st_size  # start from current end
+        delay = self._POLL_MIN
 
-            while True:
-                line = fh.readline()
-                if not line:
-                    await asyncio.sleep(0.05)
+        while True:
+            try:
+                try:
+                    size = self.output_path.stat().st_size
+                except OSError:
+                    await asyncio.sleep(delay)
                     continue
 
-                line = line.strip()
-                if not line:
+                if size < pos:
+                    # File was truncated (new container started)
+                    pos = 0
+
+                if size <= pos:
+                    delay = min(delay * 2, self._POLL_MAX)
+                    await asyncio.sleep(delay)
                     continue
+
+                # New data available — reset to fast polling
+                delay = self._POLL_MIN
 
                 try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
+                    with open(self.output_path, "rb") as fh:
+                        fh.seek(pos)
+                        data = fh.read()
+                except OSError:
+                    await asyncio.sleep(delay)
                     continue
 
-                # Forward to WebSocket
-                await self.send(line)
+                if not data:
+                    await asyncio.sleep(delay)
+                    continue
 
-                event_type = event.get("type")
+                # Only process up to the last complete line (ends with \n).
+                # Partial lines at the end are left for the next iteration.
+                last_nl = data.rfind(b"\n")
+                if last_nl == -1:
+                    await asyncio.sleep(delay)
+                    continue
 
-                if event_type == "tool_call":
-                    logger.info(
-                        "Tool call: %s (id=%s) for session %s",
-                        event.get("tool_name"), event.get("tool_call_id"),
-                        self.session_id,
-                    )
-                elif event_type == "tool_result":
-                    logger.info(
-                        "Tool result: id=%s for session %s",
-                        event.get("tool_call_id"), self.session_id,
-                    )
-                elif event_type == "system_error":
-                    logger.warning(
-                        "Worker error for session %s: %s",
-                        self.session_id, event.get("error"),
-                    )
+                complete_chunk = data[: last_nl + 1]
+                pos += len(complete_chunk)
 
-                if event_type == "complete":
-                    db = await get_db()
-                    await db.execute(
-                        "INSERT INTO messages (id, session_id, role, content, metadata) "
-                        "VALUES (?, ?, 'assistant', ?, ?)",
-                        (
-                            str(uuid.uuid4()),
+                for raw_line in complete_chunk.split(b"\n"):
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        await self._process_event(line)
+                    except Exception:
+                        logger.exception(
+                            "Unhandled error processing event for session %s",
                             self.session_id,
-                            event.get("content", ""),
-                            json.dumps(event.get("usage")) if event.get("usage") else None,
-                        ),
-                    )
-                    await db.commit()
+                        )
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Unexpected error in tail loop for session %s",
+                    self.session_id,
+                )
+                await asyncio.sleep(self._POLL_MIN)

@@ -185,13 +185,29 @@ export function useWebSocket(agentId: string | null) {
 
     fetch(`/api/agents/${agentId}/messages`)
       .then((res) => (res.ok ? res.json() : []))
-      .then((history: { id: string; role: string; content: string; created_at: string }[]) => {
-        const loaded: ChatMessage[] = history.map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          timestamp: new Date(m.created_at).getTime(),
-        }))
+      .then((history: { id: string; role: string; content: string; created_at: string; metadata?: string }[]) => {
+        const loaded: ChatMessage[] = history.map((m) => {
+          const msg: ChatMessage = {
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            timestamp: new Date(m.created_at).getTime(),
+          }
+          if (m.metadata) {
+            try {
+              const meta = JSON.parse(m.metadata)
+              if (Array.isArray(meta.blocks) && meta.blocks.length > 0) {
+                msg.blocks = meta.blocks
+                msg.toolCalls = meta.blocks
+                  .filter((b: { type: string }) => b.type === "tool_call")
+                  .map((b: { tool: import("@/lib/types").ToolCallInfo }) => b.tool)
+              }
+            } catch {
+              // metadata is not valid JSON — ignore
+            }
+          }
+          return msg
+        })
         setMessages(loaded)
       })
       .catch(() => {})
