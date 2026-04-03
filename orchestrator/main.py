@@ -9,6 +9,7 @@ logging.basicConfig(
 )
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from orchestrator.container_manager import build_image, ensure_network
@@ -29,9 +30,6 @@ async def lifespan(app: FastAPI):
     await ensure_network()
     await build_image()
 
-    if WEB_DIST.is_dir():
-        app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="static")
-
     reaper_task = asyncio.create_task(_reap_idle_workers(), name="idle-reaper")
     yield
     reaper_task.cancel()
@@ -41,7 +39,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="rhclaw", lifespan=lifespan)
 app.include_router(router)
 
-
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "schema_version": _schema_version}
+
+
+if WEB_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}")
+    async def spa_fallback(path: str):
+        return FileResponse(WEB_DIST / "index.html")
