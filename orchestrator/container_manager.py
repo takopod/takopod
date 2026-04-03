@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import shutil
 import uuid
 from pathlib import Path
 
@@ -10,7 +12,8 @@ logger = logging.getLogger(__name__)
 PODMAN = "/opt/podman/bin/podman"
 NETWORK = "rhclaw-internal"
 IMAGE = "rhclaw-worker"
-DATA_DIR = Path("data/sessions")
+AGENTS_DIR = Path("data/agents")
+TEMPLATES_DIR = Path("agent_templates")
 
 
 async def _run(cmd: list[str], check: bool = True) -> asyncio.subprocess.Process:
@@ -48,32 +51,92 @@ async def build_image() -> None:
     logger.info("Worker image built: %s", IMAGE)
 
 
-async def spawn_container(
-    session_id: str, agent_type: str = "stub"
-) -> tuple[str, asyncio.subprocess.Process, Path]:
-    host_dir = (DATA_DIR / session_id).resolve()
+def create_agent_workspace(
+    agent_id: str,
+    agent_type: str,
+    claude_md: str | None = None,
+    soul_md: str | None = None,
+    memory_md: str | None = None,
+) -> Path:
+    host_dir = (AGENTS_DIR / agent_id).resolve()
     host_dir.mkdir(parents=True, exist_ok=True)
+    (host_dir / "sessions").mkdir(exist_ok=True)
+    (host_dir / "memory").mkdir(exist_ok=True)
+
+    template_dir = TEMPLATES_DIR / agent_type
+    if not template_dir.is_dir():
+        template_dir = TEMPLATES_DIR / "default"
+
+    for filename in ("CLAUDE.md", "SOUL.md", "MEMORY.md"):
+        content = None
+        if filename == "CLAUDE.md" and claude_md:
+            content = claude_md
+        elif filename == "SOUL.md" and soul_md:
+            content = soul_md
+        elif filename == "MEMORY.md" and memory_md:
+            content = memory_md
+
+        target = host_dir / filename
+        if content:
+            target.write_text(content)
+        elif (template_dir / filename).is_file():
+            shutil.copy2(template_dir / filename, target)
+
+    return host_dir
+
+
+async def write_agents_json(agent_id: str, host_dir: Path) -> None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT name, agent_type FROM agents WHERE id != ? AND status = 'active'",
+        (agent_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    agents = [{"name": row[0], "agent_type": row[1]} for row in rows]
+    manifest_path = host_dir / "agents.json"
+    manifest_path.write_text(json.dumps(agents, indent=2))
+
+
+async def spawn_container(
+    agent_id: str, session_id: str
+) -> tuple[str, asyncio.subprocess.Process, Path]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT host_dir, container_memory, container_cpus FROM agents WHERE id = ?",
+        (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise ValueError(f"Agent {agent_id} not found")
+
+    host_dir = Path(row[0])
+    container_memory = row[1]
+    container_cpus = row[2]
+
+    host_dir.mkdir(parents=True, exist_ok=True)
+    await write_agents_json(agent_id, host_dir)
 
     record_id = str(uuid.uuid4())
-    db = await get_db()
     await db.execute(
         "INSERT INTO agent_containers "
-        "(id, session_id, agent_type, container_type, host_dir, status) "
-        "VALUES (?, ?, ?, 'session', ?, 'starting')",
-        (record_id, session_id, agent_type, str(host_dir)),
+        "(id, agent_id, session_id, container_type, status) "
+        "VALUES (?, ?, ?, 'session', 'starting')",
+        (record_id, agent_id, session_id),
     )
     await db.commit()
 
-    container_name = f"rhclaw-{session_id[:8]}"
+    container_name = f"rhclaw-{agent_id[:8]}"
     cmd = [
         PODMAN, "run", "--rm",
         "--name", container_name,
         "--network", NETWORK,
         "--read-only",
         "--label", "rhclaw.managed=true",
+        "--label", f"rhclaw.agent_id={agent_id}",
         "--label", f"rhclaw.session_id={session_id}",
-        "--memory", "2g",
-        "--cpus", "2",
+        "--memory", container_memory,
+        "--cpus", container_cpus,
         "--pids-limit", "256",
         "--tmpfs", "/tmp:rw,size=512m",
         "--tmpfs", "/var/tmp:rw,size=64m",
@@ -93,8 +156,8 @@ async def spawn_container(
     )
     await db.commit()
     logger.info(
-        "Spawned container %s for session %s (pid=%d)",
-        container_name, session_id, process.pid,
+        "Spawned container %s for agent %s session %s (pid=%d)",
+        container_name, agent_id, session_id, process.pid,
     )
 
     return record_id, process, host_dir

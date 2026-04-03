@@ -8,6 +8,10 @@ wheels/
 
 node_modules/
 
+# IDE / tool artifacts
+.idea/
+.playwright-mcp/
+
 # Virtual environments
 .venv
 data/

@@ -51,3 +51,11 @@ export interface ChatMessage {
   timestamp: number
   streaming?: boolean
 }
+
+export interface Agent {
+  id: string
+  name: string
+  agent_type: string
+  status: string
+  created_at: string
+}

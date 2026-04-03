@@ -42,3 +42,28 @@ class CompleteFrame(BaseModel):
     content: str
     message_id: str
     usage: dict | None = None
+
+
+class CreateAgentRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    agent_type: str = "default"
+
+
+class AgentResponse(BaseModel):
+    id: str
+    name: str
+    agent_type: str
+    status: str
+    created_at: str
+
+
+class AgentDetailResponse(AgentResponse):
+    claude_md: str
+    soul_md: str
+    memory_md: str
+
+
+class UpdateAgentRequest(BaseModel):
+    claude_md: str | None = None
+    soul_md: str | None = None
+    memory_md: str | None = None

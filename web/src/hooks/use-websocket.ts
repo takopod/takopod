@@ -9,12 +9,12 @@ import type {
 
 const RECONNECT_MAX_DELAY = 30_000
 
-function getWsUrl(): string {
+function getWsUrl(agentId: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-  return `${protocol}//${window.location.host}/api/ws`
+  return `${protocol}//${window.location.host}/api/ws?agent_id=${agentId}`
 }
 
-export function useWebSocket() {
+export function useWebSocket(agentId: string | null) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttempt = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(null)
@@ -36,7 +36,8 @@ export function useWebSocket() {
   }, [])
 
   const connect = useCallback(() => {
-    const ws = new WebSocket(getWsUrl())
+    if (!agentId) return
+    const ws = new WebSocket(getWsUrl(agentId))
 
     ws.onopen = () => {
       setConnected(true)
@@ -97,16 +98,20 @@ export function useWebSocket() {
     }
 
     wsRef.current = ws
-  }, [clearError])
+  }, [agentId, clearError])
 
   useEffect(() => {
+    if (!agentId) return
+    setMessages([])
+    setQueueStatus({ type: "queue_status", queued: 0, in_flight: 0, processed: 0 })
     connect()
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       if (errorTimer.current) clearTimeout(errorTimer.current)
       wsRef.current?.close()
+      wsRef.current = null
     }
-  }, [connect])
+  }, [agentId, connect])
 
   const sendMessage = useCallback((content: string) => {
     const ws = wsRef.current
