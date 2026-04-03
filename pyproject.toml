@@ -8,3 +8,13 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "fastapi[standard]>=0.135.3",
 ]
+
+[project.scripts]
+rhclaw = "orchestrator.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["orchestrator"]
