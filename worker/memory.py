@@ -28,10 +28,20 @@ MAX_FILE_SIZE = 8000  # chars; triggers continuation file
 MAX_SUMMARY_INPUT = 50000  # chars; truncation for summarization input
 SUMMARIZE_TIMEOUT = 45  # seconds
 
+MAX_CONTINUATION_FILES = 3  # compact when a 4th file would be created
+
 SUMMARIZE_SYSTEM_PROMPT = (
     "You are a session summarizer. Produce a concise summary of the following "
     "conversation. Focus on: topics discussed, decisions made, key facts learned, "
     "and any unresolved questions. Output only the summary, no preamble."
+)
+
+COMPACT_SYSTEM_PROMPT = (
+    "You are a memory compactor. The following contains multiple session summaries "
+    "from the same day. Distill them into a single, coherent summary that preserves "
+    "all important information: key decisions, facts learned, topics discussed, "
+    "and unresolved questions. Remove redundancy. Output only the distilled summary, "
+    "no preamble."
 )
 
 
@@ -116,20 +126,131 @@ async def _call_summarize(transcript: str) -> str | None:
     return summary
 
 
+async def compact_memory_files(
+    conn: sqlite3.Connection, date: str,
+) -> str | None:
+    """Compact all memory files for a date into a single distilled file.
+
+    Reads all continuation files for the given date, calls Claude to distill
+    them, replaces all files with a single memory/<date>.md, and updates the
+    memory_files table. Returns the resulting file path, or None on failure.
+    """
+    rows = conn.execute(
+        "SELECT file_path FROM memory_files "
+        "WHERE date = ? ORDER BY file_path",
+        (date,),
+    ).fetchall()
+    paths = [r[0] for r in rows]
+
+    if len(paths) < 2:
+        return None
+
+    # Read all file contents
+    combined_parts: list[str] = []
+    for rel_path in paths:
+        abs_path = WORKSPACE / rel_path
+        if abs_path.is_file():
+            combined_parts.append(abs_path.read_text().strip())
+    combined = "\n\n---\n\n".join(combined_parts)
+
+    if not combined.strip():
+        return None
+
+    if len(combined) > MAX_SUMMARY_INPUT:
+        combined = combined[:MAX_SUMMARY_INPUT] + "\n\n[...truncated]"
+
+    sys.stderr.write(
+        f"memory: compacting {len(paths)} files for {date} "
+        f"({len(combined)} chars)\n"
+    )
+    sys.stderr.flush()
+
+    try:
+        distilled = await asyncio.wait_for(
+            _call_compact(combined), timeout=SUMMARIZE_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        sys.stderr.write("memory: compaction timed out\n")
+        sys.stderr.flush()
+        return None
+    except Exception as e:
+        sys.stderr.write(f"memory: compaction failed: {e}\n")
+        sys.stderr.flush()
+        return None
+
+    if not distilled:
+        return None
+
+    # Write the single compacted file
+    canonical_path = f"memory/{date}.md"
+    abs_canonical = WORKSPACE / canonical_path
+    abs_canonical.write_text(f"## Compacted Memory — {date}\n\n{distilled}\n")
+
+    # Delete continuation files
+    for rel_path in paths:
+        if rel_path != canonical_path:
+            abs_path = WORKSPACE / rel_path
+            if abs_path.is_file():
+                abs_path.unlink()
+
+    # Update DB: delete old rows, upsert canonical
+    conn.execute("DELETE FROM memory_files WHERE date = ?", (date,))
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    file_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO memory_files (id, date, file_path, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (file_id, date, canonical_path, now, now),
+    )
+    conn.commit()
+
+    sys.stderr.write(
+        f"memory: compacted {len(paths)} files into {canonical_path} "
+        f"({len(distilled)} chars)\n"
+    )
+    sys.stderr.flush()
+    return canonical_path
+
+
+async def _call_compact(content: str) -> str | None:
+    """Call Claude Agent SDK to produce a compacted memory summary."""
+    options = ClaudeAgentOptions(
+        cwd=str(WORKSPACE),
+        system_prompt=COMPACT_SYSTEM_PROMPT,
+        max_turns=1,
+        allowed_tools=[],
+        permission_mode="acceptEdits",
+    )
+
+    text_parts: list[str] = []
+    async for msg in query(prompt=content, options=options):
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    text_parts.append(block.text)
+        elif isinstance(msg, ResultMessage):
+            break
+
+    result = "\n\n".join(text_parts).strip()
+    return result if result else None
+
+
 def write_memory_file(
     conn: sqlite3.Connection, summary: str, session_filepath: str,
-) -> str | None:
+) -> tuple[str | None, bool]:
     """Append a session summary to the daily memory file.
 
     Creates continuation files (-2.md, -3.md) if the current file exceeds
-    MAX_FILE_SIZE. Upserts the memory_files table.
+    MAX_FILE_SIZE. When a file beyond MAX_CONTINUATION_FILES would be created,
+    the write still proceeds but the caller is signalled to compact.
 
-    Returns the file path on success, None on failure.
+    Returns (file_path, needs_compaction). file_path is None on failure.
     """
     today = time.strftime("%Y-%m-%d", time.gmtime())
 
     # Format the entry
     entry = f"## Session: {session_filepath}\n\n{summary}\n\n---\n"
+    needs_compaction = False
 
     try:
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -150,9 +271,12 @@ def write_memory_file(
             latest_rel = existing_paths[-1]
             latest_abs = WORKSPACE / latest_rel
             if latest_abs.is_file() and len(latest_abs.read_text()) + len(entry) > MAX_FILE_SIZE:
-                # Create continuation
+                # Would create a new continuation file
                 seq = len(existing_paths) + 1
                 rel_path = f"memory/{today}-{seq}.md"
+                # Signal compaction if this exceeds the limit
+                if seq > MAX_CONTINUATION_FILES:
+                    needs_compaction = True
             else:
                 # Append to latest
                 rel_path = latest_rel
@@ -179,12 +303,12 @@ def write_memory_file(
 
         sys.stderr.write(f"memory: wrote summary to {rel_path}\n")
         sys.stderr.flush()
-        return rel_path
+        return rel_path, needs_compaction
 
     except Exception as e:
         sys.stderr.write(f"memory: failed to write memory file: {e}\n")
         sys.stderr.flush()
-        return None
+        return None, False
 
 
 def load_memory_context(conn: sqlite3.Connection) -> str | None:
@@ -250,7 +374,9 @@ async def run_session_end(
 ) -> None:
     """Run session-end memory operations: summarize and write memory file.
 
-    Called on shutdown and clear_context. Failures are non-fatal.
+    Called on shutdown, clear_context, and context-overflow splits.
+    Triggers memory compaction if the day has too many continuation files.
+    Failures are non-fatal.
     """
     if not session_id:
         sys.stderr.write("memory: no session_id, skipping session-end summary\n")
@@ -269,4 +395,16 @@ async def run_session_end(
     else:
         session_filepath = f"sessions/unknown-{session_id[:8]}"
 
-    write_memory_file(conn, summary, session_filepath)
+    _path, needs_compaction = write_memory_file(conn, summary, session_filepath)
+
+    if needs_compaction:
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        sys.stderr.write(
+            f"memory: compaction needed for {today}, triggering\n"
+        )
+        sys.stderr.flush()
+        try:
+            await compact_memory_files(conn, today)
+        except Exception as e:
+            sys.stderr.write(f"memory: compaction failed: {e}\n")
+            sys.stderr.flush()

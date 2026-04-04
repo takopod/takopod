@@ -28,6 +28,7 @@ Emit = Callable[[dict[str, Any]], None]
 def _build_system_prompt(
     retrieved_context: str | None = None,
     memory_context: str | None = None,
+    continuation_summary: str | None = None,
 ) -> str:
     """Assemble system prompt from identity files, memory, and retrieved context."""
     parts: list[str] = []
@@ -66,6 +67,14 @@ def _build_system_prompt(
             + retrieved_context
         )
 
+    if continuation_summary:
+        parts.append(
+            "## Continuation Context\n\n"
+            "The conversation was automatically split due to context length. "
+            "Below is a summary of the prior conversation:\n\n"
+            + continuation_summary
+        )
+
     return "\n\n".join(parts)
 
 
@@ -76,12 +85,15 @@ async def run_query(
     emit: Emit,
     retrieved_context: str | None = None,
     memory_context: str | None = None,
+    continuation_summary: str | None = None,
 ) -> tuple[str | None, dict[str, Any], str]:
     """Run a query through the Claude Agent SDK.
 
     Returns (captured_session_id, usage_dict, full_response_text).
     """
-    system_prompt = _build_system_prompt(retrieved_context, memory_context)
+    system_prompt = _build_system_prompt(
+        retrieved_context, memory_context, continuation_summary,
+    )
     sys.stderr.write(
         f"agent: system_prompt ({len(system_prompt)} chars):\n{system_prompt}\n"
     )

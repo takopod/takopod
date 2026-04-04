@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,11 @@ INPUT_PATH = WORKSPACE / "input.json"
 RESPONSE_PATH = WORKSPACE / "response.json"
 POLL_INTERVAL = 0.5
 
+# Context overflow: split the SDK session when input tokens exceed 80% of the
+# model's context window.  The orchestrator session stays unchanged.
+CONTEXT_WINDOW = 200_000  # tokens (Claude model context window)
+CONTEXT_THRESHOLD = 0.80  # trigger split at this fraction
+
 # SDK manages sessions internally via JSONL files in /workspace/sessions/.
 # We track the session_id so we can resume on subsequent queries.
 _session_id: str | None = None
@@ -23,6 +29,10 @@ _session_id: str | None = None
 # System commands (shutdown, clear_context) don't carry session_id,
 # so we remember the last one seen.
 _orch_session_id: str | None = None
+
+# After a context-overflow split, the summary is stored here and injected
+# into the next query's system prompt so the new SDK session has continuity.
+_continuation_summary: str | None = None
 
 # Module-level DB connection, set in main().
 _conn = None
@@ -94,8 +104,54 @@ def _mark_processed(conn, message_id: str) -> None:
     conn.commit()
 
 
+async def _split_session(conn) -> None:
+    """Split the SDK session due to context overflow.
+
+    Summarizes the current session, writes a memory file, stores the summary
+    for the next query, and resets the SDK session.  The orchestrator session
+    and WebSocket connection are unaffected.
+    """
+    global _session_id, _continuation_summary
+
+    try:
+        from worker.memory import (
+            compact_memory_files,
+            summarize_session,
+            write_memory_file,
+        )
+
+        # Summarize the session (used both for memory and continuation seed)
+        summary = await summarize_session(conn, _orch_session_id)
+        if summary:
+            # Write to daily memory file
+            sdk_path = (
+                f"sessions/{_session_id}.jsonl"
+                if _session_id
+                else f"sessions/unknown-{(_orch_session_id or 'none')[:8]}"
+            )
+            _path, needs_compaction = write_memory_file(conn, summary, sdk_path)
+            _continuation_summary = summary
+
+            if needs_compaction:
+                today = time.strftime("%Y-%m-%d", time.gmtime())
+                try:
+                    await compact_memory_files(conn, today)
+                except Exception as e:
+                    sys.stderr.write(f"worker: compaction failed: {e}\n")
+                    sys.stderr.flush()
+
+        # Reset SDK session — next query creates a fresh one
+        _session_id = None
+        sys.stderr.write("worker: session split complete\n")
+        sys.stderr.flush()
+
+    except Exception as e:
+        sys.stderr.write(f"worker: session split failed: {e}\n")
+        sys.stderr.flush()
+
+
 async def process_message(msg: dict[str, Any], conn) -> None:
-    global _session_id, _orch_session_id
+    global _session_id, _orch_session_id, _continuation_summary
     msg_type = msg.get("type")
 
     if msg_type == "system_command":
@@ -180,8 +236,23 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             message_id, content, _session_id, emit,
             retrieved_context=retrieved_context,
             memory_context=memory_context,
+            continuation_summary=_continuation_summary,
         )
         _session_id = new_session_id
+        # Clear continuation summary after it has been consumed
+        _continuation_summary = None
+
+        # Context overflow check: if input tokens exceed the threshold,
+        # split the SDK session.  The orchestrator session is unaffected.
+        input_tokens = _usage.get("input_tokens", 0)
+        if input_tokens > CONTEXT_WINDOW * CONTEXT_THRESHOLD:
+            sys.stderr.write(
+                f"worker: context overflow detected "
+                f"({input_tokens}/{CONTEXT_WINDOW} tokens, "
+                f"threshold {CONTEXT_THRESHOLD:.0%}), splitting session\n"
+            )
+            sys.stderr.flush()
+            await _split_session(conn)
     except Exception as e:
         sys.stderr.write(f"worker: query error: {e}\n")
         sys.stderr.flush()
