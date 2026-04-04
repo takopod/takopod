@@ -436,7 +436,7 @@ async def kill_session(session_id: str):
                 [{"type": "system_command", "command": "shutdown"}]
             )
             atomic_write(input_path, shutdown_payload.encode())
-            await asyncio.wait_for(worker.process.wait(), timeout=10)
+            await asyncio.wait_for(worker.process.wait(), timeout=30)
             graceful = True
         except (asyncio.TimeoutError, Exception):
             await kill_container(container_name)

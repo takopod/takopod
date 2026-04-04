@@ -25,8 +25,11 @@ MAX_TURNS = 25
 Emit = Callable[[dict[str, Any]], None]
 
 
-def _build_system_prompt(retrieved_context: str | None = None) -> str:
-    """Assemble system prompt from CLAUDE.md, SOUL.md, agents.json, and retrieved context."""
+def _build_system_prompt(
+    retrieved_context: str | None = None,
+    memory_context: str | None = None,
+) -> str:
+    """Assemble system prompt from identity files, memory, and retrieved context."""
     parts: list[str] = []
 
     claude_md = WORKSPACE / "CLAUDE.md"
@@ -53,6 +56,9 @@ def _build_system_prompt(retrieved_context: str | None = None) -> str:
         except (json.JSONDecodeError, KeyError):
             pass
 
+    if memory_context:
+        parts.append(memory_context)
+
     if retrieved_context:
         parts.append(
             "## Relevant Past Conversations\n\n"
@@ -69,12 +75,13 @@ async def run_query(
     session_id: str | None,
     emit: Emit,
     retrieved_context: str | None = None,
+    memory_context: str | None = None,
 ) -> tuple[str | None, dict[str, Any], str]:
     """Run a query through the Claude Agent SDK.
 
     Returns (captured_session_id, usage_dict, full_response_text).
     """
-    system_prompt = _build_system_prompt(retrieved_context)
+    system_prompt = _build_system_prompt(retrieved_context, memory_context)
     sys.stderr.write(
         f"agent: system_prompt ({len(system_prompt)} chars):\n{system_prompt}\n"
     )

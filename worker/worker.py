@@ -19,6 +19,11 @@ POLL_INTERVAL = 0.5
 # We track the session_id so we can resume on subsequent queries.
 _session_id: str | None = None
 
+# Orchestrator session ID, set from user_message payloads.
+# System commands (shutdown, clear_context) don't carry session_id,
+# so we remember the last one seen.
+_orch_session_id: str | None = None
+
 # Module-level DB connection, set in main().
 _conn = None
 
@@ -90,17 +95,30 @@ def _mark_processed(conn, message_id: str) -> None:
 
 
 async def process_message(msg: dict[str, Any], conn) -> None:
-    global _session_id
+    global _session_id, _orch_session_id
     msg_type = msg.get("type")
 
     if msg_type == "system_command":
         command = msg.get("command")
         if command == "clear_context":
+            # Summarize the current session before clearing
+            try:
+                from worker.memory import run_session_end
+                await run_session_end(conn, _orch_session_id, _session_id)
+            except Exception as e:
+                sys.stderr.write(f"worker: session-end summary failed: {e}\n")
+                sys.stderr.flush()
             _session_id = None  # Next query starts a fresh SDK session
             emit({"type": "status", "status": "context_cleared", "message_id": ""})
         elif command == "shutdown":
-            sys.stderr.write("worker: received shutdown command, exiting\n")
+            sys.stderr.write("worker: received shutdown command, summarizing session\n")
             sys.stderr.flush()
+            try:
+                from worker.memory import run_session_end
+                await run_session_end(conn, _orch_session_id, _session_id)
+            except Exception as e:
+                sys.stderr.write(f"worker: session-end summary failed: {e}\n")
+                sys.stderr.flush()
             emit({"type": "status", "status": "done", "message_id": ""})
             flush_responses()
             sys.exit(0)
@@ -122,6 +140,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 
     content = msg.get("content", "")
     session_id_for_index = msg.get("session_id", "")
+    _orch_session_id = session_id_for_index or _orch_session_id
     sys.stderr.write(f"worker: query message_id={message_id} content={content!r}\n")
     sys.stderr.flush()
     emit({"type": "status", "status": "thinking", "message_id": message_id})
@@ -141,11 +160,26 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         sys.stderr.write(f"worker: search failed, proceeding without context: {e}\n")
         sys.stderr.flush()
 
+    # Load memory context (MEMORY.md + daily memory files)
+    memory_context = None
+    try:
+        from worker.memory import load_memory_context
+        memory_context = load_memory_context(conn)
+        if memory_context:
+            sys.stderr.write(
+                f"worker: loaded memory context ({len(memory_context)} chars)\n"
+            )
+            sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"worker: memory loading failed: {e}\n")
+        sys.stderr.flush()
+
     response_text = ""
     try:
         new_session_id, _usage, response_text = await run_query(
             message_id, content, _session_id, emit,
             retrieved_context=retrieved_context,
+            memory_context=memory_context,
         )
         _session_id = new_session_id
     except Exception as e:
