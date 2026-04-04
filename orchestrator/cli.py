@@ -2,6 +2,9 @@ import os
 import signal
 import subprocess
 import sys
+import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -58,8 +61,27 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
         sys.exit(1)
 
     PID_FILE.write_text(str(proc.pid))
-    print(f"rhclaw started on {host}:{port} (pid {proc.pid})")
-    print(f"Logs: {log_file}")
+    print(f"rhclaw starting on {host}:{port} (pid {proc.pid})...")
+
+    # Wait for the app to become ready
+    url = f"http://{host}:{port}/api/health"
+    for attempt in range(20):
+        # Check if process died during startup
+        if proc.poll() is not None:
+            PID_FILE.unlink(missing_ok=True)
+            print(f"Error: process exited during startup (code {proc.returncode})")
+            print(f"Check logs: {log_file}")
+            sys.exit(1)
+        try:
+            urllib.request.urlopen(url, timeout=2)
+            print(f"rhclaw ready on {host}:{port}")
+            print(f"Logs: {log_file}")
+            return
+        except (urllib.error.URLError, OSError):
+            time.sleep(1)
+
+    print(f"Warning: rhclaw started but health check not responding after 20s")
+    print(f"Check logs: {log_file}")
 
 
 def stop() -> None:
@@ -80,8 +102,19 @@ def stop() -> None:
     except OSError as exc:
         print(f"Error: failed to stop rhclaw (pid {pid}): {exc}")
         sys.exit(1)
+
+    print(f"rhclaw stopping (pid {pid})...")
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)  # Check if process still exists
+        except OSError:
+            break
+        time.sleep(1)
+    else:
+        print(f"Warning: process {pid} still running after 20s")
+
     PID_FILE.unlink(missing_ok=True)
-    print(f"rhclaw stopped (pid {pid})")
+    print("rhclaw stopped")
 
 
 def main() -> None:

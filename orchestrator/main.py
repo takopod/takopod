@@ -15,12 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from orchestrator.boot_recovery import boot_recovery
 from orchestrator.container_manager import build_image, ensure_network
 from orchestrator.db import connect, disconnect, run_migrations
-from orchestrator.ollama import (
-    check_ollama_status,
-    start_ollama,
-    stop_ollama,
-    wait_for_ollama,
-)
+from orchestrator.ollama import check_ollama_status
 from orchestrator.routes import _reap_idle_workers, router
 from orchestrator.settings import get_setting
 
@@ -40,15 +35,9 @@ async def lifespan(app: FastAPI):
     await ensure_network()
     await build_image()
 
-    if await get_setting("ollama_enabled", "true") == "true":
-        await start_ollama()
-        await wait_for_ollama()
-
     reaper_task = asyncio.create_task(_reap_idle_workers(), name="idle-reaper")
     yield
     reaper_task.cancel()
-    if await get_setting("ollama_enabled", "true") == "true":
-        await stop_ollama()
     await disconnect()
 
 
