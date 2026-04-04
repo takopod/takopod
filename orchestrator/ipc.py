@@ -264,6 +264,10 @@ async def _process_event(
             await _schedule_compaction_task(session_id, date)
         return None
 
+    elif event_type == "schedule_recurring":
+        await _create_agentic_task(session_id, event)
+        return None
+
     elif event_type == "system_error":
         logger.warning(
             "Worker error for session %s: %s", session_id, event.get("error"),
@@ -277,6 +281,35 @@ async def _process_event(
 
 
 # --- Scheduled task helpers ---
+
+
+async def _create_agentic_task(session_id: str, event: dict) -> None:
+    """Create a recurring agentic task from a schedule_recurring worker event."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT agent_id FROM sessions WHERE id = ?", (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        logger.warning("Cannot create agentic task: session %s not found", session_id)
+        return
+
+    agent_id = row[0]
+    task_id = str(uuid.uuid4())
+    prompt = event.get("prompt", "")
+    allowed_tools = json.dumps(event.get("allowed_tools", []))
+    interval_seconds = event.get("interval_seconds", 3600)
+
+    await db.execute(
+        "INSERT INTO agentic_tasks (id, agent_id, prompt, allowed_tools, interval_seconds) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (task_id, agent_id, prompt, allowed_tools, interval_seconds),
+    )
+    await db.commit()
+    logger.info(
+        "Created agentic task %s for agent %s (every %ds)",
+        task_id[:8], agent_id[:8], interval_seconds,
+    )
 
 
 async def _schedule_compaction_task(session_id: str, date: str) -> None:

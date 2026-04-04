@@ -87,3 +87,15 @@ class ContainerResponse(BaseModel):
     stopped_at: str | None = None
     last_activity: str
     pid: int | None = None
+
+
+class ScheduleResponse(BaseModel):
+    id: str
+    agent_id: str
+    agent_name: str
+    prompt: str
+    allowed_tools: list[str]
+    interval_seconds: int
+    last_executed_at: str | None
+    status: str
+    created_at: str

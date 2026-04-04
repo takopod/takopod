@@ -33,6 +33,7 @@ from orchestrator.models import (
     ErrorFrame,
     FileEntry,
     QueueStatusFrame,
+    ScheduleResponse,
     SystemCommandFrame,
     SystemErrorFrame,
     UpdateAgentRequest,
@@ -403,6 +404,104 @@ async def delete_container(container_id: str):
             worker.monitor_task.cancel()
 
     return {"status": "ok", "container_id": container_id}
+
+
+# --- Schedules API ---
+
+
+@router.get("/schedules")
+async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
+    db = await get_db()
+    query = (
+        "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
+        "t.interval_seconds, t.last_executed_at, t.status, t.created_at "
+        "FROM agentic_tasks t "
+        "LEFT JOIN agents a ON a.id = t.agent_id "
+    )
+    params: list = []
+    if status:
+        query += "WHERE t.status = ? "
+        params.append(status)
+    query += "ORDER BY t.created_at DESC"
+
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+
+    return [
+        ScheduleResponse(
+            id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
+            prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
+            interval_seconds=r[5], last_executed_at=r[6],
+            status=r[7], created_at=r[8],
+        )
+        for r in rows
+    ]
+
+
+@router.get("/schedules/{task_id}")
+async def get_schedule(task_id: str) -> ScheduleResponse:
+    db = await get_db()
+    async with db.execute(
+        "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
+        "t.interval_seconds, t.last_executed_at, t.status, t.created_at "
+        "FROM agentic_tasks t "
+        "LEFT JOIN agents a ON a.id = t.agent_id "
+        "WHERE t.id = ?",
+        (task_id,),
+    ) as cur:
+        r = await cur.fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    return ScheduleResponse(
+        id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
+        prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
+        interval_seconds=r[5], last_executed_at=r[6],
+        status=r[7], created_at=r[8],
+    )
+
+
+@router.post("/schedules/{task_id}/pause")
+async def pause_schedule(task_id: str):
+    db = await get_db()
+    async with db.execute(
+        "SELECT id FROM agentic_tasks WHERE id = ?", (task_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Schedule not found")
+    await db.execute(
+        "UPDATE agentic_tasks SET status = 'paused' WHERE id = ?", (task_id,),
+    )
+    await db.commit()
+    return {"status": "ok", "task_id": task_id}
+
+
+@router.post("/schedules/{task_id}/resume")
+async def resume_schedule(task_id: str):
+    db = await get_db()
+    async with db.execute(
+        "SELECT id FROM agentic_tasks WHERE id = ?", (task_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Schedule not found")
+    await db.execute(
+        "UPDATE agentic_tasks SET status = 'active' WHERE id = ?", (task_id,),
+    )
+    await db.commit()
+    return {"status": "ok", "task_id": task_id}
+
+
+@router.delete("/schedules/{task_id}")
+async def delete_schedule(task_id: str):
+    db = await get_db()
+    async with db.execute(
+        "SELECT id FROM agentic_tasks WHERE id = ?", (task_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Schedule not found")
+    await db.execute("DELETE FROM agentic_tasks WHERE id = ?", (task_id,))
+    await db.commit()
+    return {"status": "ok", "task_id": task_id}
 
 
 # --- Sessions API ---

@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))
 SCHEDULER_TICK = 10  # seconds between scheduler iterations
 IDLE_REAPER_TICKS = 3  # run idle reaper every N ticks (30s at TICK=10)
+AGENTIC_TASK_TICKS = 3  # poll agentic tasks every N ticks (30s at TICK=10)
 TASK_POLL_RESPONSE_INTERVAL = 1.0  # seconds between response.json polls
 
 
@@ -46,6 +47,9 @@ class RunningTaskInfo:
 
 
 _running_tasks: dict[str, RunningTaskInfo] = {}
+
+# Track running agentic tasks by agentic_task_id -> asyncio.Task
+_running_agentic: dict[str, asyncio.Task] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +73,12 @@ async def run_scheduler() -> None:
             await _check_task_timeouts()
         except Exception:
             logger.exception("Scheduler: error checking task timeouts")
+
+        if tick % AGENTIC_TASK_TICKS == 0:
+            try:
+                await _poll_agentic_tasks()
+            except Exception:
+                logger.exception("Scheduler: error polling agentic tasks")
 
         if tick % IDLE_REAPER_TICKS == 0:
             try:
@@ -234,6 +244,144 @@ async def _poll_task_response(
             return None
 
     return None  # Timeout
+
+
+# ---------------------------------------------------------------------------
+# Agentic (recurring) task runner
+# ---------------------------------------------------------------------------
+
+
+async def _poll_agentic_tasks() -> None:
+    """Find active agentic tasks that are due for execution."""
+    # Clean up completed asyncio tasks
+    done = [tid for tid, t in _running_agentic.items() if t.done()]
+    for tid in done:
+        _running_agentic.pop(tid, None)
+
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, agent_id, prompt, allowed_tools, interval_seconds "
+        "FROM agentic_tasks "
+        "WHERE status = 'active' "
+        "  AND (last_executed_at IS NULL "
+        "       OR last_executed_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', "
+        "          '-' || interval_seconds || ' seconds'))",
+    ) as cur:
+        rows = await cur.fetchall()
+
+    for task_id, agent_id, prompt, allowed_tools_json, interval_seconds in rows:
+        if task_id in _running_agentic:
+            continue
+        allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
+        task = asyncio.create_task(
+            _execute_agentic_task(task_id, agent_id, prompt, allowed_tools),
+            name=f"agentic-{task_id[:8]}",
+        )
+        _running_agentic[task_id] = task
+
+
+async def _execute_agentic_task(
+    task_id: str,
+    agent_id: str,
+    prompt: str,
+    allowed_tools: list[str],
+) -> None:
+    """Spawn an ephemeral container, deliver the prompt as a user_message, wait for completion."""
+    db = await get_db()
+    record_id = None
+    process = None
+    container_name = f"rhclaw-task-{agent_id[:8]}"
+
+    try:
+        record_id, process, host_dir = await spawn_scheduled_container(agent_id, task_id)
+
+        # Write input as a user_message so the worker runs a full Claude query
+        input_path = host_dir / "input.json"
+        message_id = str(uuid.uuid4())
+        payload = json.dumps([{
+            "type": "user_message",
+            "message_id": message_id,
+            "content": prompt,
+            "allowed_tools": allowed_tools,
+        }])
+        atomic_write(input_path, payload.encode())
+
+        # Poll for complete or system_error event
+        result = await _poll_agentic_response(host_dir, process, timeout_seconds=300)
+
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await db.execute(
+            "UPDATE agentic_tasks SET last_executed_at = ? WHERE id = ?",
+            (now, task_id),
+        )
+        await db.commit()
+
+        if result and result.get("type") == "system_error":
+            logger.warning(
+                "Agentic task %s completed with error: %s",
+                task_id[:8], result.get("error"),
+            )
+        else:
+            logger.info("Agentic task %s executed successfully", task_id[:8])
+
+    except Exception:
+        logger.exception("Agentic task %s failed", task_id[:8])
+        # Still update last_executed_at so we don't retry immediately
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        try:
+            await db.execute(
+                "UPDATE agentic_tasks SET last_executed_at = ? WHERE id = ?",
+                (now, task_id),
+            )
+            await db.commit()
+        except Exception:
+            pass
+    finally:
+        _running_agentic.pop(task_id, None)
+        if process and process.returncode is None:
+            await kill_container(container_name)
+        if record_id:
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            await db.execute(
+                "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
+                "WHERE id = ?",
+                (now, record_id),
+            )
+            await db.commit()
+
+
+async def _poll_agentic_response(
+    host_dir: Path,
+    process: asyncio.subprocess.Process,
+    timeout_seconds: int = 300,
+) -> dict | None:
+    """Poll response.json for a complete or system_error event."""
+    response_path = host_dir / "response.json"
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        await asyncio.sleep(TASK_POLL_RESPONSE_INTERVAL)
+
+        if response_path.exists():
+            try:
+                with open(response_path) as f:
+                    events = json.load(f)
+                os.remove(response_path)
+            except (json.JSONDecodeError, OSError):
+                try:
+                    os.remove(response_path)
+                except OSError:
+                    pass
+                continue
+
+            for event in events:
+                if event.get("type") in ("complete", "system_error"):
+                    return event
+
+        if process.returncode is not None:
+            return None
+
+    return None
 
 
 # ---------------------------------------------------------------------------

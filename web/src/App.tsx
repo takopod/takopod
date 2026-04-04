@@ -3,6 +3,7 @@ import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { ChatInput } from "@/components/chat-input"
 import { ContainersView } from "@/components/containers-view"
+import { SchedulesView } from "@/components/schedules-view"
 import { SettingsView } from "@/components/settings-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
@@ -148,6 +149,9 @@ export function App() {
             >
               Agents
             </NavLink>
+            <NavLink to="/schedules" match={currentPath === "/schedules"}>
+              Schedules
+            </NavLink>
             <NavLink to="/containers" match={currentPath === "/containers"}>
               Containers
             </NavLink>
@@ -255,6 +259,10 @@ export function App() {
                   onDeleteAgent={handleDeleteAgent}
                 />
               }
+            />
+            <Route
+              path="/schedules"
+              element={<SchedulesView />}
             />
             <Route
               path="/containers"
