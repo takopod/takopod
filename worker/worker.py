@@ -203,10 +203,11 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 
     if msg_type == "scheduled_task":
         result = await _handle_scheduled_task(conn, msg)
+        status = "error" if "error" in result else "completed"
         emit({
             "type": "task_result",
             "task_id": msg.get("task_id", ""),
-            "status": "completed",
+            "status": status,
             "result": result,
             "message_id": "",
         })
