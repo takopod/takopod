@@ -16,10 +16,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestrator.container_manager import (
-    kill_container,
-    spawn_scheduled_container,
-)
+from orchestrator.container_manager import kill_container, spawn_scheduled_container
 from orchestrator.db import get_db
 from orchestrator.ipc import atomic_write
 from orchestrator.models import SystemErrorFrame
@@ -286,102 +283,69 @@ async def _execute_agentic_task(
     prompt: str,
     allowed_tools: list[str],
 ) -> None:
-    """Spawn an ephemeral container, deliver the prompt as a user_message, wait for completion."""
+    """Queue a scheduled task prompt through the normal message path."""
+    from orchestrator.ipc import store_scheduled_message
+    from orchestrator.routes import _get_or_create_session, ensure_worker_headless
+
     db = await get_db()
-    record_id = None
-    process = None
-    container_name = f"rhclaw-task-{agent_id[:8]}"
+    message_id = str(uuid.uuid4())
 
     try:
-        record_id, process, host_dir = await spawn_scheduled_container(agent_id, task_id)
+        session_id = await _get_or_create_session(agent_id)
+        await ensure_worker_headless(agent_id, session_id)
+        await store_scheduled_message(
+            session_id, message_id, prompt, task_id, allowed_tools,
+        )
 
-        # Write input as a user_message so the worker runs a full Claude query
-        input_path = host_dir / "input.json"
-        message_id = str(uuid.uuid4())
-        payload = json.dumps([{
-            "type": "user_message",
-            "message_id": message_id,
-            "content": prompt,
-            "allowed_tools": allowed_tools,
-        }])
-        atomic_write(input_path, payload.encode())
-
-        # Poll for complete or system_error event
-        result = await _poll_agentic_response(host_dir, process, timeout_seconds=300)
+        last_result = await _wait_for_completion(message_id, timeout_seconds=300)
 
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await db.execute(
-            "UPDATE agentic_tasks SET last_executed_at = ? WHERE id = ?",
-            (now, task_id),
+            "UPDATE agentic_tasks SET last_executed_at = ?, last_result = ? "
+            "WHERE id = ?",
+            (now, last_result, task_id),
         )
         await db.commit()
-
-        if result and result.get("type") == "system_error":
-            logger.warning(
-                "Agentic task %s completed with error: %s",
-                task_id[:8], result.get("error"),
-            )
-        else:
-            logger.info("Agentic task %s executed successfully", task_id[:8])
+        logger.info("Agentic task %s executed successfully", task_id[:8])
 
     except Exception:
         logger.exception("Agentic task %s failed", task_id[:8])
-        # Still update last_executed_at so we don't retry immediately
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         try:
             await db.execute(
-                "UPDATE agentic_tasks SET last_executed_at = ? WHERE id = ?",
-                (now, task_id),
+                "UPDATE agentic_tasks SET last_executed_at = ?, last_result = ? "
+                "WHERE id = ?",
+                (now, "Error: execution failed", task_id),
             )
             await db.commit()
         except Exception:
             pass
     finally:
         _running_agentic.pop(task_id, None)
-        if process and process.returncode is None:
-            await kill_container(container_name)
-        if record_id:
-            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            await db.execute(
-                "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
-                "WHERE id = ?",
-                (now, record_id),
-            )
-            await db.commit()
 
 
-async def _poll_agentic_response(
-    host_dir: Path,
-    process: asyncio.subprocess.Process,
+async def _wait_for_completion(
+    message_id: str,
     timeout_seconds: int = 300,
-) -> dict | None:
-    """Poll response.json for a complete or system_error event."""
-    response_path = host_dir / "response.json"
+) -> str:
+    """Poll the messages table until the assistant response is complete."""
+    db = await get_db()
+    row_id = f"assistant-{message_id}"
     deadline = time.monotonic() + timeout_seconds
 
     while time.monotonic() < deadline:
-        await asyncio.sleep(TASK_POLL_RESPONSE_INTERVAL)
+        await asyncio.sleep(2.0)
 
-        if response_path.exists():
-            try:
-                with open(response_path) as f:
-                    events = json.load(f)
-                os.remove(response_path)
-            except (json.JSONDecodeError, OSError):
-                try:
-                    os.remove(response_path)
-                except OSError:
-                    pass
-                continue
+        async with db.execute(
+            "SELECT content, status FROM messages WHERE id = ?",
+            (row_id,),
+        ) as cur:
+            row = await cur.fetchone()
 
-            for event in events:
-                if event.get("type") in ("complete", "system_error"):
-                    return event
+        if row and row[1] == "complete":
+            return row[0] or ""
 
-        if process.returncode is not None:
-            return None
-
-    return None
+    return "Error: Timed out waiting for response"
 
 
 # ---------------------------------------------------------------------------

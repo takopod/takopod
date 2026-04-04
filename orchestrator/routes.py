@@ -74,6 +74,22 @@ class WorkerState:
 _active_workers: dict[str, WorkerState] = {}
 
 
+# --- Agent Templates ---
+
+TEMPLATES_DIR = Path("agent_templates")
+
+
+@router.get("/templates")
+async def list_templates():
+    """List available agent templates."""
+    templates = []
+    if TEMPLATES_DIR.is_dir():
+        for d in sorted(TEMPLATES_DIR.iterdir()):
+            if d.is_dir():
+                templates.append({"id": d.name, "name": d.name})
+    return templates
+
+
 # --- Agent CRUD ---
 
 
@@ -414,7 +430,7 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     db = await get_db()
     query = (
         "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
-        "t.interval_seconds, t.last_executed_at, t.status, t.created_at "
+        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, t.created_at "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
     )
@@ -431,8 +447,8 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
         ScheduleResponse(
             id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
             prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
-            interval_seconds=r[5], last_executed_at=r[6],
-            status=r[7], created_at=r[8],
+            interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
+            status=r[8], created_at=r[9],
         )
         for r in rows
     ]
@@ -443,7 +459,7 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
     db = await get_db()
     async with db.execute(
         "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
-        "t.interval_seconds, t.last_executed_at, t.status, t.created_at "
+        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, t.created_at "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
         "WHERE t.id = ?",
@@ -456,8 +472,8 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
     return ScheduleResponse(
         id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
         prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
-        interval_seconds=r[5], last_executed_at=r[6],
-        status=r[7], created_at=r[8],
+        interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
+        status=r[8], created_at=r[9],
     )
 
 
@@ -489,6 +505,37 @@ async def resume_schedule(task_id: str):
     )
     await db.commit()
     return {"status": "ok", "task_id": task_id}
+
+
+@router.put("/schedules/{task_id}")
+async def update_schedule(task_id: str, request: Request):
+    db = await get_db()
+    async with db.execute(
+        "SELECT id FROM agentic_tasks WHERE id = ?", (task_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Schedule not found")
+
+    body = await request.json()
+    updates = []
+    params = []
+    for field in ("prompt", "agent_id", "allowed_tools", "interval_seconds"):
+        if field in body:
+            value = body[field]
+            if field == "allowed_tools":
+                value = json.dumps(value)
+            updates.append(f"{field} = ?")
+            params.append(value)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    params.append(task_id)
+    await db.execute(
+        f"UPDATE agentic_tasks SET {', '.join(updates)} WHERE id = ?",
+        tuple(params),
+    )
+    await db.commit()
+    return await get_schedule(task_id)
 
 
 @router.delete("/schedules/{task_id}")
@@ -752,8 +799,23 @@ def _check_rate_limit(session_id: str) -> float | None:
     return None
 
 
-async def _create_session(agent_id: str) -> str:
+async def _get_or_create_session(agent_id: str) -> str:
+    """Reuse the most recent session for this agent, or create one."""
     db = await get_db()
+    async with db.execute(
+        "SELECT id FROM sessions WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1",
+        (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if row:
+        session_id = row[0]
+        # Re-activate if it was marked disconnected
+        await db.execute(
+            "UPDATE sessions SET status = 'active', ended_at = NULL WHERE id = ?",
+            (session_id,),
+        )
+        await db.commit()
+        return session_id
     session_id = str(uuid.uuid4())
     await db.execute(
         "INSERT INTO sessions (id, agent_id) VALUES (?, ?)",
@@ -843,20 +905,45 @@ async def _cleanup_session(agent_id: str, session_id: str) -> None:
 
         # Mark container as idle — reaper will kill after timeout
         db = await get_db()
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await db.execute(
             "UPDATE agent_containers SET status = 'idle' WHERE id = ?",
             (worker.container_record_id,),
         )
-        # Mark session as disconnected (container still alive, user may reconnect)
-        await db.execute(
-            "UPDATE sessions SET status = 'disconnected', ended_at = ? "
-            "WHERE id = ? AND ended_at IS NULL",
-            (now, session_id),
-        )
         await db.commit()
 
     _rate_limits.pop(session_id, None)
+
+
+async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
+    """Ensure a worker container is running for an agent, without a WebSocket.
+
+    Used by the scheduler to guarantee the polling loop is active before
+    queuing a scheduled task message.
+    """
+    worker = _active_workers.get(agent_id)
+
+    if worker:
+        if worker.polling_task is None or worker.polling_task.done():
+            worker.polling_task = start_polling_loop(
+                session_id, worker.host_dir, worker.ws_manager,
+            )
+        return
+
+    record_id, process, host_dir = await spawn_container(agent_id, session_id)
+    ws_mgr = WebSocketManager(session_id)
+
+    worker = WorkerState(
+        container_record_id=record_id,
+        process=process,
+        host_dir=host_dir,
+        session_id=session_id,
+        ws_manager=ws_mgr,
+        polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
+    )
+    _active_workers[agent_id] = worker
+    worker.monitor_task = asyncio.create_task(
+        _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
+    )
 
 
 async def _respawn_worker(agent_id: str) -> None:
@@ -878,6 +965,15 @@ async def _respawn_worker(agent_id: str) -> None:
         record_id, process, host_dir = await spawn_container(
             agent_id, worker.session_id,
         )
+        # Re-queue any IN-FLIGHT messages so the new worker picks them up
+        db = await get_db()
+        await db.execute(
+            "UPDATE message_queue SET status = 'QUEUED', flushed_at = NULL "
+            "WHERE session_id = ? AND status = 'IN-FLIGHT'",
+            (worker.session_id,),
+        )
+        await db.commit()
+
         worker.container_record_id = record_id
         worker.process = process
         worker.host_dir = host_dir
@@ -1068,7 +1164,7 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.close()
             return
 
-    session_id = await _create_session(agent_id)
+    session_id = await _get_or_create_session(agent_id)
 
     try:
         while True:

@@ -60,6 +60,7 @@ export interface ChatMessage {
   status?: "streaming" | "complete"
   toolCalls?: ToolCallInfo[]
   blocks?: ContentBlock[]
+  source?: "user" | "scheduled_task"
 }
 
 export interface FileEntry {

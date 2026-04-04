@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import typing
 import uuid
 from datetime import datetime, timezone
@@ -17,20 +18,66 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Tracks source metadata for in-flight scheduled task messages per session.
+# Set when flushing a scheduled task message, cleared on complete event.
+_inflight_source: dict[str, dict] = {}
 
-async def queue_message(session_id: str, message_id: str, content: str) -> None:
+
+async def queue_message(
+    session_id: str,
+    message_id: str,
+    content: str,
+    *,
+    source: str = "user",
+    agentic_task_id: str | None = None,
+    allowed_tools: list[str] | None = None,
+) -> None:
     db = await get_db()
-    payload = json.dumps({
+    payload_dict: dict = {
         "message_id": message_id,
         "type": "user_message",
         "content": content,
         "session_id": session_id,
-    })
+        "source": source,
+    }
+    if agentic_task_id:
+        payload_dict["agentic_task_id"] = agentic_task_id
+    if allowed_tools:
+        payload_dict["allowed_tools"] = allowed_tools
+    payload = json.dumps(payload_dict)
     await db.execute(
-        "INSERT INTO message_queue (id, session_id, payload) VALUES (?, ?, ?)",
-        (message_id, session_id, payload),
+        "INSERT INTO message_queue (id, session_id, payload, agentic_task_id) "
+        "VALUES (?, ?, ?, ?)",
+        (message_id, session_id, payload, agentic_task_id),
     )
     await db.commit()
+
+
+async def store_scheduled_message(
+    session_id: str,
+    message_id: str,
+    content: str,
+    agentic_task_id: str,
+    allowed_tools: list[str] | None = None,
+) -> None:
+    """Store a user message from a scheduled task and queue it for processing."""
+    db = await get_db()
+    metadata = json.dumps({
+        "source": "scheduled_task",
+        "agentic_task_id": agentic_task_id,
+    })
+    await db.execute(
+        "INSERT INTO messages (id, session_id, role, content, metadata) "
+        "VALUES (?, ?, 'user', ?, ?)",
+        (message_id, session_id, content, metadata),
+    )
+    await db.commit()
+    await queue_message(
+        session_id, message_id, content,
+        source="scheduled_task",
+        agentic_task_id=agentic_task_id,
+        allowed_tools=allowed_tools,
+    )
 
 
 async def queue_system_command(session_id: str, command: str) -> None:
@@ -97,8 +144,13 @@ async def _db_get_metadata(db, row_id: str) -> tuple[str, dict] | None:
     return content, meta
 
 
-async def _db_ensure_row(row_id: str, session_id: str) -> None:
-    metadata = json.dumps({"blocks": []})
+async def _db_ensure_row(
+    row_id: str, session_id: str, extra_metadata: dict | None = None,
+) -> None:
+    meta: dict = {"blocks": []}
+    if extra_metadata:
+        meta.update(extra_metadata)
+    metadata = json.dumps(meta)
     try:
         db = await get_db()
         await db.execute(
@@ -210,6 +262,7 @@ async def _db_complete(
 
 async def _process_event(
     event: dict, session_id: str, ws_mgr: WebSocketManager,
+    source_metadata: dict | None = None,
 ) -> str | None:
     """Process a single worker event. Returns the message_id if DB was touched."""
     event_type = event.get("type")
@@ -226,14 +279,14 @@ async def _process_event(
     row_id = f"assistant-{message_id}"
 
     if event_type == "status" and event.get("status") == "thinking":
-        await _db_ensure_row(row_id, session_id)
+        await _db_ensure_row(row_id, session_id, source_metadata)
 
     elif event_type == "token":
-        await _db_ensure_row(row_id, session_id)
+        await _db_ensure_row(row_id, session_id, source_metadata)
         await _db_append_token(row_id, event.get("content", ""))
 
     elif event_type == "tool_call":
-        await _db_ensure_row(row_id, session_id)
+        await _db_ensure_row(row_id, session_id, source_metadata)
         block = {
             "type": "tool_call",
             "tool": {
@@ -253,6 +306,20 @@ async def _process_event(
         await _db_complete(
             row_id, event.get("content", ""), event.get("usage"),
         )
+        # Eagerly update agentic_tasks.last_result for the schedules view
+        if source_metadata and source_metadata.get("agentic_task_id"):
+            task_id = source_metadata["agentic_task_id"]
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            try:
+                db = await get_db()
+                await db.execute(
+                    "UPDATE agentic_tasks SET last_executed_at = ?, last_result = ? "
+                    "WHERE id = ?",
+                    (now, event.get("content", ""), task_id),
+                )
+                await db.commit()
+            except Exception:
+                logger.exception("Failed to update agentic task %s last_result", task_id)
 
     elif event_type == "status" and event.get("status") == "done":
         # Worker finished processing — no DB action needed
@@ -377,6 +444,8 @@ async def _polling_loop(
                 )
                 await db.commit()
                 await _send_queue_status(ws_mgr, session_id)
+                # Clear tracked source metadata for this session
+                _inflight_source.pop(session_id, None)
 
             # --- Input flush: QUEUED messages + no input.json = write input.json ---
             async with db.execute(
@@ -392,6 +461,15 @@ async def _polling_loop(
                 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 for msg in messages:
                     msg["timestamp"] = now
+
+                # Track source metadata for scheduled task messages
+                for msg in messages:
+                    if msg.get("agentic_task_id"):
+                        _inflight_source[session_id] = {
+                            "source": "scheduled_task",
+                            "agentic_task_id": msg["agentic_task_id"],
+                        }
+                        break
 
                 atomic_write(input_path, json.dumps(messages).encode())
 
@@ -426,10 +504,13 @@ async def _polling_loop(
                     events = []
 
                 # Process events and collect unique message_ids for notification
+                source_meta = _inflight_source.get(session_id)
                 notified: set[str] = set()
                 for event in events:
                     try:
-                        row_id = await _process_event(event, session_id, ws_mgr)
+                        row_id = await _process_event(
+                            event, session_id, ws_mgr, source_meta,
+                        )
                         if row_id:
                             notified.add(row_id)
                     except Exception:

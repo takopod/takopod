@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { ChatMessage, ToolCallInfo } from "@/lib/types"
-import { ChevronDown, ChevronRight, Terminal } from "lucide-react"
+import { ChevronDown, ChevronRight, Clock, Terminal } from "lucide-react"
 
 function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   const [open, setOpen] = useState(false)
@@ -82,13 +82,20 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
             key={msg.id}
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <div
-              className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${
-                msg.role === "user"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-foreground"
-              }`}
-            >
+            <div className="max-w-[75%]">
+              {msg.source === "scheduled_task" && (
+                <div className="mb-1 flex items-center gap-1 text-xs text-amber-600">
+                  <Clock className="size-3" />
+                  <span>Scheduled Task</span>
+                </div>
+              )}
+              <div
+                className={`rounded-lg px-3 py-2 text-sm ${
+                  msg.role === "user"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-foreground"
+                } ${msg.source === "scheduled_task" ? "border-l-2 border-amber-500" : ""}`}
+              >
               {msg.blocks && msg.blocks.length > 0 ? (
                 msg.blocks.map((block, i) =>
                   block.type === "text" ? (
@@ -108,6 +115,7 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
               ) : (
                 <span className="whitespace-pre-wrap">{msg.content}</span>
               )}
+              </div>
             </div>
           </div>
         ))}

@@ -41,6 +41,9 @@ function parseMessage(m: ApiMessage): ChatMessage {
           .filter((b: { type: string }) => b.type === "tool_call")
           .map((b: { tool: import("@/lib/types").ToolCallInfo }) => b.tool)
       }
+      if (meta.source === "scheduled_task") {
+        msg.source = "scheduled_task"
+      }
     } catch {
       // metadata is not valid JSON — ignore
     }
