@@ -444,8 +444,6 @@ async def _polling_loop(
                 )
                 await db.commit()
                 await _send_queue_status(ws_mgr, session_id)
-                # Clear tracked source metadata for this session
-                _inflight_source.pop(session_id, None)
 
             # --- Input flush: QUEUED messages + no input.json = write input.json ---
             async with db.execute(
@@ -518,6 +516,12 @@ async def _polling_loop(
                             "Error processing response event for session %s",
                             session_id,
                         )
+
+                # Clear source metadata after response is fully processed
+                if source_meta and any(
+                    e.get("type") == "complete" for e in events
+                ):
+                    _inflight_source.pop(session_id, None)
 
                 # Send one message_updated notification per unique message
                 for row_id in notified:
