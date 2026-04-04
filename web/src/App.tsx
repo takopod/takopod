@@ -3,6 +3,7 @@ import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { ChatInput } from "@/components/chat-input"
 import { ContainersView } from "@/components/containers-view"
+import { SettingsView } from "@/components/settings-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
@@ -153,6 +154,9 @@ export function App() {
             <NavLink to="/queue" match={currentPath === "/queue"}>
               Queue Status
             </NavLink>
+            <NavLink to="/settings" match={currentPath === "/settings"}>
+              Settings
+            </NavLink>
           </div>
           <div className="mt-auto flex flex-col gap-2 px-3 py-4">
             {agents.length > 0 && (
@@ -262,6 +266,7 @@ export function App() {
                 <QueueStatusPanel status={queueStatus} connected={connected} />
               }
             />
+            <Route path="/settings" element={<SettingsView />} />
           </Routes>
         </main>
 

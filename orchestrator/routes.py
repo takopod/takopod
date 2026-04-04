@@ -38,6 +38,7 @@ from orchestrator.models import (
     UpdateAgentRequest,
     UserMessageFrame,
 )
+from orchestrator.settings import get_all_settings, get_setting, set_setting
 from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WS_CLOSE_IDLE_TIMEOUT, WebSocketManager
 
 router = APIRouter(prefix="/api")
@@ -555,6 +556,24 @@ async def get_session(session_id: str):
         session["message_count"] = (await cur.fetchone())[0]
 
     return session
+
+
+# --- Settings API ---
+
+
+@router.get("/settings")
+async def list_settings():
+    return await get_all_settings()
+
+
+@router.put("/settings/{key}")
+async def update_setting(key: str, request: Request):
+    body = await request.json()
+    value = body.get("value")
+    if value is None:
+        raise HTTPException(status_code=400, detail="Missing 'value' field")
+    await set_setting(key, str(value))
+    return {"key": key, "value": str(value)}
 
 
 # --- Message History API ---

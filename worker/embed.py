@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import urllib.request
 import urllib.error
 
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_URL = "http://ollama:11434"
 DEFAULT_MODEL = "nomic-embed-text"
+OLLAMA_ENABLED = os.environ.get("OLLAMA_ENABLED", "true").lower() == "true"
 
 
 def _embed_sync(text: str, model: str) -> list[float]:
@@ -33,6 +35,9 @@ async def embed(
     Retries with exponential backoff on connection failure.
     Raises ConnectionError if Ollama is unreachable after all retries.
     """
+    if not OLLAMA_ENABLED:
+        raise ConnectionError("Ollama is disabled (OLLAMA_ENABLED=false)")
+
     last_err: Exception | None = None
     for attempt in range(max_retries):
         try:

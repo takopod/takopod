@@ -1,6 +1,6 @@
 .PHONY: build install build-worker setup-ollama dev clean clean-all
 
-build: install
+build: install build-worker
 	cd web && npm run build
 
 install:

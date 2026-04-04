@@ -115,6 +115,13 @@ async def spawn_container(
     container_memory = row[1]
     container_cpus = row[2]
 
+    # Read settings for worker env vars
+    async with db.execute(
+        "SELECT value FROM settings WHERE key = 'ollama_enabled'"
+    ) as cur:
+        setting_row = await cur.fetchone()
+    ollama_enabled = setting_row[0] if setting_row else "true"
+
     host_dir.mkdir(parents=True, exist_ok=True)
     await write_agents_json(agent_id, host_dir)
 
@@ -150,6 +157,7 @@ async def spawn_container(
         "-e", "CLAUDE_CODE_USE_VERTEX=1",
         "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
         "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+        "-e", f"OLLAMA_ENABLED={ollama_enabled}",
         IMAGE,
     ]
 
