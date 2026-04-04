@@ -180,6 +180,82 @@ async def spawn_container(
     return record_id, process, host_dir
 
 
+async def spawn_scheduled_container(
+    agent_id: str, task_id: str
+) -> tuple[str, asyncio.subprocess.Process, Path]:
+    """Spawn an ephemeral container for a scheduled task (e.g., memory compaction).
+
+    Similar to spawn_container() but with container_type='scheduled_task',
+    no session_id, Ollama disabled, and a distinct container name to avoid
+    collision with session containers.
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT host_dir, container_memory, container_cpus FROM agents WHERE id = ?",
+        (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise ValueError(f"Agent {agent_id} not found")
+
+    host_dir = Path(row[0])
+    container_memory = row[1]
+    container_cpus = row[2]
+
+    host_dir.mkdir(parents=True, exist_ok=True)
+
+    record_id = str(uuid.uuid4())
+    await db.execute(
+        "INSERT INTO agent_containers "
+        "(id, agent_id, session_id, container_type, status) "
+        "VALUES (?, ?, NULL, 'scheduled_task', 'starting')",
+        (record_id, agent_id),
+    )
+    await db.commit()
+
+    container_name = f"rhclaw-task-{agent_id[:8]}"
+    await _run([PODMAN, "rm", "-f", container_name], check=False)
+
+    cmd = [
+        PODMAN, "run", "--rm",
+        "--name", container_name,
+        "--network", NETWORK,
+        "--label", "rhclaw.managed=true",
+        "--label", f"rhclaw.agent_id={agent_id}",
+        "--label", f"rhclaw.task_id={task_id}",
+        "--memory", container_memory,
+        "--cpus", container_cpus,
+        "--pids-limit", "256",
+        "--tmpfs", "/tmp:rw,size=512m",
+        "--tmpfs", "/var/tmp:rw,size=64m",
+        "-v", f"{host_dir}:/workspace:Z",
+        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
+        "-e", "CLAUDE_CODE_USE_VERTEX=1",
+        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
+        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+        "-e", "OLLAMA_ENABLED=false",
+        IMAGE,
+    ]
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    await db.execute(
+        "UPDATE agent_containers SET status = 'running', pid = ? WHERE id = ?",
+        (process.pid, record_id),
+    )
+    await db.commit()
+    logger.info(
+        "Spawned scheduled task container %s for agent %s task %s (pid=%d)",
+        container_name, agent_id, task_id, process.pid,
+    )
+
+    return record_id, process, host_dir
+
+
 async def stop_container(container_name: str) -> None:
     await _run([PODMAN, "stop", container_name], check=False)
     await _run([PODMAN, "rm", "-f", container_name], check=False)

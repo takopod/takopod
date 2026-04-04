@@ -69,10 +69,20 @@ async def boot_recovery() -> None:
     )
     statuses_reset = cursor.rowcount
 
+    # Step 6: Mark pending/running scheduled tasks as failed
+    cursor = await db.execute(
+        "UPDATE scheduled_tasks SET status = 'failed', "
+        "completed_at = ?, error_message = 'orchestrator restart' "
+        "WHERE status IN ('pending', 'running')",
+        (now,),
+    )
+    tasks_failed = cursor.rowcount
+
     await db.commit()
 
     logger.info(
         "Boot recovery complete: %d containers killed, %d messages re-queued, "
-        "%d IPC files cleaned, %d container statuses reset",
-        killed, requeued, files_cleaned, statuses_reset,
+        "%d IPC files cleaned, %d container statuses reset, "
+        "%d scheduled tasks failed",
+        killed, requeued, files_cleaned, statuses_reset, tasks_failed,
     )

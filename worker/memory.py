@@ -371,23 +371,24 @@ async def run_session_end(
     conn: sqlite3.Connection,
     session_id: str | None,
     sdk_session_id: str | None,
-) -> None:
+) -> str | None:
     """Run session-end memory operations: summarize and write memory file.
 
-    Called on shutdown, clear_context, and context-overflow splits.
-    Triggers memory compaction if the day has too many continuation files.
+    Called on shutdown and clear_context. Returns the date string that needs
+    compaction, or None if no compaction is needed. The caller is responsible
+    for scheduling compaction (e.g., emitting a schedule_compaction event).
     Failures are non-fatal.
     """
     if not session_id:
         sys.stderr.write("memory: no session_id, skipping session-end summary\n")
         sys.stderr.flush()
-        return
+        return None
 
     summary = await summarize_session(conn, session_id)
     if not summary:
         sys.stderr.write("memory: no summary produced, skipping memory write\n")
         sys.stderr.flush()
-        return
+        return None
 
     # Derive session filepath from SDK session ID
     if sdk_session_id:
@@ -400,11 +401,9 @@ async def run_session_end(
     if needs_compaction:
         today = time.strftime("%Y-%m-%d", time.gmtime())
         sys.stderr.write(
-            f"memory: compaction needed for {today}, triggering\n"
+            f"memory: compaction needed for {today}\n"
         )
         sys.stderr.flush()
-        try:
-            await compact_memory_files(conn, today)
-        except Exception as e:
-            sys.stderr.write(f"memory: compaction failed: {e}\n")
-            sys.stderr.flush()
+        return today
+
+    return None

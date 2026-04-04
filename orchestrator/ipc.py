@@ -258,6 +258,12 @@ async def _process_event(
         # Worker finished processing — no DB action needed
         pass
 
+    elif event_type == "schedule_compaction":
+        date = event.get("date")
+        if date:
+            await _schedule_compaction_task(session_id, date)
+        return None
+
     elif event_type == "system_error":
         logger.warning(
             "Worker error for session %s: %s", session_id, event.get("error"),
@@ -268,6 +274,34 @@ async def _process_event(
         return None
 
     return row_id
+
+
+# --- Scheduled task helpers ---
+
+
+async def _schedule_compaction_task(session_id: str, date: str) -> None:
+    """Insert a memory_compaction scheduled task for the agent owning this session."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT agent_id FROM sessions WHERE id = ?", (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        logger.warning("Cannot schedule compaction: session %s not found", session_id)
+        return
+
+    agent_id = row[0]
+    task_id = str(uuid.uuid4())
+    await db.execute(
+        "INSERT INTO scheduled_tasks (id, agent_id, task_type, payload, timeout_seconds) "
+        "VALUES (?, ?, 'memory_compaction', ?, 120)",
+        (task_id, agent_id, json.dumps({"date": date})),
+    )
+    await db.commit()
+    logger.info(
+        "Scheduled memory compaction for agent %s date %s (task %s)",
+        agent_id[:8], date, task_id[:8],
+    )
 
 
 # --- Queue status ---

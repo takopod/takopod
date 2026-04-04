@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from orchestrator.boot_recovery import boot_recovery
 from orchestrator.container_manager import build_image, ensure_network
 from orchestrator.db import connect, disconnect, run_migrations
 from orchestrator.ollama import check_ollama_status
-from orchestrator.routes import _reap_idle_workers, router
+from orchestrator.routes import router
+from orchestrator.scheduler import run_scheduler
 from orchestrator.settings import get_setting
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -35,9 +37,18 @@ async def lifespan(app: FastAPI):
     await ensure_network()
     await build_image()
 
-    reaper_task = asyncio.create_task(_reap_idle_workers(), name="idle-reaper")
+    scheduler_task = asyncio.create_task(run_scheduler(), name="scheduler")
     yield
-    reaper_task.cancel()
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
+
+    from orchestrator.routes import graceful_shutdown
+    shutdown_timeout = int(os.environ.get("SHUTDOWN_TIMEOUT_SECONDS", "30"))
+    await graceful_shutdown(timeout=shutdown_timeout)
+
     await disconnect()
 
 

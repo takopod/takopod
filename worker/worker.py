@@ -115,7 +115,6 @@ async def _split_session(conn) -> None:
 
     try:
         from worker.memory import (
-            compact_memory_files,
             summarize_session,
             write_memory_file,
         )
@@ -134,11 +133,9 @@ async def _split_session(conn) -> None:
 
             if needs_compaction:
                 today = time.strftime("%Y-%m-%d", time.gmtime())
-                try:
-                    await compact_memory_files(conn, today)
-                except Exception as e:
-                    sys.stderr.write(f"worker: compaction failed: {e}\n")
-                    sys.stderr.flush()
+                emit({"type": "schedule_compaction", "date": today, "message_id": ""})
+                sys.stderr.write(f"worker: scheduled compaction for {today}\n")
+                sys.stderr.flush()
 
         # Reset SDK session — next query creates a fresh one
         _session_id = None
@@ -148,6 +145,26 @@ async def _split_session(conn) -> None:
     except Exception as e:
         sys.stderr.write(f"worker: session split failed: {e}\n")
         sys.stderr.flush()
+
+
+async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
+    """Execute a scheduled task inside an ephemeral container."""
+    task_type = msg.get("task_type", "")
+    payload = msg.get("payload", {})
+    task_id = msg.get("task_id", "")
+
+    sys.stderr.write(f"worker: handling scheduled task {task_id[:8]} type={task_type}\n")
+    sys.stderr.flush()
+
+    if task_type == "memory_compaction":
+        from worker.memory import compact_memory_files
+        date = payload.get("date")
+        if not date:
+            return {"error": "missing date in payload"}
+        result_path = await compact_memory_files(conn, date)
+        return {"compacted_path": result_path}
+
+    return {"error": f"unknown task type: {task_type}"}
 
 
 async def process_message(msg: dict[str, Any], conn) -> None:
@@ -160,7 +177,9 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             # Summarize the current session before clearing
             try:
                 from worker.memory import run_session_end
-                await run_session_end(conn, _orch_session_id, _session_id)
+                compaction_date = await run_session_end(conn, _orch_session_id, _session_id)
+                if compaction_date:
+                    emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
             except Exception as e:
                 sys.stderr.write(f"worker: session-end summary failed: {e}\n")
                 sys.stderr.flush()
@@ -171,7 +190,9 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             sys.stderr.flush()
             try:
                 from worker.memory import run_session_end
-                await run_session_end(conn, _orch_session_id, _session_id)
+                compaction_date = await run_session_end(conn, _orch_session_id, _session_id)
+                if compaction_date:
+                    emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
             except Exception as e:
                 sys.stderr.write(f"worker: session-end summary failed: {e}\n")
                 sys.stderr.flush()
@@ -179,6 +200,18 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             flush_responses()
             sys.exit(0)
         return
+
+    if msg_type == "scheduled_task":
+        result = await _handle_scheduled_task(conn, msg)
+        emit({
+            "type": "task_result",
+            "task_id": msg.get("task_id", ""),
+            "status": "completed",
+            "result": result,
+            "message_id": "",
+        })
+        flush_responses()
+        sys.exit(0)
 
     if msg_type != "user_message":
         sys.stderr.write(f"worker: unknown message type: {msg_type}\n")
@@ -294,6 +327,7 @@ async def main() -> None:
     if RESPONSE_PATH.exists():
         os.remove(RESPONSE_PATH)
     conn.execute("UPDATE worker_responses SET status = 'sent' WHERE status = 'pending'")
+    conn.execute("DELETE FROM processed_messages")
     conn.commit()
 
     # Ollama smoke test — non-fatal, workers function without embeddings

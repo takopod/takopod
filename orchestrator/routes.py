@@ -39,14 +39,13 @@ from orchestrator.models import (
     UserMessageFrame,
 )
 from orchestrator.settings import get_all_settings, get_setting, set_setting
-from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WS_CLOSE_IDLE_TIMEOUT, WebSocketManager
+from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WebSocketManager
 
 router = APIRouter(prefix="/api")
 
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 10
 QUEUE_DEPTH_MAX = 50
-IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))  # 5 minutes
 CIRCUIT_BREAKER_WINDOW = 600  # 10 minutes
 CIRCUIT_BREAKER_MAX_CRASHES = 3
 
@@ -881,121 +880,70 @@ async def _monitor_worker(agent_id: str) -> None:
     await _respawn_worker(agent_id)
 
 
-async def _reap_idle_workers() -> None:
-    """Background task: gracefully shut down worker containers idle longer than
-    IDLE_TIMEOUT_SECONDS.
+def get_active_workers() -> dict[str, WorkerState]:
+    """Expose active workers for scheduler and shutdown coordination."""
+    return _active_workers
 
-    Flow per container: send shutdown command via input.json → wait up to 60s
-    for clean exit → force-kill on timeout. Specific failure reasons are
-    propagated to the WebSocket client so the user knows exactly what happened.
+
+async def graceful_shutdown(timeout: int = 30) -> None:
+    """Gracefully shut down all active workers before orchestrator exit.
+
+    1. Send shutdown command to every active worker via input.json.
+    2. Wait up to `timeout` seconds for all processes to exit.
+    3. Force-kill any remaining containers.
+    4. Update DB state and clean up in-memory tracking.
     """
-    while True:
-        await asyncio.sleep(30)
+    if not _active_workers:
+        return
+
+    logger.info("Graceful shutdown: %d active workers", len(_active_workers))
+
+    workers = list(_active_workers.items())
+
+    # Send shutdown command to all workers
+    for agent_id, worker in workers:
+        worker.shutting_down = True
         try:
-            db = await get_db()
-            cutoff = time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ",
-                time.gmtime(time.time() - IDLE_TIMEOUT_SECONDS),
-            )
-            async with db.execute(
-                "SELECT id, agent_id, session_id FROM agent_containers "
-                "WHERE status = 'idle' AND last_activity < ?",
-                (cutoff,),
-            ) as cur:
-                rows = await cur.fetchall()
-
-            for record_id, agent_id, session_id in rows:
-                container_name = f"rhclaw-{agent_id[:8]}"
-                worker = _active_workers.get(agent_id)
-                reason = "Session ended due to inactivity"
-                graceful = False
-
-                if worker:
-                    worker.shutting_down = True
-
-                    # Try graceful shutdown via input.json
-                    try:
-                        input_path = worker.host_dir / "input.json"
-                        shutdown_payload = json.dumps(
-                            [{"type": "system_command", "command": "shutdown"}]
-                        )
-                        atomic_write(input_path, shutdown_payload.encode())
-
-                        logger.info(
-                            "Sending shutdown to idle worker %s for agent %s",
-                            container_name, agent_id,
-                        )
-
-                        await db.execute(
-                            "UPDATE agent_containers SET status = 'stopping' WHERE id = ?",
-                            (record_id,),
-                        )
-                        await db.commit()
-
-                        # Wait for worker to exit cleanly
-                        try:
-                            await asyncio.wait_for(worker.process.wait(), timeout=60)
-                            graceful = True
-                            logger.info("Worker %s exited gracefully", container_name)
-                        except asyncio.TimeoutError:
-                            reason = "Session ended — worker did not respond to shutdown, container was force-stopped"
-                            logger.warning(
-                                "Worker %s did not exit in 60s, force-killing",
-                                container_name,
-                            )
-                            await kill_container(container_name)
-                    except Exception:
-                        reason = "Session ended — cleanup error, container was force-stopped"
-                        logger.exception(
-                            "Failed to send shutdown to worker %s, force-killing",
-                            container_name,
-                        )
-                        await kill_container(container_name)
-                else:
-                    # No in-memory worker (e.g. orchestrator restarted) — hard kill
-                    logger.info(
-                        "Reaping idle container %s (no in-memory state)", container_name,
-                    )
-                    await kill_container(container_name)
-
-                # Finalize DB state
-                now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                await db.execute(
-                    "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
-                    "WHERE id = ?",
-                    (now, record_id),
-                )
-                await db.execute(
-                    "UPDATE sessions SET status = 'idle_timeout', ended_at = ? "
-                    "WHERE id = ? AND ended_at IS NULL",
-                    (now, session_id),
-                )
-                await db.commit()
-
-                # Notify WebSocket client if still connected
-                if worker and worker.ws_manager.connected:
-                    try:
-                        await worker.ws_manager.send(
-                            SystemErrorFrame(error=reason, fatal=True).model_dump_json()
-                        )
-                    except Exception:
-                        pass
-                    await worker.ws_manager.close(
-                        WS_CLOSE_IDLE_TIMEOUT, "Idle timeout",
-                    )
-
-                # Clean up in-memory state
-                w = _active_workers.pop(agent_id, None)
-                if w:
-                    if w.polling_task:
-                        w.polling_task.cancel()
-                    if w.monitor_task:
-                        w.monitor_task.cancel()
-
-        except asyncio.CancelledError:
-            raise
+            input_path = worker.host_dir / "input.json"
+            payload = json.dumps([{"type": "system_command", "command": "shutdown"}])
+            atomic_write(input_path, payload.encode())
         except Exception:
-            logger.exception("Idle reaper error")
+            logger.exception("Failed to send shutdown to agent %s", agent_id)
+
+    # Wait for all processes to exit
+    processes = [w.process.wait() for _, w in workers]
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*processes, return_exceptions=True),
+            timeout=timeout,
+        )
+        logger.info("All workers exited gracefully")
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Shutdown timeout (%ds), force-killing remaining workers", timeout,
+        )
+        for agent_id, worker in workers:
+            if worker.process.returncode is None:
+                container_name = f"rhclaw-{agent_id[:8]}"
+                await kill_container(container_name)
+
+    # Finalize DB state and clean up
+    db = await get_db()
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for agent_id, worker in workers:
+        await db.execute(
+            "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
+            "WHERE id = ?",
+            (now, worker.container_record_id),
+        )
+        if worker.polling_task:
+            worker.polling_task.cancel()
+        if worker.monitor_task:
+            worker.monitor_task.cancel()
+    await db.commit()
+
+    _active_workers.clear()
+    logger.info("Graceful shutdown complete")
 
 
 @router.websocket("/ws")
