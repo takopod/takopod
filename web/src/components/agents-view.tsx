@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { FileBrowser } from "@/components/file-browser"
 import type { Agent } from "@/lib/types"
-import { ArrowLeft, Plus, Square, Trash2, X } from "lucide-react"
+import { ArrowLeft, Pencil, Plus, Square, Trash2, X } from "lucide-react"
 
 interface AgentDetail extends Agent {
   claude_md: string
@@ -43,6 +43,10 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
   const [newEnvVars, setNewEnvVars] = useState("")
   const [saving, setSaving] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [editCommand, setEditCommand] = useState("")
+  const [editArgs, setEditArgs] = useState("")
+  const [editEnvVars, setEditEnvVars] = useState("")
 
   const handleStop = async () => {
     setStopping(true)
@@ -125,6 +129,52 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
     }
   }
 
+  const startEdit = (name: string, srv: McpServerConfig) => {
+    setEditing(name)
+    setEditCommand(srv.command)
+    setEditArgs(srv.args.join("\n"))
+    setEditEnvVars(
+      srv.env
+        ? Object.entries(srv.env)
+            .map(([k, v]) => `${k}=${v}`)
+            .join("\n")
+        : "",
+    )
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editing || !editCommand.trim()) return
+    setSaving(true)
+    const args = editArgs.trim()
+      ? editArgs.split("\n").map((a) => a.trim()).filter(Boolean)
+      : []
+    const env: Record<string, string> = {}
+    for (const line of editEnvVars.split("\n")) {
+      const eq = line.indexOf("=")
+      if (eq > 0) {
+        env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+      }
+    }
+    const server: McpServerConfig = { command: editCommand.trim(), args }
+    if (Object.keys(env).length > 0) server.env = env
+    const updated: McpConfig = {
+      mcpServers: {
+        ...config.mcpServers,
+        [editing]: server,
+      },
+    }
+    const res = await fetch(`/api/agents/${agentId}/mcp`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated),
+    })
+    if (res.ok) {
+      setConfig(await res.json())
+      setEditing(null)
+    }
+    setSaving(false)
+  }
+
   const servers = Object.entries(config.mcpServers)
 
   return (
@@ -166,31 +216,102 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
               </p>
             )}
 
-            {servers.map(([name, srv]) => (
-              <div
-                key={name}
-                className="flex items-start justify-between rounded-md border px-4 py-3"
-              >
-                <div className="flex flex-col gap-1">
-                  <span className="text-sm font-medium">{name}</span>
-                  <code className="text-xs text-muted-foreground">
-                    {srv.command} {srv.args.join(" ")}
-                  </code>
-                  {srv.env && Object.keys(srv.env).length > 0 && (
-                    <span className="text-xs text-muted-foreground">
-                      env: {Object.keys(srv.env).join(", ")}
-                    </span>
-                  )}
+            {servers.map(([name, srv]) =>
+              editing === name ? (
+                <div key={name} className="rounded-md border p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="text-sm font-medium">{name}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setEditing(null)}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Command</Label>
+                      <Input
+                        value={editCommand}
+                        onChange={(e) => setEditCommand(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Arguments (one per line)</Label>
+                      <Textarea
+                        value={editArgs}
+                        onChange={(e) => setEditArgs(e.target.value)}
+                        className="min-h-20 resize-none font-mono text-xs"
+                        spellCheck={false}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">
+                        Environment Variables (KEY=VALUE, one per line)
+                      </Label>
+                      <Textarea
+                        value={editEnvVars}
+                        onChange={(e) => setEditEnvVars(e.target.value)}
+                        placeholder={"GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."}
+                        className="min-h-16 resize-none font-mono text-xs"
+                        spellCheck={false}
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEditing(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveEdit}
+                        disabled={!editCommand.trim() || saving}
+                      >
+                        {saving ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => handleRemove(name)}
+              ) : (
+                <div
+                  key={name}
+                  className="flex items-start justify-between rounded-md border px-4 py-3"
                 >
-                  <Trash2 className="size-3.5 text-destructive" />
-                </Button>
-              </div>
-            ))}
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm font-medium">{name}</span>
+                    <code className="text-xs text-muted-foreground">
+                      {srv.command} {srv.args.join(" ")}
+                    </code>
+                    {srv.env && Object.keys(srv.env).length > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        env: {Object.keys(srv.env).join(", ")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => startEdit(name, srv)}
+                    >
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleRemove(name)}
+                    >
+                      <Trash2 className="size-3.5 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+              ),
+            )}
 
             {showAdd && (
               <div className="rounded-md border p-4">
