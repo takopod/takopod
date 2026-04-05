@@ -15,9 +15,6 @@ RUN apt-get update && \
 # Install Claude Code CLI (Agent SDK spawns it as a subprocess)
 RUN npm install -g @anthropic-ai/claude-code
 
-# Pre-install common MCP servers to avoid npx download delays at runtime
-RUN npm install -g @modelcontextprotocol/server-filesystem
-
 # Install Python Agent SDK
 RUN pip install --no-cache-dir claude-agent-sdk sqlite-vec
 

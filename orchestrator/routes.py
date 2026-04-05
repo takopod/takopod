@@ -17,6 +17,7 @@ from orchestrator.container_manager import (
     kill_container,
     spawn_container,
 )
+from orchestrator.mcp_manager import McpServerManager
 from orchestrator.db import get_db
 from orchestrator.ipc import (
     atomic_write,
@@ -79,6 +80,7 @@ class WorkerState:
     ws_manager: WebSocketManager
     polling_task: asyncio.Task | None = None
     monitor_task: asyncio.Task | None = None
+    mcp_manager: McpServerManager | None = None
     crash_times: deque = dataclasses.field(default_factory=deque)
     shutting_down: bool = False
 
@@ -86,6 +88,37 @@ class WorkerState:
 # Keyed by agent_id — one worker per agent
 _active_workers: dict[str, WorkerState] = {}
 _workers_lock = asyncio.Lock()
+
+
+async def _start_mcp_manager(host_dir: Path) -> McpServerManager | None:
+    """Start host-side MCP servers if configured, write tool schemas to workspace."""
+    config_path = host_dir / "config" / ".mcp.json"
+    if not config_path.is_file():
+        # Fallback: check legacy location
+        legacy_path = host_dir / ".mcp.json"
+        if legacy_path.is_file():
+            config_path = legacy_path
+        else:
+            return None
+
+    try:
+        mcp_config = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    if not mcp_config.get("mcpServers"):
+        return None
+
+    manager = McpServerManager()
+    await manager.start(mcp_config)
+
+    schemas = manager.get_tool_schemas()
+    if schemas:
+        tools_path = host_dir / "mcp_tools.json"
+        tools_path.write_text(json.dumps(schemas, indent=2))
+        logger.info("Wrote %d MCP tool schemas to %s", len(schemas), tools_path)
+
+    return manager
 
 
 # --- Agent Templates ---
@@ -233,6 +266,8 @@ async def delete_agent(agent_id: str):
     if worker:
         await _cancel_task(old_polling)
         await _cancel_task(old_monitor)
+        if worker.mcp_manager:
+            await worker.mcp_manager.stop()
         container_name = f"rhclaw-{agent_id[:8]}"
         await kill_container(container_name)
 
@@ -363,7 +398,7 @@ VALID_BUILTIN_TOOLS = {
 @router.get("/agents/{agent_id}/mcp")
 async def get_mcp_config(agent_id: str):
     host_dir, _ = await _resolve_agent_path(agent_id)
-    mcp_path = host_dir / ".mcp.json"
+    mcp_path = host_dir / "config" / ".mcp.json"
     if not mcp_path.is_file():
         return {"mcpServers": {}}
     return json.loads(mcp_path.read_text())
@@ -372,7 +407,8 @@ async def get_mcp_config(agent_id: str):
 @router.put("/agents/{agent_id}/mcp")
 async def put_mcp_config(agent_id: str, req: McpConfigRequest):
     host_dir, _ = await _resolve_agent_path(agent_id)
-    mcp_path = host_dir / ".mcp.json"
+    mcp_path = host_dir / "config" / ".mcp.json"
+    mcp_path.parent.mkdir(exist_ok=True)
     data = req.model_dump(exclude_defaults=True)
     # Always include the top-level key
     data.setdefault("mcpServers", {})
@@ -383,7 +419,7 @@ async def put_mcp_config(agent_id: str, req: McpConfigRequest):
 @router.delete("/agents/{agent_id}/mcp/servers/{server_name}")
 async def delete_mcp_server(agent_id: str, server_name: str):
     host_dir, _ = await _resolve_agent_path(agent_id)
-    mcp_path = host_dir / ".mcp.json"
+    mcp_path = host_dir / "config" / ".mcp.json"
     if not mcp_path.is_file():
         raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
     config = json.loads(mcp_path.read_text())
@@ -511,6 +547,8 @@ async def delete_container(container_id: str):
     if worker:
         await _cancel_task(old_polling)
         await _cancel_task(old_monitor)
+        if worker.mcp_manager:
+            await worker.mcp_manager.stop()
 
     return {"status": "ok", "container_id": container_id}
 
@@ -719,6 +757,8 @@ async def kill_session(session_id: str):
     if w:
         await _cancel_task(old_polling)
         await _cancel_task(old_monitor)
+        if w.mcp_manager:
+            await w.mcp_manager.stop()
 
     return {"status": "ok", "session_id": session_id, "graceful": graceful}
 
@@ -980,6 +1020,7 @@ async def _ensure_worker(
                 worker.ws_manager.attach(ws, session_id)
                 worker.polling_task = start_polling_loop(
                     session_id, worker.host_dir, worker.ws_manager,
+                    worker.mcp_manager,
                 )
                 worker.monitor_task = asyncio.create_task(
                     _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
@@ -998,6 +1039,7 @@ async def _ensure_worker(
 
     # Spawn new container (no lock needed during spawn — it's a long operation)
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
+    mcp_mgr = await _start_mcp_manager(host_dir)
     ws_mgr = WebSocketManager(session_id)
     ws_mgr.attach(ws, session_id)
 
@@ -1008,7 +1050,8 @@ async def _ensure_worker(
             host_dir=host_dir,
             session_id=session_id,
             ws_manager=ws_mgr,
-            polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
+            mcp_manager=mcp_mgr,
+            polling_task=start_polling_loop(session_id, host_dir, ws_mgr, mcp_mgr),
         )
         _active_workers[agent_id] = worker
         worker.monitor_task = asyncio.create_task(
@@ -1064,6 +1107,7 @@ async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
             return
 
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
+    mcp_mgr = await _start_mcp_manager(host_dir)
     ws_mgr = WebSocketManager(session_id)
 
     async with _workers_lock:
@@ -1073,7 +1117,8 @@ async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
             host_dir=host_dir,
             session_id=session_id,
             ws_manager=ws_mgr,
-            polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
+            mcp_manager=mcp_mgr,
+            polling_task=start_polling_loop(session_id, host_dir, ws_mgr, mcp_mgr),
         )
         _active_workers[agent_id] = worker
         worker.monitor_task = asyncio.create_task(
@@ -1103,6 +1148,11 @@ async def _respawn_worker(agent_id: str) -> None:
         record_id, process, host_dir = await spawn_container(
             agent_id, worker.session_id,
         )
+        # Restart MCP servers on the host
+        if worker.mcp_manager:
+            await worker.mcp_manager.stop()
+        mcp_mgr = await _start_mcp_manager(host_dir)
+
         # Re-queue any IN-FLIGHT messages so the new worker picks them up
         db = await get_db()
         await db.execute(
@@ -1118,12 +1168,15 @@ async def _respawn_worker(agent_id: str) -> None:
                 # Worker was replaced/removed — kill the container we just spawned
                 container_name = f"rhclaw-{agent_id[:8]}"
                 await kill_container(container_name)
+                if mcp_mgr:
+                    await mcp_mgr.stop()
                 return
             worker.container_record_id = record_id
             worker.process = process
             worker.host_dir = host_dir
+            worker.mcp_manager = mcp_mgr
             worker.polling_task = start_polling_loop(
-                worker.session_id, host_dir, worker.ws_manager,
+                worker.session_id, host_dir, worker.ws_manager, mcp_mgr,
             )
             worker.monitor_task = asyncio.create_task(
                 _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
@@ -1284,10 +1337,12 @@ async def graceful_shutdown(timeout: int = 30) -> None:
                 container_name = f"rhclaw-{agent_id[:8]}"
                 await kill_container(container_name)
 
-    # Cancel tasks and await completion, then finalize DB state
+    # Cancel tasks, stop MCP servers, and finalize DB state
     for _, worker in workers:
         await _cancel_task(worker.polling_task)
         await _cancel_task(worker.monitor_task)
+        if worker.mcp_manager:
+            await worker.mcp_manager.stop()
 
     db = await get_db()
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

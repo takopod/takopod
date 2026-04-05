@@ -14,6 +14,7 @@ from orchestrator.db import get_db
 from orchestrator.models import QueueStatusFrame
 
 if typing.TYPE_CHECKING:
+    from orchestrator.mcp_manager import McpServerManager
     from orchestrator.ws_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
@@ -346,7 +347,11 @@ async def _process_event(
 # --- Scheduled task helpers ---
 
 
-async def _handle_tool_request(session_id: str, request: dict) -> dict:
+async def _handle_tool_request(
+    session_id: str,
+    request: dict,
+    mcp_manager: McpServerManager | None = None,
+) -> dict:
     """Dispatch a tool execution request from the worker and return the result."""
     request_id = request.get("request_id", "")
     action = request.get("action", "")
@@ -493,6 +498,33 @@ async def _handle_tool_request(session_id: str, request: dict) -> dict:
                 return {"request_id": request_id, "status": "error", "error": "Schedule not found or not paused"}
             return {"request_id": request_id, "status": "ok", "data": {"task_id": task_id, "status": "active"}}
 
+        elif action == "mcp_call":
+            tool_name = params.get("tool_name", "")
+            server_name = params.get("server_name", "")
+            arguments = params.get("arguments", {})
+
+            if not mcp_manager:
+                return {
+                    "request_id": request_id,
+                    "status": "error",
+                    "error": "No MCP servers configured for this session",
+                }
+
+            try:
+                result = await mcp_manager.call_tool(tool_name, arguments)
+                return {
+                    "request_id": request_id,
+                    "status": "ok",
+                    "data": result,
+                }
+            except Exception as e:
+                logger.exception("MCP tool call failed: %s/%s", server_name, tool_name)
+                return {
+                    "request_id": request_id,
+                    "status": "error",
+                    "error": f"MCP tool {server_name}/{tool_name} failed: {e}",
+                }
+
         else:
             return {"request_id": request_id, "status": "error", "error": f"Unknown action: {action}"}
 
@@ -539,7 +571,10 @@ async def _send_queue_status(ws_mgr: WebSocketManager, session_id: str) -> None:
 
 
 async def _polling_loop(
-    session_id: str, host_dir: Path, ws_mgr: WebSocketManager
+    session_id: str,
+    host_dir: Path,
+    ws_mgr: WebSocketManager,
+    mcp_manager: McpServerManager | None = None,
 ) -> None:
     input_path = host_dir / "input.json"
     output_path = host_dir / "output.json"
@@ -625,7 +660,9 @@ async def _polling_loop(
                     request = None
 
                 if request:
-                    result = await _handle_tool_request(session_id, request)
+                    result = await _handle_tool_request(
+                        session_id, request, mcp_manager,
+                    )
                     atomic_write(
                         response_path,
                         json.dumps(result).encode(),
@@ -683,9 +720,12 @@ async def _polling_loop(
 
 
 def start_polling_loop(
-    session_id: str, host_dir: Path, ws_mgr: WebSocketManager
+    session_id: str,
+    host_dir: Path,
+    ws_mgr: WebSocketManager,
+    mcp_manager: McpServerManager | None = None,
 ) -> asyncio.Task:
     return asyncio.create_task(
-        _polling_loop(session_id, host_dir, ws_mgr),
+        _polling_loop(session_id, host_dir, ws_mgr, mcp_manager),
         name=f"poll-{session_id[:8]}",
     )

@@ -19,7 +19,11 @@ from claude_agent_sdk import (
     query,
 )
 
-from worker.tools import TOOL_NAMES as SCHEDULE_TOOL_NAMES, create_schedule_server
+from worker.tools import (
+    TOOL_NAMES as SCHEDULE_TOOL_NAMES,
+    create_mcp_proxy_server,
+    create_schedule_server,
+)
 
 WORKSPACE = Path("/workspace")
 MAX_TURNS = 25
@@ -151,15 +155,20 @@ async def run_query(
         return {}
 
     schedule_server = create_schedule_server()
+    mcp_proxy_server, mcp_proxy_tool_names = create_mcp_proxy_server()
     builtin_tools, permission_mode = _load_tool_config()
+
+    mcp_servers: dict[str, Any] = {"schedule": schedule_server}
+    if mcp_proxy_server:
+        mcp_servers["proxy"] = mcp_proxy_server
 
     opts_kwargs: dict[str, Any] = {
         "cwd": str(WORKSPACE),
-        "allowed_tools": [*builtin_tools, *SCHEDULE_TOOL_NAMES],
+        "allowed_tools": [*builtin_tools, *SCHEDULE_TOOL_NAMES, *mcp_proxy_tool_names],
         "permission_mode": permission_mode,
         "system_prompt": system_prompt,
         "max_turns": MAX_TURNS,
-        "mcp_servers": {"schedule": schedule_server},
+        "mcp_servers": mcp_servers,
         "hooks": {
             "PreToolUse": [HookMatcher(matcher=".*", hooks=[on_pre_tool])],
             "PostToolUse": [HookMatcher(matcher=".*", hooks=[on_post_tool])],

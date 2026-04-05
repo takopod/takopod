@@ -93,6 +93,7 @@ class McpServerConfig(BaseModel):
     command: str
     args: list[str] = []
     env: dict[str, str] = {}
+    timeout: float = 30.0
 
 
 class McpConfigRequest(BaseModel):

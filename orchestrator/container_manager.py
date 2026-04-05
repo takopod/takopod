@@ -64,6 +64,7 @@ def create_agent_workspace(
     host_dir.mkdir(parents=True, exist_ok=True)
     (host_dir / "sessions").mkdir(exist_ok=True)
     (host_dir / "memory").mkdir(exist_ok=True)
+    (host_dir / "config").mkdir(exist_ok=True)
 
     template_dir = TEMPLATES_DIR / agent_type
     if not template_dir.is_dir():
@@ -84,8 +85,8 @@ def create_agent_workspace(
         elif (template_dir / filename).is_file():
             shutil.copy2(template_dir / filename, target)
 
-    # MCP server configuration
-    mcp_path = host_dir / ".mcp.json"
+    # MCP server configuration (stored in config/, not mounted into container)
+    mcp_path = host_dir / "config" / ".mcp.json"
     if mcp_config:
         mcp_path.write_text(json.dumps(mcp_config, indent=2))
     elif (template_dir / ".mcp.json").is_file():
