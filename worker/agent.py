@@ -24,6 +24,25 @@ from worker.tools import TOOL_NAMES as SCHEDULE_TOOL_NAMES, create_schedule_serv
 WORKSPACE = Path("/workspace")
 MAX_TURNS = 25
 
+DEFAULT_BUILTIN_TOOLS = [
+    "Read", "Write", "Edit", "Bash",
+    "Glob", "Grep", "WebSearch", "WebFetch",
+]
+
+
+def _load_tool_config() -> tuple[list[str], str]:
+    """Load per-agent tool configuration from /workspace/tools.json."""
+    config_path = WORKSPACE / "tools.json"
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text())
+            builtin = config.get("builtin", DEFAULT_BUILTIN_TOOLS)
+            permission_mode = config.get("permission_mode", "acceptEdits")
+            return builtin, permission_mode
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return list(DEFAULT_BUILTIN_TOOLS), "acceptEdits"
+
 Emit = Callable[[dict[str, Any]], None]
 
 
@@ -132,15 +151,12 @@ async def run_query(
         return {}
 
     schedule_server = create_schedule_server()
+    builtin_tools, permission_mode = _load_tool_config()
 
     opts_kwargs: dict[str, Any] = {
         "cwd": str(WORKSPACE),
-        "allowed_tools": [
-            "Read", "Write", "Edit", "Bash",
-            "Glob", "Grep", "WebSearch", "WebFetch",
-            *SCHEDULE_TOOL_NAMES,
-        ],
-        "permission_mode": "acceptEdits",
+        "allowed_tools": [*builtin_tools, *SCHEDULE_TOOL_NAMES],
+        "permission_mode": permission_mode,
         "system_prompt": system_prompt,
         "max_turns": MAX_TURNS,
         "mcp_servers": {"schedule": schedule_server},

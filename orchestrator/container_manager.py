@@ -58,6 +58,7 @@ def create_agent_workspace(
     claude_md: str | None = None,
     soul_md: str | None = None,
     memory_md: str | None = None,
+    mcp_config: dict | None = None,
 ) -> Path:
     host_dir = (AGENTS_DIR / agent_id).resolve()
     host_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +83,13 @@ def create_agent_workspace(
             target.write_text(content)
         elif (template_dir / filename).is_file():
             shutil.copy2(template_dir / filename, target)
+
+    # MCP server configuration
+    mcp_path = host_dir / ".mcp.json"
+    if mcp_config:
+        mcp_path.write_text(json.dumps(mcp_config, indent=2))
+    elif (template_dir / ".mcp.json").is_file():
+        shutil.copy2(template_dir / ".mcp.json", mcp_path)
 
     return host_dir
 

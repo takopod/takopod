@@ -89,6 +89,21 @@ class ContainerResponse(BaseModel):
     pid: int | None = None
 
 
+class McpServerConfig(BaseModel):
+    command: str
+    args: list[str] = []
+    env: dict[str, str] = {}
+
+
+class McpConfigRequest(BaseModel):
+    mcpServers: dict[str, McpServerConfig]
+
+
+class ToolConfigRequest(BaseModel):
+    builtin: list[str]
+    permission_mode: str = "acceptEdits"
+
+
 class ScheduleResponse(BaseModel):
     id: str
     agent_id: str

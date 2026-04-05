@@ -32,10 +32,12 @@ from orchestrator.models import (
     CreateAgentRequest,
     ErrorFrame,
     FileEntry,
+    McpConfigRequest,
     QueueStatusFrame,
     ScheduleResponse,
     SystemCommandFrame,
     SystemErrorFrame,
+    ToolConfigRequest,
     UpdateAgentRequest,
     UserMessageFrame,
 )
@@ -348,6 +350,77 @@ async def delete_agent_file(agent_id: str, file_path: str):
 
     resolved.unlink()
     return {"status": "ok", "path": file_path}
+
+
+# --- MCP Config API ---
+
+VALID_BUILTIN_TOOLS = {
+    "Read", "Write", "Edit", "Bash",
+    "Glob", "Grep", "WebSearch", "WebFetch",
+}
+
+
+@router.get("/agents/{agent_id}/mcp")
+async def get_mcp_config(agent_id: str):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    mcp_path = host_dir / ".mcp.json"
+    if not mcp_path.is_file():
+        return {"mcpServers": {}}
+    return json.loads(mcp_path.read_text())
+
+
+@router.put("/agents/{agent_id}/mcp")
+async def put_mcp_config(agent_id: str, req: McpConfigRequest):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    mcp_path = host_dir / ".mcp.json"
+    data = req.model_dump(exclude_defaults=True)
+    # Always include the top-level key
+    data.setdefault("mcpServers", {})
+    mcp_path.write_text(json.dumps(data, indent=2))
+    return data
+
+
+@router.delete("/agents/{agent_id}/mcp/servers/{server_name}")
+async def delete_mcp_server(agent_id: str, server_name: str):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    mcp_path = host_dir / ".mcp.json"
+    if not mcp_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+    config = json.loads(mcp_path.read_text())
+    servers = config.get("mcpServers", {})
+    if server_name not in servers:
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+    del servers[server_name]
+    mcp_path.write_text(json.dumps(config, indent=2))
+    return {"status": "ok", "removed": server_name}
+
+
+# --- Per-Agent Tool Config API ---
+
+
+@router.get("/agents/{agent_id}/tools")
+async def get_tool_config(agent_id: str):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    tools_path = host_dir / "tools.json"
+    if not tools_path.is_file():
+        return {"builtin": sorted(VALID_BUILTIN_TOOLS), "permission_mode": "acceptEdits"}
+    return json.loads(tools_path.read_text())
+
+
+@router.put("/agents/{agent_id}/tools")
+async def put_tool_config(agent_id: str, req: ToolConfigRequest):
+    invalid = set(req.builtin) - VALID_BUILTIN_TOOLS
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown tools: {', '.join(sorted(invalid))}. "
+            f"Valid tools: {', '.join(sorted(VALID_BUILTIN_TOOLS))}",
+        )
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    tools_path = host_dir / "tools.json"
+    data = req.model_dump()
+    tools_path.write_text(json.dumps(data, indent=2))
+    return data
 
 
 # --- Containers API ---
