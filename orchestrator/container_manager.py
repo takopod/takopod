@@ -14,6 +14,7 @@ PODMAN = "/opt/podman/bin/podman"
 NETWORK = "rhclaw-internal"
 IMAGE = "rhclaw-worker"
 AGENTS_DIR = Path("data/agents")
+MCP_CONFIGS_DIR = Path("data/mcp-configs")
 TEMPLATES_DIR = Path("agent_templates")
 
 
@@ -85,8 +86,9 @@ def create_agent_workspace(
         elif (template_dir / filename).is_file():
             shutil.copy2(template_dir / filename, target)
 
-    # MCP server configuration (stored in config/, not mounted into container)
-    mcp_path = host_dir / "config" / ".mcp.json"
+    # MCP server configuration (stored outside workspace so containers can't read secrets)
+    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
+    MCP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
     if mcp_config:
         mcp_path.write_text(json.dumps(mcp_config, indent=2))
     elif (template_dir / ".mcp.json").is_file():

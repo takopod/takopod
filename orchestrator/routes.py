@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from pydantic import ValidationError
 
 from orchestrator.container_manager import (
+    MCP_CONFIGS_DIR,
     create_agent_workspace,
     kill_container,
     spawn_container,
@@ -90,14 +91,15 @@ _active_workers: dict[str, WorkerState] = {}
 _workers_lock = asyncio.Lock()
 
 
-async def _start_mcp_manager(host_dir: Path) -> McpServerManager | None:
+async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager | None:
     """Start host-side MCP servers if configured, write tool schemas to workspace."""
-    config_path = host_dir / "config" / ".mcp.json"
+    config_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
     if not config_path.is_file():
-        # Fallback: check legacy location
-        legacy_path = host_dir / ".mcp.json"
-        if legacy_path.is_file():
-            config_path = legacy_path
+        # Fallback: check legacy locations
+        for legacy in (host_dir / "config" / ".mcp.json", host_dir / ".mcp.json"):
+            if legacy.is_file():
+                config_path = legacy
+                break
         else:
             return None
 
@@ -397,8 +399,8 @@ VALID_BUILTIN_TOOLS = {
 
 @router.get("/agents/{agent_id}/mcp")
 async def get_mcp_config(agent_id: str):
-    host_dir, _ = await _resolve_agent_path(agent_id)
-    mcp_path = host_dir / "config" / ".mcp.json"
+    await _resolve_agent_path(agent_id)  # validates agent exists
+    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
     if not mcp_path.is_file():
         return {"mcpServers": {}}
     return json.loads(mcp_path.read_text())
@@ -406,9 +408,9 @@ async def get_mcp_config(agent_id: str):
 
 @router.put("/agents/{agent_id}/mcp")
 async def put_mcp_config(agent_id: str, req: McpConfigRequest):
-    host_dir, _ = await _resolve_agent_path(agent_id)
-    mcp_path = host_dir / "config" / ".mcp.json"
-    mcp_path.parent.mkdir(exist_ok=True)
+    await _resolve_agent_path(agent_id)  # validates agent exists
+    MCP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
     data = req.model_dump(exclude_defaults=True)
     # Always include the top-level key
     data.setdefault("mcpServers", {})
@@ -418,8 +420,8 @@ async def put_mcp_config(agent_id: str, req: McpConfigRequest):
 
 @router.delete("/agents/{agent_id}/mcp/servers/{server_name}")
 async def delete_mcp_server(agent_id: str, server_name: str):
-    host_dir, _ = await _resolve_agent_path(agent_id)
-    mcp_path = host_dir / "config" / ".mcp.json"
+    await _resolve_agent_path(agent_id)  # validates agent exists
+    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
     if not mcp_path.is_file():
         raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
     config = json.loads(mcp_path.read_text())
@@ -1039,7 +1041,7 @@ async def _ensure_worker(
 
     # Spawn new container (no lock needed during spawn — it's a long operation)
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
-    mcp_mgr = await _start_mcp_manager(host_dir)
+    mcp_mgr = await _start_mcp_manager(host_dir, agent_id)
     ws_mgr = WebSocketManager(session_id)
     ws_mgr.attach(ws, session_id)
 
@@ -1107,7 +1109,7 @@ async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
             return
 
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
-    mcp_mgr = await _start_mcp_manager(host_dir)
+    mcp_mgr = await _start_mcp_manager(host_dir, agent_id)
     ws_mgr = WebSocketManager(session_id)
 
     async with _workers_lock:
@@ -1151,7 +1153,7 @@ async def _respawn_worker(agent_id: str) -> None:
         # Restart MCP servers on the host
         if worker.mcp_manager:
             await worker.mcp_manager.stop()
-        mcp_mgr = await _start_mcp_manager(host_dir)
+        mcp_mgr = await _start_mcp_manager(host_dir, agent_id)
 
         # Re-queue any IN-FLIGHT messages so the new worker picks them up
         db = await get_db()
