@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 import subprocess
@@ -74,7 +75,7 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
             sys.exit(1)
         try:
             urllib.request.urlopen(url, timeout=2)
-            print(f"rhclaw ready on {host}:{port}")
+            print(f"rhclaw ready on http://{host}:{port}")
             print(f"Logs: {log_file}")
             return
         except (urllib.error.URLError, OSError):
@@ -117,9 +118,47 @@ def stop() -> None:
     print("rhclaw stopped")
 
 
+def status() -> None:
+    pid = _read_pid()
+    if not pid:
+        print("rhclaw is not running")
+        sys.exit(1)
+
+    print(f"rhclaw is running (pid {pid})")
+
+    # Read port from PID file's sibling or try default
+    port = 8000
+    try:
+        resp = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/health", timeout=5
+        )
+        data = json.loads(resp.read())
+        print(f"  schema version: {data.get('schema_version')}")
+    except (urllib.error.URLError, OSError):
+        print("  health endpoint not responding")
+
+    # Count managed containers
+    podman = "/opt/podman/bin/podman"
+    try:
+        result = subprocess.run(
+            [podman, "ps", "-a", "--filter", "label=rhclaw.managed=true",
+             "--format", "{{.Status}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            lines = result.stdout.strip().splitlines()
+            running = sum(1 for l in lines if l.startswith("Up"))
+            stopped = len(lines) - running
+            print(f"  containers: {running} running, {stopped} stopped")
+        else:
+            print("  containers: 0")
+    except (OSError, subprocess.TimeoutExpired):
+        print("  containers: unable to query podman")
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: rhclaw <start|stop>")
+        print("Usage: rhclaw <start|stop|status>")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -146,6 +185,8 @@ def main() -> None:
         start(host, port)
     elif cmd == "stop":
         stop()
+    elif cmd == "status":
+        status()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
