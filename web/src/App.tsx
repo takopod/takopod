@@ -19,7 +19,14 @@ import {
 import { useTheme } from "@/components/theme-provider"
 import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
-import { Moon, Plus, RotateCcw, Sun } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Moon, Plus, RotateCcw, Sun, X } from "lucide-react"
+
+interface Template {
+  id: string
+  name: string
+}
 
 function NavLink({
   to,
@@ -52,6 +59,10 @@ export function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
     () => localStorage.getItem("rhclaw:selectedAgentId"),
   )
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [newAgentName, setNewAgentName] = useState("")
+  const [newAgentType, setNewAgentType] = useState("default")
 
   useEffect(() => {
     if (selectedAgentId) {
@@ -82,19 +93,29 @@ export function App() {
     fetchAgents()
   }, [fetchAgents])
 
+  const openCreateDialog = async () => {
+    const res = await fetch("/api/templates")
+    if (res.ok) {
+      setTemplates(await res.json())
+    }
+    setNewAgentName("")
+    setNewAgentType("default")
+    setShowCreateDialog(true)
+  }
+
   const handleCreateAgent = async () => {
-    const name = prompt("Agent name:")
-    if (!name?.trim()) return
+    if (!newAgentName.trim()) return
 
     const res = await fetch("/api/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
+      body: JSON.stringify({ name: newAgentName.trim(), agent_type: newAgentType }),
     })
     if (res.ok) {
       const agent: Agent = await res.json()
       setAgents((prev) => [...prev, agent])
       setSelectedAgentId(agent.id)
+      setShowCreateDialog(false)
     }
   }
 
@@ -184,7 +205,7 @@ export function App() {
               variant="outline"
               size="sm"
               className="w-full"
-              onClick={handleCreateAgent}
+              onClick={openCreateDialog}
             >
               <Plus className="mr-1.5 size-3.5" />
               Create Agent
@@ -280,6 +301,67 @@ export function App() {
 
         <aside className="w-52 shrink-0 border-l" />
       </div>
+
+      {showCreateDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg border bg-background p-6 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-medium">Create Agent</h2>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setShowCreateDialog(false)}
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="agent-name" className="text-sm">Name</Label>
+                <Input
+                  id="agent-name"
+                  value={newAgentName}
+                  onChange={(e) => setNewAgentName(e.target.value)}
+                  placeholder="My Agent"
+                  autoFocus
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateAgent()}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="agent-type" className="text-sm">Type</Label>
+                <Select value={newAgentType} onValueChange={setNewAgentType}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {templates.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowCreateDialog(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleCreateAgent}
+                  disabled={!newAgentName.trim()}
+                >
+                  Create
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

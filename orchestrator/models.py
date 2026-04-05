@@ -97,5 +97,6 @@ class ScheduleResponse(BaseModel):
     allowed_tools: list[str]
     interval_seconds: int
     last_executed_at: str | None
+    last_result: str | None
     status: str
     created_at: str
