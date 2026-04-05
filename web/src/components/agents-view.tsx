@@ -40,6 +40,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
   const [newName, setNewName] = useState("")
   const [newCommand, setNewCommand] = useState("")
   const [newArgs, setNewArgs] = useState("")
+  const [newEnvVars, setNewEnvVars] = useState("")
   const [saving, setSaving] = useState(false)
   const [stopping, setStopping] = useState(false)
 
@@ -81,10 +82,19 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
     const args = newArgs.trim()
       ? newArgs.split("\n").map((a) => a.trim()).filter(Boolean)
       : []
+    const env: Record<string, string> = {}
+    for (const line of newEnvVars.split("\n")) {
+      const eq = line.indexOf("=")
+      if (eq > 0) {
+        env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+      }
+    }
+    const server: McpServerConfig = { command: newCommand.trim(), args }
+    if (Object.keys(env).length > 0) server.env = env
     const updated: McpConfig = {
       mcpServers: {
         ...config.mcpServers,
-        [newName.trim()]: { command: newCommand.trim(), args },
+        [newName.trim()]: server,
       },
     }
     const res = await fetch(`/api/agents/${agentId}/mcp`, {
@@ -98,6 +108,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
       setNewName("")
       setNewCommand("")
       setNewArgs("")
+      setNewEnvVars("")
     }
     setSaving(false)
   }
@@ -165,6 +176,11 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
                   <code className="text-xs text-muted-foreground">
                     {srv.command} {srv.args.join(" ")}
                   </code>
+                  {srv.env && Object.keys(srv.env).length > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      env: {Object.keys(srv.env).join(", ")}
+                    </span>
+                  )}
                 </div>
                 <Button
                   variant="ghost"
@@ -222,6 +238,19 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
                       onChange={(e) => setNewArgs(e.target.value)}
                       placeholder={"-y\n@modelcontextprotocol/server-github"}
                       className="min-h-20 resize-none font-mono text-xs"
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="mcp-env" className="text-xs">
+                      Environment Variables (KEY=VALUE, one per line)
+                    </Label>
+                    <Textarea
+                      id="mcp-env"
+                      value={newEnvVars}
+                      onChange={(e) => setNewEnvVars(e.target.value)}
+                      placeholder={"GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."}
+                      className="min-h-16 resize-none font-mono text-xs"
                       spellCheck={false}
                     />
                   </div>
