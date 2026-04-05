@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir claude-agent-sdk sqlite-vec
 
 WORKDIR /app
 COPY worker.py agent.py db.py embed.py search.py memory.py __init__.py ./worker/
+COPY tools/ ./worker/tools/
 COPY migrations/ ./worker/migrations/
 ENV PYTHONPATH=/app
 CMD ["python", "-u", "-m", "worker.worker"]
