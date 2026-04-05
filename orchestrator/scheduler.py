@@ -211,8 +211,8 @@ async def _poll_task_response(
     process: asyncio.subprocess.Process,
     timeout_seconds: int,
 ) -> dict | None:
-    """Poll response.json for a task_result event until process exits or timeout."""
-    response_path = host_dir / "response.json"
+    """Poll output.json for a task_result event until process exits or timeout."""
+    response_path = host_dir / "output.json"
     deadline = time.monotonic() + timeout_seconds
 
     while time.monotonic() < deadline:

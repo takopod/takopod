@@ -56,6 +56,12 @@ async def boot_recovery() -> None:
         for ipc_file in AGENTS_DIR.glob("*/input.json"):
             ipc_file.unlink(missing_ok=True)
             files_cleaned += 1
+        for ipc_file in AGENTS_DIR.glob("*/output.json"):
+            ipc_file.unlink(missing_ok=True)
+            files_cleaned += 1
+        for ipc_file in AGENTS_DIR.glob("*/request.json"):
+            ipc_file.unlink(missing_ok=True)
+            files_cleaned += 1
         for ipc_file in AGENTS_DIR.glob("*/response.json"):
             ipc_file.unlink(missing_ok=True)
             files_cleaned += 1

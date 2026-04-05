@@ -13,7 +13,7 @@ from worker.agent import run_query
 
 WORKSPACE = Path("/workspace")
 INPUT_PATH = WORKSPACE / "input.json"
-RESPONSE_PATH = WORKSPACE / "response.json"
+OUTPUT_PATH = WORKSPACE / "output.json"
 POLL_INTERVAL = 0.5
 
 # Context overflow: split the SDK session when input tokens exceed 80% of the
@@ -58,8 +58,8 @@ def atomic_write(path: Path, data: bytes) -> None:
 
 
 def flush_responses() -> None:
-    """Flush pending worker_responses rows to response.json if absent."""
-    if RESPONSE_PATH.exists():
+    """Flush pending worker_responses rows to output.json if absent."""
+    if OUTPUT_PATH.exists():
         return
     rows = _conn.execute(
         "SELECT id, event FROM worker_responses "
@@ -68,7 +68,7 @@ def flush_responses() -> None:
     if not rows:
         return
     events = [json.loads(row[1]) for row in rows]
-    atomic_write(RESPONSE_PATH, json.dumps(events).encode())
+    atomic_write(OUTPUT_PATH, json.dumps(events).encode())
     ids = [row[0] for row in rows]
     placeholders = ",".join("?" * len(ids))
     _conn.execute(
@@ -325,8 +325,8 @@ async def main() -> None:
     db.run_migrations(conn)
 
     # Clean up stale state from a previous run
-    if RESPONSE_PATH.exists():
-        os.remove(RESPONSE_PATH)
+    if OUTPUT_PATH.exists():
+        os.remove(OUTPUT_PATH)
     conn.execute("UPDATE worker_responses SET status = 'sent' WHERE status = 'pending'")
     conn.execute("DELETE FROM processed_messages")
     conn.commit()
@@ -352,7 +352,7 @@ async def main() -> None:
         await asyncio.sleep(POLL_INTERVAL)
 
         # Flush any pending responses each iteration (catches events
-        # that couldn't be flushed because response.json still existed)
+        # that couldn't be flushed because output.json still existed)
         flush_responses()
 
         if not INPUT_PATH.exists():

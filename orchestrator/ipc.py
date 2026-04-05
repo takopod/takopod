@@ -272,6 +272,12 @@ async def _process_event(
         await ws_mgr.send(json.dumps(event))
         return None
 
+    if event_type == "schedule_compaction":
+        date = event.get("date")
+        if date:
+            await _schedule_compaction_task(session_id, date)
+        return None
+
     message_id = event.get("message_id", "")
     if not message_id:
         return None
@@ -325,16 +331,6 @@ async def _process_event(
         # Worker finished processing — no DB action needed
         pass
 
-    elif event_type == "schedule_compaction":
-        date = event.get("date")
-        if date:
-            await _schedule_compaction_task(session_id, date)
-        return None
-
-    elif event_type == "schedule_recurring":
-        await _create_agentic_task(session_id, event)
-        return None
-
     elif event_type == "system_error":
         logger.warning(
             "Worker error for session %s: %s", session_id, event.get("error"),
@@ -350,33 +346,159 @@ async def _process_event(
 # --- Scheduled task helpers ---
 
 
-async def _create_agentic_task(session_id: str, event: dict) -> None:
-    """Create a recurring agentic task from a schedule_recurring worker event."""
-    db = await get_db()
-    async with db.execute(
-        "SELECT agent_id FROM sessions WHERE id = ?", (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if not row:
-        logger.warning("Cannot create agentic task: session %s not found", session_id)
-        return
+async def _handle_tool_request(session_id: str, request: dict) -> dict:
+    """Dispatch a tool execution request from the worker and return the result."""
+    request_id = request.get("request_id", "")
+    action = request.get("action", "")
+    params = request.get("parameters", {})
 
-    agent_id = row[0]
-    task_id = str(uuid.uuid4())
-    prompt = event.get("prompt", "")
-    allowed_tools = json.dumps(event.get("allowed_tools", []))
-    interval_seconds = event.get("interval_seconds", 3600)
+    try:
+        db = await get_db()
 
-    await db.execute(
-        "INSERT INTO agentic_tasks (id, agent_id, prompt, allowed_tools, interval_seconds) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (task_id, agent_id, prompt, allowed_tools, interval_seconds),
-    )
-    await db.commit()
-    logger.info(
-        "Created agentic task %s for agent %s (every %ds)",
-        task_id[:8], agent_id[:8], interval_seconds,
-    )
+        # Look up agent_id from session
+        async with db.execute(
+            "SELECT agent_id FROM sessions WHERE id = ?", (session_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return {"request_id": request_id, "status": "error", "error": "Session not found"}
+        agent_id = row[0]
+
+        if action == "create_schedule":
+            task_id = str(uuid.uuid4())
+            prompt = params.get("prompt", "")
+            allowed_tools = json.dumps(params.get("allowed_tools", []))
+            interval_minutes = max(int(params.get("interval_minutes", 60)), 5)
+            interval_seconds = interval_minutes * 60
+
+            await db.execute(
+                "INSERT INTO agentic_tasks (id, agent_id, prompt, allowed_tools, interval_seconds) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (task_id, agent_id, prompt, allowed_tools, interval_seconds),
+            )
+            await db.commit()
+            logger.info("Created agentic task %s for agent %s", task_id[:8], agent_id[:8])
+            return {
+                "request_id": request_id,
+                "status": "ok",
+                "data": {
+                    "task_id": task_id,
+                    "prompt": prompt,
+                    "interval_minutes": interval_minutes,
+                    "status": "active",
+                },
+            }
+
+        elif action == "list_schedules":
+            status_filter = params.get("status")
+            sql = (
+                "SELECT t.id, t.prompt, t.interval_seconds, t.status, "
+                "t.last_executed_at, t.allowed_tools "
+                "FROM agentic_tasks t "
+                "JOIN sessions s ON s.agent_id = t.agent_id "
+                "WHERE s.id = ?"
+            )
+            sql_params: list = [session_id]
+            if status_filter:
+                sql += " AND t.status = ?"
+                sql_params.append(status_filter)
+            async with db.execute(sql, sql_params) as cur:
+                rows = await cur.fetchall()
+            schedules = []
+            for r in rows:
+                schedules.append({
+                    "task_id": r[0],
+                    "prompt": r[1],
+                    "interval_minutes": r[2] // 60,
+                    "status": r[3],
+                    "last_executed_at": r[4],
+                    "allowed_tools": json.loads(r[5]) if r[5] else [],
+                })
+            return {"request_id": request_id, "status": "ok", "data": {"schedules": schedules}}
+
+        elif action == "get_schedule":
+            task_id = params.get("task_id", "")
+            async with db.execute(
+                "SELECT id, prompt, interval_seconds, status, last_executed_at, "
+                "allowed_tools, last_result, created_at "
+                "FROM agentic_tasks WHERE id = ?",
+                (task_id,),
+            ) as cur:
+                r = await cur.fetchone()
+            if not r:
+                return {"request_id": request_id, "status": "error", "error": "Schedule not found"}
+            return {
+                "request_id": request_id,
+                "status": "ok",
+                "data": {
+                    "task_id": r[0], "prompt": r[1],
+                    "interval_minutes": r[2] // 60, "status": r[3],
+                    "last_executed_at": r[4],
+                    "allowed_tools": json.loads(r[5]) if r[5] else [],
+                    "last_result": r[6], "created_at": r[7],
+                },
+            }
+
+        elif action == "update_schedule":
+            task_id = params.get("task_id", "")
+            updates: list[str] = []
+            values: list = []
+            if "prompt" in params:
+                updates.append("prompt = ?")
+                values.append(params["prompt"])
+            if "interval_minutes" in params:
+                interval = max(int(params["interval_minutes"]), 5)
+                updates.append("interval_seconds = ?")
+                values.append(interval * 60)
+            if "allowed_tools" in params:
+                updates.append("allowed_tools = ?")
+                values.append(json.dumps(params["allowed_tools"]))
+            if not updates:
+                return {"request_id": request_id, "status": "error", "error": "No fields to update"}
+            values.append(task_id)
+            await db.execute(
+                f"UPDATE agentic_tasks SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+            await db.commit()
+            return {"request_id": request_id, "status": "ok", "data": {"task_id": task_id, "updated": True}}
+
+        elif action == "delete_schedule":
+            task_id = params.get("task_id", "")
+            cursor = await db.execute("DELETE FROM agentic_tasks WHERE id = ?", (task_id,))
+            await db.commit()
+            if cursor.rowcount == 0:
+                return {"request_id": request_id, "status": "error", "error": "Schedule not found"}
+            return {"request_id": request_id, "status": "ok", "data": {"task_id": task_id, "deleted": True}}
+
+        elif action == "pause_schedule":
+            task_id = params.get("task_id", "")
+            cursor = await db.execute(
+                "UPDATE agentic_tasks SET status = 'paused' WHERE id = ? AND status = 'active'",
+                (task_id,),
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                return {"request_id": request_id, "status": "error", "error": "Schedule not found or not active"}
+            return {"request_id": request_id, "status": "ok", "data": {"task_id": task_id, "status": "paused"}}
+
+        elif action == "resume_schedule":
+            task_id = params.get("task_id", "")
+            cursor = await db.execute(
+                "UPDATE agentic_tasks SET status = 'active' WHERE id = ? AND status = 'paused'",
+                (task_id,),
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                return {"request_id": request_id, "status": "error", "error": "Schedule not found or not paused"}
+            return {"request_id": request_id, "status": "ok", "data": {"task_id": task_id, "status": "active"}}
+
+        else:
+            return {"request_id": request_id, "status": "error", "error": f"Unknown action: {action}"}
+
+    except Exception as e:
+        logger.exception("Error handling tool request %s", action)
+        return {"request_id": request_id, "status": "error", "error": str(e)}
 
 
 async def _schedule_compaction_task(session_id: str, date: str) -> None:
@@ -420,6 +542,8 @@ async def _polling_loop(
     session_id: str, host_dir: Path, ws_mgr: WebSocketManager
 ) -> None:
     input_path = host_dir / "input.json"
+    output_path = host_dir / "output.json"
+    request_path = host_dir / "request.json"
     response_path = host_dir / "response.json"
     db = await get_db()
 
@@ -486,16 +610,37 @@ async def _polling_loop(
                 await db.commit()
                 await _send_queue_status(ws_mgr, session_id)
 
-            # --- Response polling: read response.json from worker ---
-            if response_path.exists():
+            # --- Request polling: handle tool execution requests from worker ---
+            if request_path.exists():
                 try:
-                    with open(response_path) as f:
-                        events = json.load(f)
-                    os.remove(response_path)
+                    with open(request_path) as f:
+                        request = json.load(f)
+                    os.remove(request_path)
                 except (json.JSONDecodeError, OSError) as e:
-                    logger.warning("Error reading response.json: %s", e)
+                    logger.warning("Error reading request.json: %s", e)
                     try:
-                        os.remove(response_path)
+                        os.remove(request_path)
+                    except OSError:
+                        pass
+                    request = None
+
+                if request:
+                    result = await _handle_tool_request(session_id, request)
+                    atomic_write(
+                        response_path,
+                        json.dumps(result).encode(),
+                    )
+
+            # --- Output polling: read output.json from worker ---
+            if output_path.exists():
+                try:
+                    with open(output_path) as f:
+                        events = json.load(f)
+                    os.remove(output_path)
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.warning("Error reading output.json: %s", e)
+                    try:
+                        os.remove(output_path)
                     except OSError:
                         pass
                     events = []
@@ -516,7 +661,7 @@ async def _polling_loop(
                             _inflight_source.pop(msg_id, None)
                     except Exception:
                         logger.exception(
-                            "Error processing response event for session %s",
+                            "Error processing output event for session %s",
                             session_id,
                         )
 

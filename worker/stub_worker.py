@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stub worker: polls /workspace/input.json, emits hardcoded responses via response.json."""
+"""Stub worker: polls /workspace/input.json, emits hardcoded responses via output.json."""
 
 import json
 import os
@@ -8,7 +8,7 @@ import time
 
 WORKSPACE = "/workspace"
 INPUT_PATH = os.path.join(WORKSPACE, "input.json")
-RESPONSE_PATH = os.path.join(WORKSPACE, "response.json")
+OUTPUT_PATH = os.path.join(WORKSPACE, "output.json")
 POLL_INTERVAL = 0.5
 HARDCODED_TOKENS = ["Hello", " from", " the", " stub", " worker", "!"]
 
@@ -35,10 +35,10 @@ def atomic_write(path: str, data: bytes) -> None:
 
 
 def flush_responses() -> None:
-    """Write pending events to response.json if absent."""
-    if os.path.exists(RESPONSE_PATH) or not _pending_events:
+    """Write pending events to output.json if absent."""
+    if os.path.exists(OUTPUT_PATH) or not _pending_events:
         return
-    atomic_write(RESPONSE_PATH, json.dumps(_pending_events).encode())
+    atomic_write(OUTPUT_PATH, json.dumps(_pending_events).encode())
     _pending_events.clear()
 
 
@@ -77,8 +77,8 @@ def main() -> None:
     sys.stderr.flush()
 
     # Clean up stale state
-    if os.path.exists(RESPONSE_PATH):
-        os.remove(RESPONSE_PATH)
+    if os.path.exists(OUTPUT_PATH):
+        os.remove(OUTPUT_PATH)
 
     while True:
         time.sleep(POLL_INTERVAL)
