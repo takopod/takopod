@@ -424,6 +424,17 @@ async def _check_task_timeouts() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    """Cancel a task and wait for it to finish."""
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 async def _reap_idle_workers() -> None:
     """Shut down worker containers idle longer than IDLE_TIMEOUT_SECONDS.
 
@@ -431,9 +442,10 @@ async def _reap_idle_workers() -> None:
     for clean exit -> force-kill on timeout.
     """
     # Import here to avoid circular dependency
-    from orchestrator.routes import get_active_workers
+    from orchestrator.routes import get_active_workers, get_workers_lock
 
     active_workers = get_active_workers()
+    workers_lock = get_workers_lock()
     db = await get_db()
     cutoff = time.strftime(
         "%Y-%m-%dT%H:%M:%SZ",
@@ -448,12 +460,17 @@ async def _reap_idle_workers() -> None:
 
     for record_id, agent_id, session_id in rows:
         container_name = f"rhclaw-{agent_id[:8]}"
-        worker = active_workers.get(agent_id)
         reason = "Session ended due to inactivity"
+        old_polling = None
+        old_monitor = None
+
+        # Grab worker reference and mark as shutting down under lock
+        async with workers_lock:
+            worker = active_workers.get(agent_id)
+            if worker:
+                worker.shutting_down = True
 
         if worker:
-            worker.shutting_down = True
-
             try:
                 input_path = worker.host_dir / "input.json"
                 shutdown_payload = json.dumps(
@@ -521,10 +538,13 @@ async def _reap_idle_workers() -> None:
                 WS_CLOSE_IDLE_TIMEOUT, "Idle timeout",
             )
 
-        # Clean up in-memory state
-        w = active_workers.pop(agent_id, None)
-        if w:
-            if w.polling_task:
-                w.polling_task.cancel()
-            if w.monitor_task:
-                w.monitor_task.cancel()
+        # Clean up in-memory state under lock
+        async with workers_lock:
+            w = active_workers.pop(agent_id, None)
+            if w:
+                old_polling = w.polling_task
+                old_monitor = w.monitor_task
+                w.polling_task = None
+                w.monitor_task = None
+        await _cancel_task(old_polling)
+        await _cancel_task(old_monitor)

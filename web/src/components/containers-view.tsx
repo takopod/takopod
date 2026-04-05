@@ -8,7 +8,7 @@ interface Container {
   id: string
   agent_id: string
   agent_name: string | null
-  session_id: string
+  session_id: string | null
   container_type: string
   status: string
   started_at: string
@@ -228,7 +228,7 @@ function ContainerCard({
         )}
       </div>
       <div className="mt-1 text-xs text-muted-foreground">
-        Session: {c.session_id.slice(0, 8)}...
+        Session: {c.session_id ? `${c.session_id.slice(0, 8)}...` : "—"}
       </div>
     </div>
   )

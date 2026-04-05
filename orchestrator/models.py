@@ -80,7 +80,7 @@ class ContainerResponse(BaseModel):
     id: str
     agent_id: str
     agent_name: str | None = None
-    session_id: str
+    session_id: str | None = None
     container_type: str
     status: str
     started_at: str

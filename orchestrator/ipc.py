@@ -18,7 +18,7 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Tracks source metadata for in-flight scheduled task messages per session.
+# Tracks source metadata for in-flight scheduled task messages per message_id.
 # Set when flushing a scheduled task message, cleared on complete event.
 _inflight_source: dict[str, dict] = {}
 
@@ -460,14 +460,13 @@ async def _polling_loop(
                 for msg in messages:
                     msg["timestamp"] = now
 
-                # Track source metadata for scheduled task messages
+                # Track source metadata per message for scheduled tasks
                 for msg in messages:
-                    if msg.get("agentic_task_id"):
-                        _inflight_source[session_id] = {
+                    if msg.get("agentic_task_id") and msg.get("message_id"):
+                        _inflight_source[msg["message_id"]] = {
                             "source": "scheduled_task",
                             "agentic_task_id": msg["agentic_task_id"],
                         }
-                        break
 
                 atomic_write(input_path, json.dumps(messages).encode())
 
@@ -502,26 +501,24 @@ async def _polling_loop(
                     events = []
 
                 # Process events and collect unique message_ids for notification
-                source_meta = _inflight_source.get(session_id)
                 notified: set[str] = set()
                 for event in events:
                     try:
+                        msg_id = event.get("message_id", "")
+                        source_meta = _inflight_source.get(msg_id)
                         row_id = await _process_event(
                             event, session_id, ws_mgr, source_meta,
                         )
                         if row_id:
                             notified.add(row_id)
+                        # Clear source metadata when this message completes
+                        if event.get("type") == "complete" and msg_id:
+                            _inflight_source.pop(msg_id, None)
                     except Exception:
                         logger.exception(
                             "Error processing response event for session %s",
                             session_id,
                         )
-
-                # Clear source metadata after response is fully processed
-                if source_meta and any(
-                    e.get("type") == "complete" for e in events
-                ):
-                    _inflight_source.pop(session_id, None)
 
                 # Send one message_updated notification per unique message
                 for row_id in notified:

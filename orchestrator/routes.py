@@ -56,6 +56,17 @@ _rate_limits: dict[str, deque[float]] = defaultdict(deque)
 logger = logging.getLogger(__name__)
 
 
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    """Cancel a task and wait for it to finish."""
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 @dataclass
 class WorkerState:
     """Tracks a running worker container for an agent."""
@@ -72,6 +83,7 @@ class WorkerState:
 
 # Keyed by agent_id — one worker per agent
 _active_workers: dict[str, WorkerState] = {}
+_workers_lock = asyncio.Lock()
 
 
 # --- Agent Templates ---
@@ -209,12 +221,16 @@ async def delete_agent(agent_id: str):
         raise HTTPException(status_code=404, detail="Agent not found")
 
     # Kill running container
-    worker = _active_workers.pop(agent_id, None)
+    async with _workers_lock:
+        worker = _active_workers.pop(agent_id, None)
+        if worker:
+            old_polling = worker.polling_task
+            old_monitor = worker.monitor_task
+            worker.polling_task = None
+            worker.monitor_task = None
     if worker:
-        if worker.polling_task:
-            worker.polling_task.cancel()
-        if worker.monitor_task:
-            worker.monitor_task.cancel()
+        await _cancel_task(old_polling)
+        await _cancel_task(old_monitor)
         container_name = f"rhclaw-{agent_id[:8]}"
         await kill_container(container_name)
 
@@ -412,12 +428,16 @@ async def delete_container(container_id: str):
     await db.commit()
 
     # Clean up in-memory state
-    worker = _active_workers.pop(agent_id, None)
+    async with _workers_lock:
+        worker = _active_workers.pop(agent_id, None)
+        if worker:
+            old_polling = worker.polling_task
+            old_monitor = worker.monitor_task
+            worker.polling_task = None
+            worker.monitor_task = None
     if worker:
-        if worker.polling_task:
-            worker.polling_task.cancel()
-        if worker.monitor_task:
-            worker.monitor_task.cancel()
+        await _cancel_task(old_polling)
+        await _cancel_task(old_monitor)
 
     return {"status": "ok", "container_id": container_id}
 
@@ -569,12 +589,15 @@ async def kill_session(session_id: str):
 
     record_id, agent_id = row
     container_name = f"rhclaw-{agent_id[:8]}"
-    worker = _active_workers.get(agent_id)
     graceful = False
 
+    async with _workers_lock:
+        worker = _active_workers.get(agent_id)
+        if worker:
+            worker.shutting_down = True
+
     if worker:
-        worker.shutting_down = True
-        # Try graceful shutdown
+        # Try graceful shutdown (outside lock — involves long wait)
         try:
             input_path = worker.host_dir / "input.json"
             shutdown_payload = json.dumps(
@@ -613,12 +636,16 @@ async def kill_session(session_id: str):
     await db.commit()
 
     # Clean up in-memory state
-    w = _active_workers.pop(agent_id, None)
+    async with _workers_lock:
+        w = _active_workers.pop(agent_id, None)
+        if w:
+            old_polling = w.polling_task
+            old_monitor = w.monitor_task
+            w.polling_task = None
+            w.monitor_task = None
     if w:
-        if w.polling_task:
-            w.polling_task.cancel()
-        if w.monitor_task:
-            w.monitor_task.cancel()
+        await _cancel_task(old_polling)
+        await _cancel_task(old_monitor)
 
     return {"status": "ok", "session_id": session_id, "graceful": graceful}
 
@@ -838,7 +865,8 @@ async def _store_message(session_id: str, frame: UserMessageFrame) -> None:
 async def _send_queue_status(ws: WebSocket, session_id: str, agent_id: str) -> None:
     counts = await get_queue_counts(session_id)
     status = QueueStatusFrame(**counts)
-    worker = _active_workers.get(agent_id)
+    async with _workers_lock:
+        worker = _active_workers.get(agent_id)
     if worker:
         await worker.ws_manager.send(status.model_dump_json())
     else:
@@ -848,66 +876,99 @@ async def _send_queue_status(ws: WebSocket, session_id: str, agent_id: str) -> N
 async def _ensure_worker(
     agent_id: str, session_id: str, ws: WebSocket
 ) -> None:
-    worker = _active_workers.get(agent_id)
+    # Phase 1: Grab old tasks under lock, detach them from worker
+    old_polling = None
+    old_monitor = None
+    reattach = False
 
-    if worker:
-        # Container already running — reattach WebSocket
-        if worker.polling_task:
-            worker.polling_task.cancel()
-        if worker.monitor_task:
-            worker.monitor_task.cancel()
+    async with _workers_lock:
+        worker = _active_workers.get(agent_id)
+        if worker:
+            reattach = True
+            old_polling = worker.polling_task
+            old_monitor = worker.monitor_task
+            worker.polling_task = None
+            worker.monitor_task = None
 
-        worker.session_id = session_id
-        worker.ws_manager.attach(ws, session_id)
-        worker.polling_task = start_polling_loop(session_id, worker.host_dir, worker.ws_manager)
-        worker.monitor_task = asyncio.create_task(
-            _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
-        )
+    if reattach:
+        # Phase 2: Cancel old tasks outside lock (monitor acquires lock)
+        await _cancel_task(old_polling)
+        await _cancel_task(old_monitor)
 
-        # Mark as running again (was idle)
-        db = await get_db()
-        await db.execute(
-            "UPDATE agent_containers SET status = 'running', session_id = ? WHERE id = ?",
-            (session_id, worker.container_record_id),
-        )
-        await db.commit()
-        return
+        # Phase 3: Re-acquire lock, verify worker still exists, create new tasks
+        async with _workers_lock:
+            worker = _active_workers.get(agent_id)
+            if not worker:
+                # Worker was cleaned up while we released the lock — fall through
+                # to spawn path below
+                reattach = False
+            else:
+                worker.session_id = session_id
+                worker.ws_manager.attach(ws, session_id)
+                worker.polling_task = start_polling_loop(
+                    session_id, worker.host_dir, worker.ws_manager,
+                )
+                worker.monitor_task = asyncio.create_task(
+                    _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
+                )
 
+        if reattach:
+            # Mark as running again (was idle)
+            db = await get_db()
+            await db.execute(
+                "UPDATE agent_containers SET status = 'running', session_id = ? "
+                "WHERE id = ?",
+                (session_id, worker.container_record_id),
+            )
+            await db.commit()
+            return
+
+    # Spawn new container (no lock needed during spawn — it's a long operation)
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
     ws_mgr = WebSocketManager(session_id)
     ws_mgr.attach(ws, session_id)
 
-    worker = WorkerState(
-        container_record_id=record_id,
-        process=process,
-        host_dir=host_dir,
-        session_id=session_id,
-        ws_manager=ws_mgr,
-        polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
-    )
-    _active_workers[agent_id] = worker
-    worker.monitor_task = asyncio.create_task(
-        _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
-    )
+    async with _workers_lock:
+        worker = WorkerState(
+            container_record_id=record_id,
+            process=process,
+            host_dir=host_dir,
+            session_id=session_id,
+            ws_manager=ws_mgr,
+            polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
+        )
+        _active_workers[agent_id] = worker
+        worker.monitor_task = asyncio.create_task(
+            _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
+        )
 
 
 async def _cleanup_session(agent_id: str, session_id: str) -> None:
     """Detach WebSocket resources on disconnect. Container keeps running."""
-    worker = _active_workers.get(agent_id)
-    if worker and worker.session_id == session_id:
-        if worker.polling_task:
-            worker.polling_task.cancel()
-            worker.polling_task = None
-        if worker.monitor_task:
-            worker.monitor_task.cancel()
-            worker.monitor_task = None
-        worker.ws_manager.detach()
+    old_polling = None
+    old_monitor = None
+    container_record_id = None
 
+    async with _workers_lock:
+        worker = _active_workers.get(agent_id)
+        if worker and worker.session_id == session_id:
+            old_polling = worker.polling_task
+            old_monitor = worker.monitor_task
+            worker.polling_task = None
+            worker.monitor_task = None
+            worker.ws_manager.detach()
+            container_record_id = worker.container_record_id
+
+    # Cancel outside lock (monitor acquires lock)
+    await _cancel_task(old_polling)
+    await _cancel_task(old_monitor)
+
+    if container_record_id:
         # Mark container as idle — reaper will kill after timeout
         db = await get_db()
         await db.execute(
             "UPDATE agent_containers SET status = 'idle' WHERE id = ?",
-            (worker.container_record_id,),
+            (container_record_id,),
         )
         await db.commit()
 
@@ -920,34 +981,38 @@ async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
     Used by the scheduler to guarantee the polling loop is active before
     queuing a scheduled task message.
     """
-    worker = _active_workers.get(agent_id)
-
-    if worker:
-        if worker.polling_task is None or worker.polling_task.done():
-            worker.polling_task = start_polling_loop(
-                session_id, worker.host_dir, worker.ws_manager,
-            )
-        return
+    async with _workers_lock:
+        worker = _active_workers.get(agent_id)
+        if worker:
+            if worker.polling_task is None or worker.polling_task.done():
+                worker.polling_task = start_polling_loop(
+                    session_id, worker.host_dir, worker.ws_manager,
+                )
+            return
 
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
     ws_mgr = WebSocketManager(session_id)
 
-    worker = WorkerState(
-        container_record_id=record_id,
-        process=process,
-        host_dir=host_dir,
-        session_id=session_id,
-        ws_manager=ws_mgr,
-        polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
-    )
-    _active_workers[agent_id] = worker
-    worker.monitor_task = asyncio.create_task(
-        _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
-    )
+    async with _workers_lock:
+        worker = WorkerState(
+            container_record_id=record_id,
+            process=process,
+            host_dir=host_dir,
+            session_id=session_id,
+            ws_manager=ws_mgr,
+            polling_task=start_polling_loop(session_id, host_dir, ws_mgr),
+        )
+        _active_workers[agent_id] = worker
+        worker.monitor_task = asyncio.create_task(
+            _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
+        )
 
 
 async def _respawn_worker(agent_id: str) -> None:
-    """Respawn a crashed worker container for the same agent."""
+    """Respawn a crashed worker container for the same agent.
+
+    Caller must hold _workers_lock or guarantee exclusive access.
+    """
     worker = _active_workers.get(agent_id)
     if not worker:
         return
@@ -974,15 +1039,22 @@ async def _respawn_worker(agent_id: str) -> None:
         )
         await db.commit()
 
-        worker.container_record_id = record_id
-        worker.process = process
-        worker.host_dir = host_dir
-        worker.polling_task = start_polling_loop(
-            worker.session_id, host_dir, worker.ws_manager,
-        )
-        worker.monitor_task = asyncio.create_task(
-            _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
-        )
+        async with _workers_lock:
+            # Verify worker still exists (could have been cleaned up)
+            if _active_workers.get(agent_id) is not worker:
+                # Worker was replaced/removed — kill the container we just spawned
+                container_name = f"rhclaw-{agent_id[:8]}"
+                await kill_container(container_name)
+                return
+            worker.container_record_id = record_id
+            worker.process = process
+            worker.host_dir = host_dir
+            worker.polling_task = start_polling_loop(
+                worker.session_id, host_dir, worker.ws_manager,
+            )
+            worker.monitor_task = asyncio.create_task(
+                _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
+            )
         logger.info("Respawned worker for agent %s", agent_id)
     except Exception:
         logger.exception("Failed to respawn worker for agent %s", agent_id)
@@ -994,7 +1066,8 @@ async def _respawn_worker(agent_id: str) -> None:
             )
         except Exception:
             pass
-        _active_workers.pop(agent_id, None)
+        async with _workers_lock:
+            _active_workers.pop(agent_id, None)
 
 
 async def _monitor_worker(agent_id: str) -> None:
@@ -1005,28 +1078,31 @@ async def _monitor_worker(agent_id: str) -> None:
 
     returncode = await worker.process.wait()
 
-    # Process exited — check if we still own this agent
-    current = _active_workers.get(agent_id)
-    if current is not worker:
-        return  # Worker was replaced (e.g., by _ensure_worker)
+    # All post-wait logic under lock to prevent races with _ensure_worker,
+    # _cleanup_session, kill_session, etc.
+    async with _workers_lock:
+        # Process exited — check if we still own this agent
+        current = _active_workers.get(agent_id)
+        if current is not worker:
+            return  # Worker was replaced (e.g., by _ensure_worker)
 
-    # Clean shutdown initiated by reaper or admin kill — skip crash recovery
-    if worker.shutting_down:
-        logger.info(
-            "Worker for agent %s shut down cleanly (code %s)", agent_id, returncode,
+        # Clean shutdown initiated by reaper or admin kill — skip crash recovery
+        if worker.shutting_down:
+            logger.info(
+                "Worker for agent %s shut down cleanly (code %s)",
+                agent_id, returncode,
+            )
+            return  # Reaper/admin kill handles cleanup
+
+        logger.warning(
+            "Worker for agent %s exited with code %s", agent_id, returncode,
         )
-        return  # Reaper/admin kill handles cleanup
 
-    logger.warning(
-        "Worker for agent %s exited with code %s", agent_id, returncode,
-    )
-
-    # Cancel polling loop
-    if worker.polling_task:
-        worker.polling_task.cancel()
+        # Cancel polling loop (safe under lock — polling loop doesn't acquire it)
+        await _cancel_task(worker.polling_task)
         worker.polling_task = None
 
-    # Clean up dead container
+    # Clean up dead container (outside lock — involves subprocess)
     container_name = f"rhclaw-{agent_id[:8]}"
     await kill_container(container_name)
 
@@ -1045,7 +1121,8 @@ async def _monitor_worker(agent_id: str) -> None:
         logger.info(
             "No WebSocket connected for agent %s — skipping respawn", agent_id,
         )
-        _active_workers.pop(agent_id, None)
+        async with _workers_lock:
+            _active_workers.pop(agent_id, None)
         return
 
     # Circuit breaker: prune old crash times, then check
@@ -1068,16 +1145,25 @@ async def _monitor_worker(agent_id: str) -> None:
             )
         except Exception:
             pass
-        _active_workers.pop(agent_id, None)
+        async with _workers_lock:
+            _active_workers.pop(agent_id, None)
         return
 
-    # Respawn
+    # Respawn (acquires lock internally)
     await _respawn_worker(agent_id)
 
 
 def get_active_workers() -> dict[str, WorkerState]:
-    """Expose active workers for scheduler and shutdown coordination."""
+    """Expose active workers for scheduler and shutdown coordination.
+
+    Callers must hold _workers_lock when reading or mutating the returned dict.
+    """
     return _active_workers
+
+
+def get_workers_lock() -> asyncio.Lock:
+    """Expose the workers lock for cross-module synchronization."""
+    return _workers_lock
 
 
 async def graceful_shutdown(timeout: int = 30) -> None:
@@ -1086,18 +1172,21 @@ async def graceful_shutdown(timeout: int = 30) -> None:
     1. Send shutdown command to every active worker via input.json.
     2. Wait up to `timeout` seconds for all processes to exit.
     3. Force-kill any remaining containers.
-    4. Update DB state and clean up in-memory tracking.
+    4. Await task cancellation and clean up in-memory tracking.
     """
-    if not _active_workers:
-        return
+    async with _workers_lock:
+        if not _active_workers:
+            return
 
-    logger.info("Graceful shutdown: %d active workers", len(_active_workers))
+        logger.info("Graceful shutdown: %d active workers", len(_active_workers))
+        workers = list(_active_workers.items())
 
-    workers = list(_active_workers.items())
+        # Mark all as shutting down
+        for _, worker in workers:
+            worker.shutting_down = True
 
-    # Send shutdown command to all workers
+    # Send shutdown command to all workers (outside lock — involves I/O)
     for agent_id, worker in workers:
-        worker.shutting_down = True
         try:
             input_path = worker.host_dir / "input.json"
             payload = json.dumps([{"type": "system_command", "command": "shutdown"}])
@@ -1122,22 +1211,23 @@ async def graceful_shutdown(timeout: int = 30) -> None:
                 container_name = f"rhclaw-{agent_id[:8]}"
                 await kill_container(container_name)
 
-    # Finalize DB state and clean up
+    # Cancel tasks and await completion, then finalize DB state
+    for _, worker in workers:
+        await _cancel_task(worker.polling_task)
+        await _cancel_task(worker.monitor_task)
+
     db = await get_db()
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for agent_id, worker in workers:
+    for _, worker in workers:
         await db.execute(
             "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
             "WHERE id = ?",
             (now, worker.container_record_id),
         )
-        if worker.polling_task:
-            worker.polling_task.cancel()
-        if worker.monitor_task:
-            worker.monitor_task.cancel()
     await db.commit()
 
-    _active_workers.clear()
+    async with _workers_lock:
+        _active_workers.clear()
     logger.info("Graceful shutdown complete")
 
 
@@ -1213,13 +1303,15 @@ async def websocket_endpoint(ws: WebSocket):
             await _store_message(session_id, frame)
 
             # Reset idle timer on every user message
-            worker = _active_workers.get(agent_id)
-            if worker:
+            async with _workers_lock:
+                worker = _active_workers.get(agent_id)
+                container_record_id = worker.container_record_id if worker else None
+            if container_record_id:
                 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 db = await get_db()
                 await db.execute(
                     "UPDATE agent_containers SET last_activity = ? WHERE id = ?",
-                    (now, worker.container_record_id),
+                    (now, container_record_id),
                 )
                 await db.commit()
 
