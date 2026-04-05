@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { FileBrowser } from "@/components/file-browser"
 import type { Agent } from "@/lib/types"
-import { ArrowLeft, Plus, Trash2, X } from "lucide-react"
+import { ArrowLeft, Plus, Square, Trash2, X } from "lucide-react"
 
 interface AgentDetail extends Agent {
   claude_md: string
@@ -41,6 +41,27 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
   const [newCommand, setNewCommand] = useState("")
   const [newArgs, setNewArgs] = useState("")
   const [saving, setSaving] = useState(false)
+  const [stopping, setStopping] = useState(false)
+
+  const handleStop = async () => {
+    setStopping(true)
+    try {
+      const res = await fetch("/api/containers")
+      if (res.ok) {
+        const containers = await res.json()
+        const active = containers.find(
+          (c: { agent_id: string; status: string }) =>
+            c.agent_id === agentId &&
+            ["running", "idle", "starting"].includes(c.status),
+        )
+        if (active) {
+          await fetch(`/api/containers/${active.id}`, { method: "DELETE" })
+        }
+      }
+    } finally {
+      setStopping(false)
+    }
+  }
 
   const fetchConfig = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/mcp`)
@@ -106,7 +127,16 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
           <ArrowLeft className="size-4" />
         </Button>
         <span className="text-sm font-medium">MCP Servers</span>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleStop}
+            disabled={stopping}
+          >
+            <Square className="mr-1.5 size-3 fill-current" />
+            {stopping ? "Stopping..." : "Stop Worker"}
+          </Button>
           <Button size="sm" onClick={() => setShowAdd(true)} disabled={showAdd}>
             <Plus className="mr-1.5 size-3.5" />
             Add Server
@@ -167,7 +197,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
                       id="mcp-name"
                       value={newName}
                       onChange={(e) => setNewName(e.target.value)}
-                      placeholder="e.g. filesystem"
+                      placeholder="e.g. github"
                       autoFocus
                     />
                   </div>
@@ -179,7 +209,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
                       id="mcp-command"
                       value={newCommand}
                       onChange={(e) => setNewCommand(e.target.value)}
-                      placeholder="e.g. npx"
+                      placeholder="e.g. npx or uvx"
                     />
                   </div>
                   <div className="flex flex-col gap-1.5">
@@ -190,7 +220,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
                       id="mcp-args"
                       value={newArgs}
                       onChange={(e) => setNewArgs(e.target.value)}
-                      placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/workspace"}
+                      placeholder={"-y\n@modelcontextprotocol/server-github"}
                       className="min-h-20 resize-none font-mono text-xs"
                       spellCheck={false}
                     />
@@ -217,7 +247,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
 
             {servers.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                Changes take effect after clearing context (restarting the agent container).
+                Changes take effect after stopping and restarting the worker.
               </p>
             )}
           </div>

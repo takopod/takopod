@@ -21,7 +21,7 @@ import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Moon, Plus, RotateCcw, Sun, X } from "lucide-react"
+import { Moon, Plus, Sun, X } from "lucide-react"
 
 interface Template {
   id: string
@@ -72,7 +72,7 @@ export function App() {
     }
   }, [selectedAgentId])
 
-  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect } =
+  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, reconnect } =
     useWebSocket(selectedAgentId)
 
   const fetchAgents = useCallback(async () => {
@@ -224,17 +224,7 @@ export function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="flex items-center justify-end border-b px-4 py-1.5">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => sendSystemCommand("clear_context")}
-                        disabled={!connected}
-                      >
-                        <RotateCcw className="mr-1.5 size-3.5" />
-                        Clear Context
-                      </Button>
-                    </div>
+                    <div className="flex items-center justify-end border-b px-4 py-1.5" />
                     <ChatMessageList messages={messages} />
                     {(queueStatus.queued > 0 || queueStatus.in_flight > 0) &&
                       !messages.some((m) => m.status === "streaming") && (
