@@ -5,6 +5,7 @@ import { ChatInput } from "@/components/chat-input"
 import { ContainersView } from "@/components/containers-view"
 import { SchedulesView } from "@/components/schedules-view"
 import { SettingsView } from "@/components/settings-view"
+import { SlackView } from "@/components/slack-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
@@ -63,6 +64,8 @@ export function App() {
   const [templates, setTemplates] = useState<Template[]>([])
   const [newAgentName, setNewAgentName] = useState("")
   const [newAgentType, setNewAgentType] = useState("default")
+  const [newSlackEnabled, setNewSlackEnabled] = useState(false)
+  const [slackConfigured, setSlackConfigured] = useState(false)
 
   useEffect(() => {
     if (selectedAgentId) {
@@ -94,12 +97,20 @@ export function App() {
   }, [fetchAgents])
 
   const openCreateDialog = async () => {
-    const res = await fetch("/api/templates")
-    if (res.ok) {
-      setTemplates(await res.json())
+    const [templatesRes, slackRes] = await Promise.all([
+      fetch("/api/templates"),
+      fetch("/api/slack/config"),
+    ])
+    if (templatesRes.ok) {
+      setTemplates(await templatesRes.json())
+    }
+    if (slackRes.ok) {
+      const data = await slackRes.json()
+      setSlackConfigured(data.configured)
     }
     setNewAgentName("")
     setNewAgentType("default")
+    setNewSlackEnabled(false)
     setShowCreateDialog(true)
   }
 
@@ -109,7 +120,7 @@ export function App() {
     const res = await fetch("/api/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newAgentName.trim(), agent_type: newAgentType }),
+      body: JSON.stringify({ name: newAgentName.trim(), agent_type: newAgentType, slack_enabled: newSlackEnabled }),
     })
     if (res.ok) {
       const agent: Agent = await res.json()
@@ -181,6 +192,9 @@ export function App() {
             </NavLink>
             <NavLink to="/settings" match={currentPath === "/settings"}>
               Settings
+            </NavLink>
+            <NavLink to="/slack" match={currentPath === "/slack"}>
+              Slack
             </NavLink>
           </div>
           <div className="mt-auto flex flex-col gap-2 px-3 py-4">
@@ -286,6 +300,7 @@ export function App() {
               }
             />
             <Route path="/settings" element={<SettingsView />} />
+            <Route path="/slack" element={<SlackView />} />
           </Routes>
         </main>
 
@@ -331,6 +346,26 @@ export function App() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="slack-enabled"
+                  checked={newSlackEnabled}
+                  onChange={(e) => setNewSlackEnabled(e.target.checked)}
+                  disabled={!slackConfigured}
+                  className="size-4 rounded border"
+                />
+                <Label
+                  htmlFor="slack-enabled"
+                  className={`text-sm ${!slackConfigured ? "text-muted-foreground" : ""}`}
+                  title={!slackConfigured ? "Configure Slack credentials in the Slack tab first" : ""}
+                >
+                  Enable Slack integration
+                </Label>
+                {!slackConfigured && (
+                  <span className="text-xs text-muted-foreground">(not configured)</span>
+                )}
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <Button

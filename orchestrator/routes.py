@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import time
 import uuid
 from collections import defaultdict, deque
@@ -58,9 +59,12 @@ from orchestrator.models import (
     UserMessageFrame,
 )
 from orchestrator.settings import get_all_settings, get_setting, set_setting
+from orchestrator.slack_routes import router as slack_router
+from orchestrator.slack_routes import _read_slack_config
 from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WebSocketManager
 
 router = APIRouter(prefix="/api")
+router.include_router(slack_router)
 
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 10
@@ -115,14 +119,38 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
                 config_path = legacy
                 break
         else:
-            return None
+            config_path = None
 
-    try:
-        mcp_config = json.loads(config_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
+    mcp_config: dict = {"mcpServers": {}}
+    if config_path:
+        try:
+            mcp_config = json.loads(config_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    mcp_config.setdefault("mcpServers", {})
 
-    if not mcp_config.get("mcpServers"):
+    # Inject Slack MCP server if globally configured and enabled for this agent
+    slack_config = _read_slack_config()
+    if slack_config:
+        db = await get_db()
+        async with db.execute(
+            "SELECT slack_enabled FROM agents WHERE id = ?", (agent_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row and row[0]:
+            mcp_config["mcpServers"]["slack"] = {
+                "command": sys.executable,
+                "args": ["-m", "integrations.slack_mcp"],
+                "env": {
+                    "SLACK_XOXC_TOKEN": slack_config["xoxc_token"],
+                    "SLACK_D_COOKIE": slack_config["d_cookie"],
+                    "MY_MEMBER_ID": slack_config.get("member_id", ""),
+                },
+                "timeout": 30.0,
+            }
+            logger.info("Injected Slack MCP server for agent %s", agent_id)
+
+    if not mcp_config["mcpServers"]:
         return None
 
     manager = McpServerManager()
@@ -163,19 +191,23 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     host_dir = create_agent_workspace(agent_id, req.agent_type)
 
     await db.execute(
-        "INSERT INTO agents (id, name, agent_type, host_dir) VALUES (?, ?, ?, ?)",
-        (agent_id, req.name, req.agent_type, str(host_dir)),
+        "INSERT INTO agents (id, name, agent_type, host_dir, slack_enabled) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (agent_id, req.name, req.agent_type, str(host_dir),
+         1 if req.slack_enabled else 0),
     )
     await db.commit()
 
     async with db.execute(
-        "SELECT id, name, agent_type, status, created_at FROM agents WHERE id = ?",
+        "SELECT id, name, agent_type, status, created_at, slack_enabled "
+        "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
 
     return AgentResponse(
-        id=row[0], name=row[1], agent_type=row[2], status=row[3], created_at=row[4]
+        id=row[0], name=row[1], agent_type=row[2], status=row[3], created_at=row[4],
+        slack_enabled=bool(row[5]),
     )
 
 
@@ -189,7 +221,8 @@ async def list_agents() -> list[AgentResponse]:
         "  (SELECT COUNT(*) FROM sessions s "
         "   JOIN agent_containers ac ON ac.session_id = s.id "
         "   WHERE ac.agent_id = a.id AND ac.status IN ('running', 'idle', 'starting')) "
-        "   AS active_session_count "
+        "   AS active_session_count, "
+        "  a.slack_enabled "
         "FROM agents a WHERE a.status = 'active' ORDER BY a.created_at"
     ) as cur:
         rows = await cur.fetchall()
@@ -197,6 +230,7 @@ async def list_agents() -> list[AgentResponse]:
         AgentResponse(
             id=r[0], name=r[1], agent_type=r[2], status=r[3], created_at=r[4],
             container_status=r[5], active_session_count=r[6] or 0,
+            slack_enabled=bool(r[7]),
         )
         for r in rows
     ]
@@ -206,8 +240,8 @@ async def list_agents() -> list[AgentResponse]:
 async def get_agent(agent_id: str) -> AgentDetailResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, agent_type, status, created_at, host_dir FROM agents "
-        "WHERE id = ?",
+        "SELECT id, name, agent_type, status, created_at, host_dir, slack_enabled "
+        "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
@@ -222,6 +256,7 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
     return AgentDetailResponse(
         id=row[0], name=row[1], agent_type=row[2], status=row[3],
         created_at=row[4], claude_md=claude_md, soul_md=soul_md, memory_md=memory_md,
+        slack_enabled=bool(row[6]),
     )
 
 

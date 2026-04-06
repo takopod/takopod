@@ -77,4 +77,5 @@ export interface Agent {
   agent_type: string
   status: string
   created_at: string
+  slack_enabled?: boolean
 }

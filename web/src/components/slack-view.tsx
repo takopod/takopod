@@ -1,0 +1,338 @@
+import { useCallback, useEffect, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { RefreshCw, Trash2 } from "lucide-react"
+import type { Agent } from "@/lib/types"
+
+interface SlackConfig {
+  configured: boolean
+  xoxc_token?: string
+  d_cookie?: string
+  member_id?: string
+}
+
+interface SlackStatus {
+  connected: boolean
+  team?: string
+  user?: string
+  error?: string
+}
+
+interface AgentSlack {
+  agent: Agent
+  enabled: boolean
+}
+
+export function SlackView() {
+  const [config, setConfig] = useState<SlackConfig>({ configured: false })
+  const [status, setStatus] = useState<SlackStatus | null>(null)
+  const [agents, setAgents] = useState<AgentSlack[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [toggling, setToggling] = useState<string | null>(null)
+
+  const [token, setToken] = useState("")
+  const [cookie, setCookie] = useState("")
+  const [memberId, setMemberId] = useState("")
+
+  const fetchConfig = useCallback(async () => {
+    const res = await fetch("/api/slack/config")
+    if (res.ok) {
+      const data = await res.json()
+      setConfig(data)
+      if (data.configured) {
+        setMemberId(data.member_id || "")
+      }
+    }
+  }, [])
+
+  const fetchStatus = useCallback(async () => {
+    setTesting(true)
+    try {
+      const res = await fetch("/api/slack/status")
+      if (res.ok) setStatus(await res.json())
+    } finally {
+      setTesting(false)
+    }
+  }, [])
+
+  const fetchAgents = useCallback(async () => {
+    const res = await fetch("/api/agents")
+    if (!res.ok) return
+    const agentList: Agent[] = await res.json()
+    setAgents(
+      agentList.map((agent) => ({
+        agent,
+        enabled: agent.slack_enabled ?? false,
+      })),
+    )
+  }, [])
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      await Promise.all([fetchConfig(), fetchAgents()])
+    } finally {
+      setLoading(false)
+    }
+  }, [fetchConfig, fetchAgents])
+
+  useEffect(() => {
+    loadAll()
+  }, [loadAll])
+
+  useEffect(() => {
+    if (config.configured) fetchStatus()
+  }, [config.configured, fetchStatus])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const res = await fetch("/api/slack/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          xoxc_token: token,
+          d_cookie: cookie,
+          member_id: memberId,
+        }),
+      })
+      if (res.ok) {
+        setConfig(await res.json())
+        setToken("")
+        setCookie("")
+        fetchStatus()
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDisconnect = async () => {
+    await fetch("/api/slack/config", { method: "DELETE" })
+    setConfig({ configured: false })
+    setStatus(null)
+    setToken("")
+    setCookie("")
+    setMemberId("")
+  }
+
+  const handleToggleAgent = async (agentId: string, currentEnabled: boolean) => {
+    setToggling(agentId)
+    try {
+      const res = await fetch(`/api/agents/${agentId}/slack`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !currentEnabled }),
+      })
+      if (res.ok) {
+        setAgents((prev) =>
+          prev.map((a) =>
+            a.agent.id === agentId ? { ...a, enabled: !currentEnabled } : a,
+          ),
+        )
+      }
+    } finally {
+      setToggling(null)
+    }
+  }
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b px-4 py-2">
+        <span className="text-sm font-medium">Slack Integration</span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={loadAll}
+          disabled={loading}
+        >
+          <RefreshCw
+            className={`size-3.5 ${loading ? "animate-spin" : ""}`}
+          />
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="mx-auto max-w-lg space-y-6">
+          {/* Connection Status */}
+          {config.configured && (
+            <div className="rounded-md border px-4 py-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Connection</span>
+                <div className="flex items-center gap-2">
+                  {status ? (
+                    <Badge
+                      variant={status.connected ? "default" : "destructive"}
+                    >
+                      {status.connected
+                        ? `Connected as ${status.user}`
+                        : "Disconnected"}
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary">Checking...</Badge>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={fetchStatus}
+                    disabled={testing}
+                  >
+                    <RefreshCw
+                      className={`size-3 ${testing ? "animate-spin" : ""}`}
+                    />
+                  </Button>
+                </div>
+              </div>
+              {status?.connected && status.team && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Workspace: {status.team}
+                </div>
+              )}
+              {status && !status.connected && status.error && (
+                <div className="mt-1 text-xs text-destructive">
+                  {status.error}
+                </div>
+              )}
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                <div>Token: {config.xoxc_token}</div>
+                <div>Cookie: {config.d_cookie}</div>
+                <div>Member ID: {config.member_id}</div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDisconnect}
+                >
+                  <Trash2 className="mr-1.5 size-3" />
+                  Disconnect
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Setup Form */}
+          {!config.configured && (
+            <div className="rounded-md border px-4 py-3">
+              <div className="mb-3 text-sm font-medium">
+                Connect Slack
+              </div>
+              <div className="space-y-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="slack-token" className="text-xs">
+                    xoxc Token
+                  </Label>
+                  <Input
+                    id="slack-token"
+                    type="password"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    placeholder="xoxc-..."
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="slack-cookie" className="text-xs">
+                    d Cookie
+                  </Label>
+                  <Input
+                    id="slack-cookie"
+                    type="password"
+                    value={cookie}
+                    onChange={(e) => setCookie(e.target.value)}
+                    placeholder="xoxd-..."
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="slack-member" className="text-xs">
+                    Your Member ID
+                  </Label>
+                  <Input
+                    id="slack-member"
+                    value={memberId}
+                    onChange={(e) => setMemberId(e.target.value)}
+                    placeholder="U01234567"
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  To find these values: Open Slack in your browser, open
+                  DevTools (F12), go to Application &gt; Cookies, copy the
+                  &quot;d&quot; cookie value. For the token, look in Network
+                  tab for any API call and find the &quot;token&quot; form
+                  parameter starting with &quot;xoxc-&quot;. Your Member ID
+                  is in your Slack profile.
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    onClick={handleSave}
+                    disabled={saving || !token || !cookie || !memberId}
+                  >
+                    {saving ? "Saving..." : "Save & Connect"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Per-Agent Toggle */}
+          <div className="rounded-md border px-4 py-3">
+            <div className="mb-3 text-sm font-medium">Agent Access</div>
+            {agents.length === 0 && !loading && (
+              <p className="text-xs text-muted-foreground">
+                No agents found.
+              </p>
+            )}
+            <div className="space-y-2">
+              {agents.map(({ agent, enabled }) => (
+                <div
+                  key={agent.id}
+                  className="flex items-center justify-between rounded-md border px-3 py-2"
+                >
+                  <div>
+                    <div className="text-sm">{agent.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {agent.agent_type}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleToggleAgent(agent.id, enabled)}
+                    disabled={
+                      !config.configured || toggling === agent.id
+                    }
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                      enabled ? "bg-primary" : "bg-muted"
+                    } ${!config.configured || toggling === agent.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                    title={
+                      !config.configured
+                        ? "Configure Slack credentials first"
+                        : enabled
+                          ? "Disable Slack for this agent"
+                          : "Enable Slack for this agent"
+                    }
+                  >
+                    <span
+                      className={`pointer-events-none inline-block size-5 rounded-full bg-background shadow-sm ring-0 transition-transform ${
+                        enabled ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {config.configured && agents.length > 0 && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Agents with Slack enabled will have access to read channels
+                and send notes to yourself. Restart the agent&apos;s worker
+                after toggling for changes to take effect.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

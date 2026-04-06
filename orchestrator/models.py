@@ -33,6 +33,7 @@ class StatusFrame(BaseModel):
 class CreateAgentRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     agent_type: str = "default"
+    slack_enabled: bool = False
 
 
 class AgentResponse(BaseModel):
@@ -43,6 +44,7 @@ class AgentResponse(BaseModel):
     created_at: str
     container_status: str | None = None
     active_session_count: int = 0
+    slack_enabled: bool = False
 
 
 class AgentDetailResponse(AgentResponse):
@@ -137,3 +139,13 @@ class ScheduleResponse(BaseModel):
     last_result: str | None
     status: str
     created_at: str
+
+
+class SlackConfigRequest(BaseModel):
+    xoxc_token: str
+    d_cookie: str
+    member_id: str
+
+
+class SlackAgentToggle(BaseModel):
+    enabled: bool
