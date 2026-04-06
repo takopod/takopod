@@ -105,6 +105,27 @@ class ToolConfigRequest(BaseModel):
     permission_mode: str = "acceptEdits"
 
 
+class CreateSkillRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9-]*$")
+    description: str = ""
+    content: str = ""
+
+
+class UpdateSkillRequest(BaseModel):
+    content: str
+
+
+class SkillSummary(BaseModel):
+    id: str
+    name: str
+    description: str
+
+
+class SkillDetail(SkillSummary):
+    content: str
+    files: list[str] = []
+
+
 class ScheduleResponse(BaseModel):
     id: str
     agent_id: str

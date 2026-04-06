@@ -86,6 +86,13 @@ def create_agent_workspace(
         elif (template_dir / filename).is_file():
             shutil.copy2(template_dir / filename, target)
 
+    # Copy skill templates if they exist
+    template_skills = template_dir / ".claude" / "skills"
+    if template_skills.is_dir():
+        dest_skills = host_dir / ".claude" / "skills"
+        dest_skills.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(template_skills, dest_skills, dirs_exist_ok=True)
+
     # MCP server configuration (stored outside workspace so containers can't read secrets)
     mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
     MCP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)

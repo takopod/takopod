@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { FileBrowser } from "@/components/file-browser"
+import { SkillsPanel } from "@/components/skills-panel"
 import type { Agent } from "@/lib/types"
 import { ArrowLeft, Pencil, Plus, Square, Trash2, X } from "lucide-react"
 
@@ -423,8 +424,9 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
 
   const showFileBrowser = file === "files"
   const showMcpConfig = file === "mcp"
+  const showSkills = file === "skills"
   const openFile =
-    !showFileBrowser && !showMcpConfig && FILE_MAP.find((f) => f.key === file)
+    !showFileBrowser && !showMcpConfig && !showSkills && FILE_MAP.find((f) => f.key === file)
       ? (file as FileKey)
       : null
 
@@ -499,6 +501,8 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
           </div>
         ) : showMcpConfig ? (
           <McpConfigPanel agentId={agentId} />
+        ) : showSkills ? (
+          <SkillsPanel agentId={agentId} />
         ) : showFileBrowser ? (
           <FileBrowser agentId={agentId} />
         ) : !openFile ? (
@@ -553,6 +557,12 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                 className="rounded-md px-3 py-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
               >
                 MCP Servers
+              </Link>
+              <Link
+                to={`/agents/${agentId}/skills`}
+                className="rounded-md px-3 py-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                Skills
               </Link>
             </div>
           </div>

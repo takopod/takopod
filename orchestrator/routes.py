@@ -3,13 +3,23 @@ import dataclasses
 import json
 import logging
 import os
+import re
+import shutil
 import time
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from orchestrator.container_manager import (
@@ -32,15 +42,19 @@ from orchestrator.models import (
     AgentResponse,
     ContainerResponse,
     CreateAgentRequest,
+    CreateSkillRequest,
     ErrorFrame,
     FileEntry,
     McpConfigRequest,
     QueueStatusFrame,
     ScheduleResponse,
+    SkillDetail,
+    SkillSummary,
     SystemCommandFrame,
     SystemErrorFrame,
     ToolConfigRequest,
     UpdateAgentRequest,
+    UpdateSkillRequest,
     UserMessageFrame,
 )
 from orchestrator.settings import get_all_settings, get_setting, set_setting
@@ -459,6 +473,198 @@ async def put_tool_config(agent_id: str, req: ToolConfigRequest):
     data = req.model_dump()
     tools_path.write_text(json.dumps(data, indent=2))
     return data
+
+
+# --- Skills API ---
+
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
+
+
+def _parse_skill_frontmatter(content: str) -> tuple[str, str]:
+    """Extract name and description from SKILL.md YAML frontmatter."""
+    m = _FRONTMATTER_RE.match(content)
+    if not m:
+        return "", ""
+    try:
+        import yaml
+
+        data = yaml.safe_load(m.group(1))
+        if not isinstance(data, dict):
+            return "", ""
+        return str(data.get("name", "")), str(data.get("description", ""))
+    except Exception:
+        return "", ""
+
+
+def _skills_dir(host_dir: Path) -> Path:
+    return host_dir / ".claude" / "skills"
+
+
+def _collect_supporting_files(skill_dir: Path) -> list[str]:
+    """List supporting files in a skill directory (excludes SKILL.md)."""
+    files: list[str] = []
+    for p in sorted(skill_dir.rglob("*")):
+        if p.is_file() and p.name != "SKILL.md":
+            files.append(str(p.relative_to(skill_dir)))
+    return files
+
+
+@router.get("/agents/{agent_id}/skills")
+async def list_skills(agent_id: str) -> list[SkillSummary]:
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    sdir = _skills_dir(host_dir)
+    if not sdir.is_dir():
+        return []
+    result: list[SkillSummary] = []
+    for d in sorted(sdir.iterdir()):
+        if not d.is_dir():
+            continue
+        skill_md = d / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        name, desc = _parse_skill_frontmatter(skill_md.read_text())
+        result.append(SkillSummary(
+            id=d.name,
+            name=name or d.name,
+            description=desc,
+        ))
+    return result
+
+
+@router.get("/agents/{agent_id}/skills/{skill_id}")
+async def get_skill(agent_id: str, skill_id: str) -> SkillDetail:
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    skill_dir = _skills_dir(host_dir) / skill_id
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        raise HTTPException(status_code=404, detail="Skill not found")
+    content = skill_md.read_text()
+    name, desc = _parse_skill_frontmatter(content)
+    return SkillDetail(
+        id=skill_id,
+        name=name or skill_id,
+        description=desc,
+        content=content,
+        files=_collect_supporting_files(skill_dir),
+    )
+
+
+@router.post("/agents/{agent_id}/skills")
+async def create_skill(agent_id: str, req: CreateSkillRequest) -> SkillDetail:
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    skill_dir = _skills_dir(host_dir) / req.name
+    if skill_dir.exists():
+        raise HTTPException(status_code=409, detail=f"Skill '{req.name}' already exists")
+    skill_dir.mkdir(parents=True)
+
+    content = req.content
+    if not content.strip():
+        content = (
+            f"---\nname: {req.name}\n"
+            f"description: {req.description}\n"
+            f"---\n\n# {req.name}\n\nTODO: Add skill instructions here.\n"
+        )
+    (skill_dir / "SKILL.md").write_text(content)
+
+    name, desc = _parse_skill_frontmatter(content)
+    return SkillDetail(
+        id=req.name,
+        name=name or req.name,
+        description=desc,
+        content=content,
+        files=[],
+    )
+
+
+@router.put("/agents/{agent_id}/skills/{skill_id}")
+async def update_skill(agent_id: str, skill_id: str, req: UpdateSkillRequest) -> SkillDetail:
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    skill_dir = _skills_dir(host_dir) / skill_id
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        raise HTTPException(status_code=404, detail="Skill not found")
+    skill_md.write_text(req.content)
+    name, desc = _parse_skill_frontmatter(req.content)
+    return SkillDetail(
+        id=skill_id,
+        name=name or skill_id,
+        description=desc,
+        content=req.content,
+        files=_collect_supporting_files(skill_dir),
+    )
+
+
+@router.delete("/agents/{agent_id}/skills/{skill_id}")
+async def delete_skill(agent_id: str, skill_id: str):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    skill_dir = _skills_dir(host_dir) / skill_id
+    if not skill_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Skill not found")
+    shutil.rmtree(skill_dir)
+    return {"status": "ok", "skill_id": skill_id}
+
+
+@router.post("/agents/{agent_id}/skills/{skill_id}/files")
+async def upload_skill_files(
+    agent_id: str, skill_id: str, files: list[UploadFile],
+):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    skill_dir = _skills_dir(host_dir) / skill_id
+    if not skill_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    uploaded: list[str] = []
+    for f in files:
+        if not f.filename:
+            continue
+        # Prevent path traversal
+        rel = Path(f.filename)
+        if ".." in rel.parts:
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {f.filename}")
+        dest = skill_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        data = await f.read()
+        dest.write_bytes(data)
+        if rel.suffix in (".sh", ".py"):
+            dest.chmod(0o755)
+        uploaded.append(str(rel))
+
+    return {"status": "ok", "uploaded": uploaded}
+
+
+@router.get("/agents/{agent_id}/skills/{skill_id}/files/{file_path:path}")
+async def get_skill_file(agent_id: str, skill_id: str, file_path: str):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    skill_dir = _skills_dir(host_dir) / skill_id
+    if not skill_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Skill not found")
+    target = (skill_dir / file_path).resolve()
+    # Ensure target is within skill_dir (path traversal guard)
+    if not str(target).startswith(str(skill_dir.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(target)
+
+
+@router.delete("/agents/{agent_id}/skills/{skill_id}/files/{file_path:path}")
+async def delete_skill_file(agent_id: str, skill_id: str, file_path: str):
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    skill_dir = _skills_dir(host_dir) / skill_id
+    if not skill_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Skill not found")
+    target = (skill_dir / file_path).resolve()
+    if not str(target).startswith(str(skill_dir.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    target.unlink()
+    # Clean up empty parent directories
+    parent = target.parent
+    while parent != skill_dir and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
+    return {"status": "ok", "deleted": file_path}
 
 
 # --- Containers API ---

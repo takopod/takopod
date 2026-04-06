@@ -162,9 +162,18 @@ async def run_query(
     if mcp_proxy_server:
         mcp_servers["proxy"] = mcp_proxy_server
 
+    # Check if skills exist to enable the Skill tool
+    skills_dir = WORKSPACE / ".claude" / "skills"
+    has_skills = skills_dir.is_dir() and any(skills_dir.iterdir())
+
+    allowed = [*builtin_tools, *SCHEDULE_TOOL_NAMES, *mcp_proxy_tool_names]
+    if has_skills:
+        allowed.append("Skill")
+
     opts_kwargs: dict[str, Any] = {
         "cwd": str(WORKSPACE),
-        "allowed_tools": [*builtin_tools, *SCHEDULE_TOOL_NAMES, *mcp_proxy_tool_names],
+        "allowed_tools": allowed,
+        "setting_sources": ["project"],
         "permission_mode": permission_mode,
         "system_prompt": system_prompt,
         "max_turns": MAX_TURNS,
