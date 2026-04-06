@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,7 +20,6 @@ interface SkillDetail extends SkillSummary {
 
 export function SkillsPanel({ agentId }: { agentId: string }) {
   const navigate = useNavigate()
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
@@ -31,6 +31,9 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
   const [newContent, setNewContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
+  const [uploadPrefix, setUploadPrefix] = useState("")
+  const [uploadFiles, setUploadFiles] = useState<FileList | null>(null)
 
   const fetchSkills = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/skills`)
@@ -122,19 +125,26 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
     }
   }
 
-  const handleUpload = async (files: FileList | null) => {
-    if (!files || !selected) return
+  const handleUpload = async () => {
+    if (!uploadFiles || !selected) return
+    setSaving(true)
+    const prefix = uploadPrefix.trim().replace(/^\/+|\/+$/g, "")
     const form = new FormData()
-    for (const f of files) {
-      form.append("files", f)
+    for (const f of uploadFiles) {
+      const filename = prefix ? `${prefix}/${f.name}` : f.name
+      form.append("files", f, filename)
     }
     const res = await fetch(
       `/api/agents/${agentId}/skills/${selected.id}/files`,
       { method: "POST", body: form },
     )
     if (res.ok) {
+      setShowUpload(false)
+      setUploadPrefix("")
+      setUploadFiles(null)
       await handleSelect(selected.id)
     }
+    setSaving(false)
   }
 
   const handleDeleteFile = async (filePath: string) => {
@@ -151,6 +161,7 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
   // Detail view for a selected skill
   if (selected) {
     return (
+      <>
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-3 border-b px-4 py-2">
           <Button
@@ -229,19 +240,13 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => setShowUpload(true)}
                 >
                   <Upload className="mr-1.5 size-3.5" />
                   Upload
                 </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => handleUpload(e.target.files)}
-                />
               </div>
+
               {selected.files.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   No supporting files. Upload scripts, templates, or reference
@@ -270,6 +275,75 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
           </div>
         </div>
       </div>
+
+      {showUpload && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg border bg-background p-6 shadow-lg">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-medium">Upload File</h2>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => {
+                  setShowUpload(false)
+                  setUploadPrefix("")
+                  setUploadFiles(null)
+                }}
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-sm">Subfolder (optional)</Label>
+                <Input
+                  value={uploadPrefix}
+                  onChange={(e) => setUploadPrefix(e.target.value)}
+                  placeholder="e.g. templates"
+                  autoFocus
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-sm">File</Label>
+                <input
+                  type="file"
+                  multiple
+                  className="text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-1 file:text-sm file:font-medium file:text-foreground hover:file:bg-accent"
+                  onChange={(e) => setUploadFiles(e.target.files)}
+                />
+              </div>
+              {uploadFiles && uploadFiles.length > 0 && uploadPrefix.trim() && (
+                <p className="text-xs text-muted-foreground">
+                  Will upload to{" "}
+                  <code>{uploadPrefix.trim().replace(/^\/+|\/+$/g, "")}/</code>
+                </p>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setShowUpload(false)
+                    setUploadPrefix("")
+                    setUploadFiles(null)
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleUpload}
+                  disabled={!uploadFiles || uploadFiles.length === 0 || saving}
+                >
+                  {saving ? "Uploading..." : "Upload"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+      </>
     )
   }
 

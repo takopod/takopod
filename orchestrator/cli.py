@@ -92,7 +92,7 @@ def stop() -> None:
         sys.exit(1)
 
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
     except ProcessLookupError:
         PID_FILE.unlink(missing_ok=True)
         print(f"Error: process {pid} not found (stale pid file removed)")
