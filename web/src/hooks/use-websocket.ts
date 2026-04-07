@@ -227,8 +227,11 @@ export function useWebSocket(agentId: string | null) {
     ws.send(JSON.stringify({ type: "system_command", command }))
 
     // Clear persisted messages so they don't reload on refresh
-    if (command === "clear_context" && agentId) {
-      fetch(`/api/agents/${agentId}/messages`, { method: "DELETE" }).catch(() => {})
+    if (command === "clear_context") {
+      setMessages([])
+      if (agentId) {
+        fetch(`/api/agents/${agentId}/messages`, { method: "DELETE" }).catch(() => {})
+      }
     }
   }, [agentId])
 

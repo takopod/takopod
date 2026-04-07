@@ -239,7 +239,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
     retrieved_context = None
     try:
         from worker.search import search_hybrid, format_context
-        results = await search_hybrid(conn, content)
+        results = await search_hybrid(conn, content, exclude_session_id=_orch_session_id)
         retrieved_context = format_context(results)
         if retrieved_context:
             sys.stderr.write(

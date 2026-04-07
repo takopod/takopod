@@ -68,15 +68,24 @@ def _sanitize_fts5_query(text: str) -> str:
 
 def search_bm25(
     conn: sqlite3.Connection, query_text: str, limit: int = SEARCH_TOP_K,
+    exclude_session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Full-text search via FTS5 BM25 ranking."""
     fts_query = _sanitize_fts5_query(query_text)
-    rows = conn.execute(
-        "SELECT message_id, content, role, session_id, created_at, rank "
-        "FROM message_fts WHERE message_fts MATCH ? "
-        "ORDER BY rank LIMIT ?",
-        (fts_query, limit),
-    ).fetchall()
+    if exclude_session_id:
+        rows = conn.execute(
+            "SELECT message_id, content, role, session_id, created_at, rank "
+            "FROM message_fts WHERE message_fts MATCH ? AND session_id != ? "
+            "ORDER BY rank LIMIT ?",
+            (fts_query, exclude_session_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT message_id, content, role, session_id, created_at, rank "
+            "FROM message_fts WHERE message_fts MATCH ? "
+            "ORDER BY rank LIMIT ?",
+            (fts_query, limit),
+        ).fetchall()
     return [
         {
             "message_id": r[0], "content": r[1], "role": r[2],
@@ -88,6 +97,7 @@ def search_bm25(
 
 async def search_vector(
     conn: sqlite3.Connection, query_text: str, limit: int = SEARCH_TOP_K,
+    exclude_session_id: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """Vector similarity search via sqlite-vec. Returns None if Ollama is unavailable."""
     try:
@@ -97,12 +107,20 @@ async def search_vector(
         sys.stderr.flush()
         return None
 
-    rows = conn.execute(
-        "SELECT content, role, session_id, message_id, created_at, distance "
-        "FROM message_vec WHERE embedding MATCH ? "
-        "ORDER BY distance LIMIT ?",
-        (json.dumps(query_vec), limit),
-    ).fetchall()
+    if exclude_session_id:
+        rows = conn.execute(
+            "SELECT content, role, session_id, message_id, created_at, distance "
+            "FROM message_vec WHERE embedding MATCH ? AND session_id != ? "
+            "ORDER BY distance LIMIT ?",
+            (json.dumps(query_vec), exclude_session_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT content, role, session_id, message_id, created_at, distance "
+            "FROM message_vec WHERE embedding MATCH ? "
+            "ORDER BY distance LIMIT ?",
+            (json.dumps(query_vec), limit),
+        ).fetchall()
     return [
         {
             "message_id": r[3], "content": r[0], "role": r[1],
@@ -114,10 +132,11 @@ async def search_vector(
 
 async def search_hybrid(
     conn: sqlite3.Connection, query_text: str, limit: int = SEARCH_RESULTS,
+    exclude_session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid search: BM25 + vector, merged with Reciprocal Rank Fusion."""
-    bm25_results = search_bm25(conn, query_text)
-    vec_results = await search_vector(conn, query_text)
+    bm25_results = search_bm25(conn, query_text, exclude_session_id=exclude_session_id)
+    vec_results = await search_vector(conn, query_text, exclude_session_id=exclude_session_id)
 
     if vec_results is None:
         # Ollama down — BM25 only
