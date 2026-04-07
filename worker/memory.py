@@ -32,8 +32,16 @@ MAX_CONTINUATION_FILES = 3  # compact when a 4th file would be created
 
 SUMMARIZE_SYSTEM_PROMPT = (
     "You are a session summarizer. Produce a concise summary of the following "
-    "conversation. Focus on: topics discussed, decisions made, key facts learned, "
-    "and any unresolved questions. Output only the summary, no preamble."
+    "conversation. Focus on:\n"
+    "- What the user asked for or wanted to accomplish (their intent)\n"
+    "- Decisions made and conclusions reached\n"
+    "- Unresolved questions or next steps\n\n"
+    "Important: Do NOT include specific tool results, search results, or "
+    "intermediate findings as facts. For example, if a search returned results "
+    "from a specific channel, do not record that channel as the definitive "
+    "source — the search may have been incomplete. Summarize the user's intent "
+    "and what was or wasn't resolved, not the raw data returned by tools.\n\n"
+    "Output only the summary, no preamble."
 )
 
 COMPACT_SYSTEM_PROMPT = (

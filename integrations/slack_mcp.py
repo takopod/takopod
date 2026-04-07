@@ -38,25 +38,39 @@ def _format_message(msg: dict) -> str:
 
 @mcp.tool()
 async def list_channels() -> str:
-    """List Slack channels you belong to. Returns channel ID and name for each."""
+    """List Slack channels and direct messages you belong to.
+
+    Returns channel ID, type, and name for each. Types include:
+    - Channels: public and private channels (prefixed with #)
+    - DMs: direct messages with individual users (prefixed with @)
+    - Group DMs: multi-person direct messages (prefixed with group:)
+
+    Use this to find conversation IDs for read_channel.
+    """
     try:
         channels = []
         cursor = None
         while True:
             response = client.conversations_list(
-                types="public_channel,private_channel",
+                types="public_channel,private_channel,im,mpim",
                 exclude_archived=True,
                 limit=200,
                 cursor=cursor or "",
             )
             for ch in response["channels"]:
-                if ch.get("is_member"):
+                if ch.get("is_im"):
+                    user_id = ch.get("user", "unknown")
+                    channels.append(f"{ch['id']}: @{user_id} (DM)")
+                elif ch.get("is_mpim"):
+                    name = ch.get("name", "group-dm")
+                    channels.append(f"{ch['id']}: group:{name}")
+                elif ch.get("is_member"):
                     channels.append(f"{ch['id']}: #{ch['name']}")
             cursor = response.get("response_metadata", {}).get("next_cursor")
             if not cursor:
                 break
         if not channels:
-            return "You are not a member of any channels."
+            return "You are not a member of any channels or DMs."
         return "\n".join(channels)
     except SlackApiError as e:
         return f"Slack API error: {e.response['error']}"
@@ -83,10 +97,22 @@ async def read_channel(channel_id: str, limit: int = 20) -> str:
 
 @mcp.tool()
 async def search_messages(query: str, limit: int = 10) -> str:
-    """Search Slack messages across all accessible channels.
+    """Search Slack messages across all accessible channels and DMs.
+
+    Supports Slack search operators:
+        from:@user     — messages sent by a specific user
+        in:#channel    — messages in a specific channel
+        in:@user       — messages in a DM with a specific user
+        to:@user       — messages directed at a user (DMs)
+        has:link       — messages containing links
+        before:2024-01-01 / after:2024-01-01 — date filters
+
+    For finding conversations WITH someone, search "in:@username" to get
+    the full DM thread, or combine "from:username" with a second search
+    for your own messages mentioning them.
 
     Args:
-        query: Search query string.
+        query: Slack search query string (supports operators above).
         limit: Number of results to return (max 50, default 10).
     """
     limit = min(max(1, limit), 50)
