@@ -53,6 +53,8 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
         print(f"Error: cannot open log file {log_file}: {exc}")
         sys.exit(1)
 
+    project_root = Path(__file__).resolve().parent.parent
+
     try:
         proc = subprocess.Popen(
             [
@@ -65,6 +67,7 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
                 "--port",
                 str(port),
             ],
+            cwd=project_root,
             stdout=log,
             stderr=log,
             stdin=subprocess.DEVNULL,
