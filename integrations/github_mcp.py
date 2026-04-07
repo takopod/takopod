@@ -149,16 +149,14 @@ async def list_pull_requests(owner: str, repo: str, state: str = "open") -> str:
 
 @mcp.tool()
 async def search_pull_requests(
-    author: str = "", state: str = "", repo: str = "", query: str = "", per_page: int = 10
+    author: str = GITHUB_USERNAME, state: str = "", repo: str = "", query: str = "", per_page: int = 10
 ) -> str:
-    """Search pull requests across repositories. Useful for finding your own PRs.
-
-    The authenticated GitHub user is: {username}
+    """Search pull requests. Defaults to PRs authored by the authenticated user.
 
     Args:
-        author: Filter by PR author username. Leave empty to search all authors.
+        author: GitHub username to filter by. Defaults to the authenticated user ({username}). Pass "" to search all authors.
         state: Filter by state — "open", "closed", or "" for all.
-        repo: Filter to a specific repo (format: "owner/repo"). Leave empty for all repos.
+        repo: Repository in "owner/repo" format (e.g. "quay/quay"). Leave empty for all repos.
         query: Additional search terms (matched against PR title/body).
         per_page: Number of results (max 30, default 10).
     """.format(username=GITHUB_USERNAME or "unknown")
