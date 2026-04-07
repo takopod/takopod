@@ -59,11 +59,30 @@ function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   )
 }
 
-export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
+interface ChatMessageListProps {
+  messages: ChatMessage[]
+  hasOlderMessages?: boolean
+  loadingOlder?: boolean
+  onLoadOlder?: () => void
+}
+
+export function ChatMessageList({
+  messages,
+  hasOlderMessages,
+  loadingOlder,
+  onLoadOlder,
+}: ChatMessageListProps) {
   const endRef = useRef<HTMLDivElement>(null)
+  const prevLastIdRef = useRef<string | null>(null)
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" })
+    const lastId = messages.length > 0 ? messages[messages.length - 1].id : null
+    // Only auto-scroll when the last message changes (new message appended),
+    // not when older messages are prepended at the top.
+    if (lastId !== prevLastIdRef.current) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" })
+    }
+    prevLastIdRef.current = lastId
   }, [messages])
 
   if (messages.length === 0) {
@@ -77,6 +96,18 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
       <div className="flex flex-col gap-3">
+        {hasOlderMessages && (
+          <div className="flex justify-center py-2">
+            <button
+              type="button"
+              onClick={onLoadOlder}
+              disabled={loadingOlder}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {loadingOlder ? "Loading..." : "Load older messages"}
+            </button>
+          </div>
+        )}
         {messages.map((msg) => (
           <div
             key={msg.id}
@@ -107,7 +138,7 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
                   ),
                 )
               ) : msg.status === "streaming" && !msg.content ? (
-                <span className="inline-block animate-pulse">...</span>
+                <span className="inline-block animate-pulse text-muted-foreground text-xs">&nbsp;</span>
               ) : msg.role === "assistant" ? (
                 <div className="markdown-body">
                   <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>

@@ -75,7 +75,7 @@ export function App() {
     }
   }, [selectedAgentId])
 
-  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect } =
+  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages } =
     useWebSocket(selectedAgentId)
 
   const fetchAgents = useCallback(async () => {
@@ -250,7 +250,7 @@ export function App() {
                         Clear Context
                       </Button>
                     </div>
-                    <ChatMessageList messages={messages} />
+                    <ChatMessageList messages={messages} hasOlderMessages={hasOlderMessages} loadingOlder={loadingOlder} onLoadOlder={loadOlderMessages} />
                     {(queueStatus.queued > 0 || queueStatus.in_flight > 0) &&
                       !messages.some((m) => m.status === "streaming") && (
                         <div className="flex items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
@@ -261,6 +261,12 @@ export function App() {
                     <ErrorNotification error={error} />
                     <SystemErrorNotification error={systemError} />
                     <SessionEndedBanner reason={sessionEnded} onReconnect={reconnect} />
+                    {messages.some((m) => m.status === "streaming") && (
+                      <div className="flex items-center gap-2 border-t px-4 py-1.5 text-xs text-muted-foreground">
+                        <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
+                        {agents.find((a) => a.id === selectedAgentId)?.name ?? "Agent"} is typing...
+                      </div>
+                    )}
                     <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} />
                   </>
                 )

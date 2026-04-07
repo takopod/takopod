@@ -1115,7 +1115,7 @@ async def get_agent_messages(agent_id: str, limit: int = 100):
         "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_id "
-        "WHERE s.agent_id = ? "
+        "WHERE s.agent_id = ? AND m.visibility = 'visible' "
         "ORDER BY m.created_at DESC LIMIT ?",
         (agent_id, limit),
     ) as cur:
@@ -1129,6 +1129,88 @@ async def get_agent_messages(agent_id: str, limit: int = 100):
         }
         for r in reversed(rows)
     ]
+
+
+@router.patch("/agents/{agent_id}/messages")
+async def hide_agent_messages(agent_id: str):
+    """Mark all visible messages for an agent as hidden (used by Clear Context)."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE messages SET visibility = 'hidden' "
+        "WHERE visibility = 'visible' AND session_id IN "
+        "(SELECT id FROM sessions WHERE agent_id = ?)",
+        (agent_id,),
+    )
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.get("/agents/{agent_id}/messages/older")
+async def get_older_session_messages(agent_id: str, before: str | None = None):
+    """Return all messages from the next older session with hidden messages.
+
+    Paginated by session: each call returns one full session's worth of messages.
+    Pass ``before`` (ISO timestamp of the oldest currently-loaded message) to
+    page backwards through history.
+    """
+    db = await get_db()
+
+    if before:
+        # Find the most recent session with hidden messages older than the cursor
+        async with db.execute(
+            "SELECT DISTINCT s.id, s.created_at FROM sessions s "
+            "JOIN messages m ON m.session_id = s.id "
+            "WHERE s.agent_id = ? AND s.created_at < ? AND m.visibility = 'hidden' "
+            "ORDER BY s.created_at DESC LIMIT 1",
+            (agent_id, before),
+        ) as cur:
+            session_row = await cur.fetchone()
+    else:
+        # No cursor — find the most recent session with hidden messages
+        async with db.execute(
+            "SELECT DISTINCT s.id, s.created_at FROM sessions s "
+            "JOIN messages m ON m.session_id = s.id "
+            "WHERE s.agent_id = ? AND m.visibility = 'hidden' "
+            "ORDER BY s.created_at DESC LIMIT 1",
+            (agent_id,),
+        ) as cur:
+            session_row = await cur.fetchone()
+
+    if not session_row:
+        return {"messages": [], "session_id": None, "has_more": False}
+
+    target_session_id = session_row[0]
+    target_created_at = session_row[1]
+
+    # Fetch all hidden messages from this session
+    async with db.execute(
+        "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
+        "FROM messages m "
+        "WHERE m.session_id = ? AND m.visibility = 'hidden' "
+        "ORDER BY m.created_at",
+        (target_session_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    messages = [
+        {
+            "id": r[0], "role": r[1], "content": r[2],
+            "created_at": r[3], "metadata": r[4], "status": r[5],
+        }
+        for r in rows
+    ]
+
+    # Check if there are even older sessions with hidden messages
+    async with db.execute(
+        "SELECT 1 FROM sessions s "
+        "JOIN messages m ON m.session_id = s.id "
+        "WHERE s.agent_id = ? AND s.created_at < ? AND m.visibility = 'hidden' "
+        "LIMIT 1",
+        (agent_id, target_created_at),
+    ) as cur:
+        has_more = await cur.fetchone() is not None
+
+    return {"messages": messages, "session_id": target_session_id, "has_more": has_more}
 
 
 @router.get("/agents/{agent_id}/messages/{message_id}")
@@ -1149,19 +1231,6 @@ async def get_agent_message(agent_id: str, message_id: str):
         "id": row[0], "role": row[1], "content": row[2],
         "created_at": row[3], "metadata": row[4], "status": row[5],
     }
-
-
-@router.delete("/agents/{agent_id}/messages")
-async def clear_agent_messages(agent_id: str):
-    """Delete all messages for an agent (used by Clear Context)."""
-    db = await get_db()
-    await db.execute(
-        "DELETE FROM messages WHERE session_id IN "
-        "(SELECT id FROM sessions WHERE agent_id = ?)",
-        (agent_id,),
-    )
-    await db.commit()
-    return {"status": "ok"}
 
 
 # --- WebSocket ---

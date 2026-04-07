@@ -60,6 +60,8 @@ export function useWebSocket(agentId: string | null) {
   agentIdRef.current = agentId
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [hasOlderMessages, setHasOlderMessages] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [queueStatus, setQueueStatus] = useState<QueueStatusFrame>({
     type: "queue_status",
     queued: 0,
@@ -128,7 +130,10 @@ export function useWebSocket(agentId: string | null) {
         frame.type === "status" &&
         frame.status === "context_cleared"
       ) {
-        setMessages([])
+        // Messages already cleared optimistically in sendSystemCommand.
+        // Don't setMessages([]) here — it would wipe any message the user
+        // sent between the clear request and this server confirmation.
+        setHasOlderMessages(true)
       }
     }
 
@@ -226,14 +231,38 @@ export function useWebSocket(agentId: string | null) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     ws.send(JSON.stringify({ type: "system_command", command }))
 
-    // Clear persisted messages so they don't reload on refresh
+    // Hide persisted messages so they don't reload on refresh
     if (command === "clear_context") {
       setMessages([])
+      setHasOlderMessages(true)
       if (agentId) {
-        fetch(`/api/agents/${agentId}/messages`, { method: "DELETE" }).catch(() => {})
+        fetch(`/api/agents/${agentId}/messages`, { method: "PATCH" }).catch(() => {})
       }
     }
   }, [agentId])
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!agentId || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const oldest = messages[0]
+      const params = oldest
+        ? `?before=${encodeURIComponent(new Date(oldest.timestamp).toISOString())}`
+        : ""
+      const res = await fetch(`/api/agents/${agentId}/messages/older${params}`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.messages.length > 0) {
+        const olderMessages = (data.messages as ApiMessage[]).map(parseMessage)
+        setMessages((prev) => [...olderMessages, ...prev])
+      }
+      setHasOlderMessages(data.has_more)
+    } catch {
+      // ignore
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [agentId, loadingOlder, messages])
 
   const reconnect = useCallback(() => {
     setSessionEnded(null)
@@ -241,5 +270,5 @@ export function useWebSocket(agentId: string | null) {
     connect()
   }, [connect])
 
-  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect }
+  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages }
 }
