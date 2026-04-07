@@ -24,6 +24,20 @@ def _read_pid() -> int | None:
     return pid
 
 
+def _find_pid_by_port(port: int) -> int | None:
+    """Find PID of process listening on the given port via lsof."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().splitlines()[0])
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
 def start(host: str = "0.0.0.0", port: int = 8000) -> None:
     existing = _read_pid()
     if existing:
@@ -85,34 +99,54 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
     print(f"Check logs: {log_file}")
 
 
-def stop() -> None:
-    pid = _read_pid()
-    if not pid:
-        print("rhclaw is not running")
-        sys.exit(1)
-
+def _kill_and_wait(pid: int) -> None:
+    """Send SIGTERM to a process and wait for it to exit."""
     try:
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except ProcessLookupError:
-        PID_FILE.unlink(missing_ok=True)
-        print(f"Error: process {pid} not found (stale pid file removed)")
-        sys.exit(1)
+        # Process group gone, try killing just the pid directly
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+    except OSError:
+        # Fallback to direct kill (e.g., not a group leader)
+        os.kill(pid, signal.SIGTERM)
+
+    print(f"rhclaw stopping (pid {pid})...")
+    for _ in range(10):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(1)
+
+    # Still alive after 10s — escalate to SIGKILL
+    print(f"Process {pid} did not exit, sending SIGKILL...")
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def stop(port: int = 8000) -> None:
+    pid = _read_pid()
+    if not pid:
+        # PID file missing — check if something is still on the port
+        pid = _find_pid_by_port(port)
+        if not pid:
+            print("rhclaw is not running")
+            sys.exit(1)
+        print(f"rhclaw pid file missing but found process {pid} on port {port}")
+
+    try:
+        _kill_and_wait(pid)
     except PermissionError:
         print(f"Error: permission denied stopping process {pid}")
         sys.exit(1)
     except OSError as exc:
         print(f"Error: failed to stop rhclaw (pid {pid}): {exc}")
         sys.exit(1)
-
-    print(f"rhclaw stopping (pid {pid})...")
-    for _ in range(20):
-        try:
-            os.kill(pid, 0)  # Check if process still exists
-        except OSError:
-            break
-        time.sleep(1)
-    else:
-        print(f"Warning: process {pid} still running after 20s")
 
     PID_FILE.unlink(missing_ok=True)
     print("rhclaw stopped")
