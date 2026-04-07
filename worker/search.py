@@ -107,27 +107,24 @@ async def search_vector(
         sys.stderr.flush()
         return None
 
-    if exclude_session_id:
-        rows = conn.execute(
-            "SELECT content, role, session_id, message_id, created_at, distance "
-            "FROM message_vec WHERE embedding MATCH ? AND session_id != ? "
-            "ORDER BY distance LIMIT ?",
-            (json.dumps(query_vec), exclude_session_id, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT content, role, session_id, message_id, created_at, distance "
-            "FROM message_vec WHERE embedding MATCH ? "
-            "ORDER BY distance LIMIT ?",
-            (json.dumps(query_vec), limit),
-        ).fetchall()
-    return [
+    # sqlite-vec KNN queries don't support WHERE on auxiliary columns,
+    # so we over-fetch and post-filter when excluding a session.
+    fetch_limit = limit * 3 if exclude_session_id else limit
+    rows = conn.execute(
+        "SELECT content, role, session_id, message_id, created_at, distance "
+        "FROM message_vec WHERE embedding MATCH ? "
+        "ORDER BY distance LIMIT ?",
+        (json.dumps(query_vec), fetch_limit),
+    ).fetchall()
+    results = [
         {
             "message_id": r[3], "content": r[0], "role": r[1],
             "session_id": r[2], "created_at": r[4], "score": r[5],
         }
         for r in rows
+        if not exclude_session_id or r[2] != exclude_session_id
     ]
+    return results[:limit]
 
 
 async def search_hybrid(
