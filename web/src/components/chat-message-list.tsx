@@ -85,14 +85,6 @@ export function ChatMessageList({
     prevLastIdRef.current = lastId
   }, [messages])
 
-  if (messages.length === 0) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-muted-foreground">
-        <p className="text-sm">Send a message to get started.</p>
-      </div>
-    )
-  }
-
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
       <div className="flex flex-col gap-3">
@@ -106,6 +98,11 @@ export function ChatMessageList({
             >
               {loadingOlder ? "Loading..." : "Load older messages"}
             </button>
+          </div>
+        )}
+        {messages.length === 0 && (
+          <div className="flex flex-1 items-center justify-center text-muted-foreground py-8">
+            <p className="text-sm">Send a message to get started.</p>
           </div>
         )}
         {messages.map((msg) => (
