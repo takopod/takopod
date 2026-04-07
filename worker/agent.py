@@ -21,7 +21,7 @@ from claude_agent_sdk import (
 
 from worker.tools import (
     TOOL_NAMES as SCHEDULE_TOOL_NAMES,
-    create_mcp_proxy_server,
+    create_mcp_proxy_servers,
     create_schedule_server,
 )
 
@@ -155,12 +155,14 @@ async def run_query(
         return {}
 
     schedule_server = create_schedule_server()
-    mcp_proxy_server, mcp_proxy_tool_names = create_mcp_proxy_server()
+    mcp_proxy_servers = create_mcp_proxy_servers()
     builtin_tools, permission_mode = _load_tool_config()
 
     mcp_servers: dict[str, Any] = {"schedule": schedule_server}
-    if mcp_proxy_server:
-        mcp_servers["proxy"] = mcp_proxy_server
+    mcp_proxy_tool_names: list[str] = []
+    for server_name, proxy_server, proxy_tool_names in mcp_proxy_servers:
+        mcp_servers[server_name] = proxy_server
+        mcp_proxy_tool_names.extend(proxy_tool_names)
 
     # Check if skills exist to enable the Skill tool
     skills_dir = WORKSPACE / ".claude" / "skills"
