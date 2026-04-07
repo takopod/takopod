@@ -463,6 +463,60 @@ function SlackToggle({ agentId, initialEnabled }: { agentId: string; initialEnab
   )
 }
 
+function GitHubToggle({ agentId, initialEnabled }: { agentId: string; initialEnabled: boolean }) {
+  const [enabled, setEnabled] = useState(initialEnabled)
+  const [toggling, setToggling] = useState(false)
+
+  useEffect(() => {
+    setEnabled(initialEnabled)
+  }, [initialEnabled])
+
+  const handleToggle = async () => {
+    setToggling(true)
+    try {
+      const res = await fetch(`/api/agents/${agentId}/github`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !enabled }),
+      })
+      if (res.ok) setEnabled(!enabled)
+    } finally {
+      setToggling(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-md border px-4 py-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-medium">GitHub</div>
+          <div className="text-xs text-muted-foreground">
+            {enabled ? "Agent can monitor PRs and CI" : "GitHub tools disabled"}
+          </div>
+        </div>
+        <button
+          onClick={handleToggle}
+          disabled={toggling}
+          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+            enabled ? "bg-primary" : "bg-muted"
+          } ${toggling ? "opacity-50" : ""}`}
+        >
+          <span
+            className={`pointer-events-none inline-block size-5 rounded-full bg-background shadow-sm ring-0 transition-transform ${
+              enabled ? "translate-x-5" : "translate-x-0"
+            }`}
+          />
+        </button>
+      </div>
+      {enabled && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Restart the worker for changes to take effect.
+        </p>
+      )}
+    </div>
+  )
+}
+
 interface AgentsViewProps {
   agents: Agent[]
   onSelectAgent: (id: string) => void
@@ -621,6 +675,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
               </Link>
             </div>
             <SlackToggle agentId={agentId} initialEnabled={detail.slack_enabled ?? false} />
+            <GitHubToggle agentId={agentId} initialEnabled={detail.github_enabled ?? false} />
           </div>
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">

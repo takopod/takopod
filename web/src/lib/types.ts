@@ -78,4 +78,5 @@ export interface Agent {
   status: string
   created_at: string
   slack_enabled?: boolean
+  github_enabled?: boolean
 }

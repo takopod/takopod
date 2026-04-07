@@ -61,10 +61,13 @@ from orchestrator.models import (
 from orchestrator.settings import get_all_settings, get_setting, set_setting
 from orchestrator.slack_routes import router as slack_router
 from orchestrator.slack_routes import _read_slack_config
+from orchestrator.github_routes import router as github_router
+from orchestrator.github_routes import _read_github_config
 from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WebSocketManager
 
 router = APIRouter(prefix="/api")
 router.include_router(slack_router)
+router.include_router(github_router)
 
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 10
@@ -150,6 +153,26 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
             }
             logger.info("Injected Slack MCP server for agent %s", agent_id)
 
+    # Inject GitHub MCP server if globally configured and enabled for this agent
+    github_config = _read_github_config()
+    if github_config:
+        db = await get_db()
+        async with db.execute(
+            "SELECT github_enabled FROM agents WHERE id = ?", (agent_id,),
+        ) as cur:
+            gh_row = await cur.fetchone()
+        if gh_row and gh_row[0]:
+            mcp_config["mcpServers"]["github"] = {
+                "command": sys.executable,
+                "args": ["-m", "integrations.github_mcp"],
+                "env": {
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": github_config["personal_access_token"],
+                    "GITHUB_USERNAME": github_config.get("username", ""),
+                },
+                "timeout": 30.0,
+            }
+            logger.info("Injected GitHub MCP server for agent %s", agent_id)
+
     if not mcp_config["mcpServers"]:
         return None
 
@@ -191,15 +214,15 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     host_dir = create_agent_workspace(agent_id, req.agent_type)
 
     await db.execute(
-        "INSERT INTO agents (id, name, agent_type, host_dir, slack_enabled) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO agents (id, name, agent_type, host_dir, slack_enabled, github_enabled) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (agent_id, req.name, req.agent_type, str(host_dir),
-         1 if req.slack_enabled else 0),
+         1 if req.slack_enabled else 0, 1 if req.github_enabled else 0),
     )
     await db.commit()
 
     async with db.execute(
-        "SELECT id, name, agent_type, status, created_at, slack_enabled "
+        "SELECT id, name, agent_type, status, created_at, slack_enabled, github_enabled "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
@@ -207,7 +230,7 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
 
     return AgentResponse(
         id=row[0], name=row[1], agent_type=row[2], status=row[3], created_at=row[4],
-        slack_enabled=bool(row[5]),
+        slack_enabled=bool(row[5]), github_enabled=bool(row[6]),
     )
 
 
@@ -222,7 +245,8 @@ async def list_agents() -> list[AgentResponse]:
         "   JOIN agent_containers ac ON ac.session_id = s.id "
         "   WHERE ac.agent_id = a.id AND ac.status IN ('running', 'idle', 'starting')) "
         "   AS active_session_count, "
-        "  a.slack_enabled "
+        "  a.slack_enabled, "
+        "  a.github_enabled "
         "FROM agents a WHERE a.status = 'active' ORDER BY a.created_at"
     ) as cur:
         rows = await cur.fetchall()
@@ -230,7 +254,7 @@ async def list_agents() -> list[AgentResponse]:
         AgentResponse(
             id=r[0], name=r[1], agent_type=r[2], status=r[3], created_at=r[4],
             container_status=r[5], active_session_count=r[6] or 0,
-            slack_enabled=bool(r[7]),
+            slack_enabled=bool(r[7]), github_enabled=bool(r[8]),
         )
         for r in rows
     ]
@@ -240,7 +264,7 @@ async def list_agents() -> list[AgentResponse]:
 async def get_agent(agent_id: str) -> AgentDetailResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, agent_type, status, created_at, host_dir, slack_enabled "
+        "SELECT id, name, agent_type, status, created_at, host_dir, slack_enabled, github_enabled "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
@@ -256,7 +280,7 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
     return AgentDetailResponse(
         id=row[0], name=row[1], agent_type=row[2], status=row[3],
         created_at=row[4], claude_md=claude_md, soul_md=soul_md, memory_md=memory_md,
-        slack_enabled=bool(row[6]),
+        slack_enabled=bool(row[6]), github_enabled=bool(row[7]),
     )
 
 

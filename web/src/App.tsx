@@ -6,6 +6,7 @@ import { ContainersView } from "@/components/containers-view"
 import { SchedulesView } from "@/components/schedules-view"
 import { SettingsView } from "@/components/settings-view"
 import { SlackView } from "@/components/slack-view"
+import { GitHubView } from "@/components/github-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
@@ -66,6 +67,8 @@ export function App() {
   const [newAgentType, setNewAgentType] = useState("default")
   const [newSlackEnabled, setNewSlackEnabled] = useState(false)
   const [slackConfigured, setSlackConfigured] = useState(false)
+  const [newGitHubEnabled, setNewGitHubEnabled] = useState(false)
+  const [githubConfigured, setGithubConfigured] = useState(false)
 
   useEffect(() => {
     if (selectedAgentId) {
@@ -97,9 +100,10 @@ export function App() {
   }, [fetchAgents])
 
   const openCreateDialog = async () => {
-    const [templatesRes, slackRes] = await Promise.all([
+    const [templatesRes, slackRes, githubRes] = await Promise.all([
       fetch("/api/templates"),
       fetch("/api/slack/config"),
+      fetch("/api/github/config"),
     ])
     if (templatesRes.ok) {
       setTemplates(await templatesRes.json())
@@ -108,9 +112,14 @@ export function App() {
       const data = await slackRes.json()
       setSlackConfigured(data.configured)
     }
+    if (githubRes.ok) {
+      const data = await githubRes.json()
+      setGithubConfigured(data.configured)
+    }
     setNewAgentName("")
     setNewAgentType("default")
     setNewSlackEnabled(false)
+    setNewGitHubEnabled(false)
     setShowCreateDialog(true)
   }
 
@@ -120,7 +129,7 @@ export function App() {
     const res = await fetch("/api/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newAgentName.trim(), agent_type: newAgentType, slack_enabled: newSlackEnabled }),
+      body: JSON.stringify({ name: newAgentName.trim(), agent_type: newAgentType, slack_enabled: newSlackEnabled, github_enabled: newGitHubEnabled }),
     })
     if (res.ok) {
       const agent: Agent = await res.json()
@@ -195,6 +204,9 @@ export function App() {
             </NavLink>
             <NavLink to="/slack" match={currentPath === "/slack"}>
               Slack
+            </NavLink>
+            <NavLink to="/github" match={currentPath === "/github"}>
+              GitHub
             </NavLink>
           </div>
           <div className="mt-auto flex flex-col gap-2 px-3 py-4">
@@ -318,6 +330,7 @@ export function App() {
             />
             <Route path="/settings" element={<SettingsView />} />
             <Route path="/slack" element={<SlackView />} />
+            <Route path="/github" element={<GitHubView />} />
           </Routes>
         </main>
 
@@ -381,6 +394,26 @@ export function App() {
                   Enable Slack integration
                 </Label>
                 {!slackConfigured && (
+                  <span className="text-xs text-muted-foreground">(not configured)</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="github-enabled"
+                  checked={newGitHubEnabled}
+                  onChange={(e) => setNewGitHubEnabled(e.target.checked)}
+                  disabled={!githubConfigured}
+                  className="size-4 rounded border"
+                />
+                <Label
+                  htmlFor="github-enabled"
+                  className={`text-sm ${!githubConfigured ? "text-muted-foreground" : ""}`}
+                  title={!githubConfigured ? "Configure GitHub token in the GitHub tab first" : ""}
+                >
+                  Enable GitHub integration
+                </Label>
+                {!githubConfigured && (
                   <span className="text-xs text-muted-foreground">(not configured)</span>
                 )}
               </div>

@@ -34,6 +34,7 @@ class CreateAgentRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     agent_type: str = "default"
     slack_enabled: bool = False
+    github_enabled: bool = False
 
 
 class AgentResponse(BaseModel):
@@ -45,6 +46,7 @@ class AgentResponse(BaseModel):
     container_status: str | None = None
     active_session_count: int = 0
     slack_enabled: bool = False
+    github_enabled: bool = False
 
 
 class AgentDetailResponse(AgentResponse):
@@ -148,4 +150,12 @@ class SlackConfigRequest(BaseModel):
 
 
 class SlackAgentToggle(BaseModel):
+    enabled: bool
+
+
+class GitHubConfigRequest(BaseModel):
+    personal_access_token: str
+
+
+class GitHubAgentToggle(BaseModel):
     enabled: bool
