@@ -159,3 +159,44 @@ class GitHubConfigRequest(BaseModel):
 
 class GitHubAgentToggle(BaseModel):
     enabled: bool
+
+
+# --- Search Index ---
+
+
+class SearchIndexEntry(BaseModel):
+    message_id: str
+    content: str
+    role: str
+    session_id: str
+    created_at: str
+    rank: float = 0.0
+    has_embedding: bool = False
+
+
+class SearchIndexStats(BaseModel):
+    orchestrator_count: int
+    fts_count: int
+    vec_count: int
+
+
+class SearchIndexUpdateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+
+
+class ReindexRequest(BaseModel):
+    message_ids: list[str] | None = None
+
+
+class ReindexResponse(BaseModel):
+    indexed: int
+    errors: int
+    skipped_vectors: bool
+
+
+class MemoryFileEntry(BaseModel):
+    name: str
+    size: int
+    modified_at: str
+    content_preview: str
+    content: str

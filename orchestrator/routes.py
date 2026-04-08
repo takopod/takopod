@@ -63,11 +63,13 @@ from orchestrator.slack_routes import router as slack_router
 from orchestrator.slack_routes import _read_slack_config
 from orchestrator.github_routes import router as github_router
 from orchestrator.github_routes import _read_github_config
+from orchestrator.search_routes import router as search_router
 from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WebSocketManager
 
 router = APIRouter(prefix="/api")
 router.include_router(slack_router)
 router.include_router(github_router)
+router.include_router(search_router)
 
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 10

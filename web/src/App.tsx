@@ -7,6 +7,7 @@ import { SchedulesView } from "@/components/schedules-view"
 import { SettingsView } from "@/components/settings-view"
 import { SlackView } from "@/components/slack-view"
 import { GitHubView } from "@/components/github-view"
+import { SearchIndexView } from "@/components/search-index-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
@@ -208,6 +209,9 @@ export function App() {
             <NavLink to="/github" match={currentPath === "/github"}>
               GitHub
             </NavLink>
+            <NavLink to="/search-index" match={currentPath === "/search-index"}>
+              Search Index
+            </NavLink>
           </div>
           <div className="mt-auto flex flex-col gap-2 px-3 py-4">
             {agents.length > 0 && (
@@ -331,6 +335,7 @@ export function App() {
             <Route path="/settings" element={<SettingsView />} />
             <Route path="/slack" element={<SlackView />} />
             <Route path="/github" element={<GitHubView />} />
+            <Route path="/search-index" element={<SearchIndexView />} />
           </Routes>
         </main>
 
