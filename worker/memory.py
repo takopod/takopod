@@ -1,6 +1,7 @@
 """Session memory: summarization, daily memory file I/O, and context loading."""
 
 import asyncio
+import re
 import sqlite3
 import sys
 import time
@@ -44,6 +45,25 @@ SUMMARIZE_SYSTEM_PROMPT = (
     "Output only the summary, no preamble."
 )
 
+_RETRIEVED_CONTEXT_PATTERN = re.compile(
+    r"## Relevant Past Conversations\n+"
+    r"The following excerpts are from previous conversations and may be relevant:\n+"
+    r".*?(?=\n## |\Z)",
+    re.DOTALL,
+)
+
+
+def strip_retrieved_context(text: str) -> str:
+    """Remove the injected 'Relevant Past Conversations' block from text.
+
+    The agent system prompt injects a retrieval block with this header.
+    Stripping it before summarization prevents echo accumulation — where
+    Day N's summary re-summarizes Day N-1's retrieved context, causing
+    content to snowball across days.
+    """
+    return _RETRIEVED_CONTEXT_PATTERN.sub("", text).strip()
+
+
 COMPACT_SYSTEM_PROMPT = (
     "You are a memory compactor. The following contains multiple session summaries "
     "from the same day. Distill them into a single, coherent summary that preserves "
@@ -67,10 +87,12 @@ async def summarize_session(
         sys.stderr.flush()
         return None
 
-    # Format as transcript
+    # Format as transcript, stripping any injected retrieval blocks
     transcript_parts: list[str] = []
     for role, content in transcript_turns:
-        transcript_parts.append(f"[{role}]: {content}")
+        cleaned = strip_retrieved_context(content)
+        if cleaned:
+            transcript_parts.append(f"[{role}]: {cleaned}")
     transcript = "\n\n".join(transcript_parts)
 
     if len(transcript) > MAX_SUMMARY_INPUT:

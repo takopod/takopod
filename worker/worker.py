@@ -177,7 +177,7 @@ async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
 
 
 async def process_message(msg: dict[str, Any], conn) -> None:
-    global _session_id, _orch_session_id, _continuation_summary
+    global _session_id, _orch_session_id, _continuation_summary, _session_transcript
     msg_type = msg.get("type")
 
     if msg_type == "system_command":

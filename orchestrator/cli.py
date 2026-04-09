@@ -103,18 +103,17 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
 
 
 def _kill_and_wait(pid: int) -> None:
-    """Send SIGTERM to a process and wait for it to exit."""
+    """Send SIGTERM to the orchestrator process and wait for it to exit.
+
+    Only signals the orchestrator PID — not the process group — so that
+    the FastAPI lifespan shutdown handler can cleanly stop workers and
+    MCP servers without killing unrelated children (e.g. Chrome launched
+    by the Playwright MCP server).
+    """
     try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except ProcessLookupError:
-        # Process group gone, try killing just the pid directly
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-    except OSError:
-        # Fallback to direct kill (e.g., not a group leader)
         os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
 
     print(f"rhclaw stopping (pid {pid})...")
     for _ in range(10):

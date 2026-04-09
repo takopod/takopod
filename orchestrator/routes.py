@@ -1572,8 +1572,25 @@ async def _monitor_worker(agent_id: str) -> None:
         await _cancel_task(worker.polling_task)
         worker.polling_task = None
 
-    # Clean up dead container (outside lock — involves subprocess)
+    # Capture container logs before cleanup (container persists without --rm)
     container_name = f"rhclaw-{agent_id[:8]}"
+    try:
+        log_proc = await asyncio.create_subprocess_exec(
+            "/opt/podman/bin/podman", "logs", "--tail", "50", container_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        log_stdout, log_stderr = await log_proc.communicate()
+        crash_logs = (log_stdout.decode() + log_stderr.decode()).strip()
+        if crash_logs:
+            logger.error(
+                "Container logs for crashed agent %s:\n%s",
+                agent_id[:8], crash_logs,
+            )
+    except Exception:
+        pass
+
+    # Clean up dead container (outside lock — involves subprocess)
     await kill_container(container_name)
 
     # Update DB status

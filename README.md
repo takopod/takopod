@@ -14,6 +14,25 @@ make
 make build-worker
 ```
 
+## Ollama (Embedding Service)
+
+rhclaw uses Ollama with `nomic-embed-text` for embeddings, running as a Podman container.
+
+One-time setup (pulls the image and model):
+
+```
+make setup-ollama
+```
+
+Start/stop the Ollama container:
+
+```
+make start-ollama
+make stop-ollama
+```
+
+The container runs on the `rhclaw-internal` Podman network with 4 GB memory and 2 CPUs.
+
 ## Usage
 
 ```

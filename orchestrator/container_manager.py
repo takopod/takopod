@@ -159,7 +159,7 @@ async def spawn_container(
     await _run([PODMAN, "rm", "-f", container_name], check=False)
 
     cmd = [
-        PODMAN, "run", "--rm",
+        PODMAN, "run",
         "--name", container_name,
         "--network", NETWORK,
         "--label", "rhclaw.managed=true",
@@ -181,8 +181,8 @@ async def spawn_container(
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
 
     await db.execute(
@@ -235,7 +235,7 @@ async def spawn_scheduled_container(
     await _run([PODMAN, "rm", "-f", container_name], check=False)
 
     cmd = [
-        PODMAN, "run", "--rm",
+        PODMAN, "run",
         "--name", container_name,
         "--network", NETWORK,
         "--label", "rhclaw.managed=true",
@@ -257,8 +257,8 @@ async def spawn_scheduled_container(
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
 
     await db.execute(
