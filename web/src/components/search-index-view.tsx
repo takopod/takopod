@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from "react"
-import { Badge } from "@/components/ui/badge"
+import { useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -23,16 +23,16 @@ import {
 } from "lucide-react"
 
 interface IndexEntry {
-  message_id: string
+  chunk_key: string
   content: string
-  role: string
-  session_id: string
+  file_path: string
+  session_ref: string
   created_at: string
   rank: number
 }
 
 interface IndexStats {
-  orchestrator_count: number
+  memory_files_count: number
   fts_count: number
   vec_count: number
 }
@@ -51,11 +51,38 @@ interface Agent {
 }
 
 export function SearchIndexView() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [agents, setAgents] = useState<Agent[]>([])
-  const [selectedAgentId, setSelectedAgentId] = useState<string>("")
   const [results, setResults] = useState<IndexEntry[]>([])
-  const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(false)
+
+  const selectedAgentId = searchParams.get("agent") ?? ""
+  const query = searchParams.get("q") ?? ""
+
+  const setSelectedAgentId = useCallback(
+    (id: string) =>
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        next.set("agent", id)
+        next.delete("q")
+        return next
+      }),
+    [setSearchParams],
+  )
+
+  const setQuery = useCallback(
+    (q: string) =>
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          if (q) next.set("q", q)
+          else next.delete("q")
+          return next
+        },
+        { replace: true },
+      ),
+    [setSearchParams],
+  )
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState("")
@@ -70,11 +97,11 @@ export function SearchIndexView() {
     if (res.ok) {
       const data: Agent[] = await res.json()
       setAgents(data)
-      if (!selectedAgentId && data.length > 0) {
+      if (!searchParams.get("agent") && data.length > 0) {
         setSelectedAgentId(data[0].id)
       }
     }
-  }, [selectedAgentId])
+  }, [searchParams, setSelectedAgentId])
 
   useEffect(() => {
     fetchAgents()
@@ -92,46 +119,60 @@ export function SearchIndexView() {
     if (res.ok) setMemoryFiles(await res.json())
   }, [selectedAgentId])
 
+  const doSearch = useCallback(
+    async (agentId: string, q: string) => {
+      if (!agentId) return
+      setLoading(true)
+      const params = new URLSearchParams()
+      if (q.trim()) params.set("q", q.trim())
+      params.set("limit", "100")
+      const res = await fetch(
+        `/api/agents/${agentId}/search-index?${params}`,
+      )
+      if (res.ok) setResults(await res.json())
+      setLoading(false)
+    },
+    [],
+  )
+
+  const handleSearch = () => doSearch(selectedAgentId, query)
+
+  // Track previous agent to distinguish initial load from agent switch
+  const [prevAgent, setPrevAgent] = useState<string | null>(null)
+
   useEffect(() => {
-    if (selectedAgentId) {
-      fetchStats()
-      fetchMemoryFiles()
-      setResults([])
-      setQuery("")
-      setExpandedId(null)
-      setEditingId(null)
-    }
-  }, [selectedAgentId, fetchStats, fetchMemoryFiles])
-
-  const handleSearch = async () => {
     if (!selectedAgentId) return
-    setLoading(true)
-    const params = new URLSearchParams()
-    if (query.trim()) params.set("q", query.trim())
-    params.set("limit", "100")
-    const res = await fetch(
-      `/api/agents/${selectedAgentId}/search-index?${params}`,
-    )
-    if (res.ok) setResults(await res.json())
-    setLoading(false)
-  }
+    fetchStats()
+    fetchMemoryFiles()
+    setExpandedId(null)
+    setEditingId(null)
 
-  const handleDelete = async (messageId: string) => {
+    if (prevAgent === null) {
+      // Initial mount: restore search if URL has a query
+      if (query) doSearch(selectedAgentId, query)
+    } else if (prevAgent !== selectedAgentId) {
+      // Agent changed: clear results
+      setResults([])
+    }
+    setPrevAgent(selectedAgentId)
+  }, [selectedAgentId])
+
+  const handleDelete = async (chunkKey: string) => {
     if (!confirm("Delete this entry from the search index?")) return
     const res = await fetch(
-      `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(messageId)}`,
+      `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(chunkKey)}`,
       { method: "DELETE" },
     )
     if (res.ok) {
-      setResults((prev) => prev.filter((r) => r.message_id !== messageId))
+      setResults((prev) => prev.filter((r) => r.chunk_key !== chunkKey))
       fetchStats()
     }
   }
 
   const startEditing = (entry: IndexEntry) => {
-    setEditingId(entry.message_id)
+    setEditingId(entry.chunk_key)
     setEditContent(entry.content)
-    setExpandedId(entry.message_id)
+    setExpandedId(entry.chunk_key)
   }
 
   const cancelEditing = () => {
@@ -139,9 +180,9 @@ export function SearchIndexView() {
     setEditContent("")
   }
 
-  const saveEditing = async (messageId: string) => {
+  const saveEditing = async (chunkKey: string) => {
     const res = await fetch(
-      `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(messageId)}`,
+      `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(chunkKey)}`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -152,7 +193,7 @@ export function SearchIndexView() {
       const data = await res.json()
       setResults((prev) =>
         prev.map((r) =>
-          r.message_id === messageId ? { ...r, content: editContent } : r,
+          r.chunk_key === chunkKey ? { ...r, content: editContent } : r,
         ),
       )
       setEditingId(null)
@@ -162,13 +203,13 @@ export function SearchIndexView() {
     }
   }
 
-  const handleReindex = async (messageId: string) => {
+  const handleReindex = async (chunkKey: string) => {
     const res = await fetch(
       `/api/agents/${selectedAgentId}/search-index/reindex`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message_ids: [messageId] }),
+        body: JSON.stringify({ chunk_keys: [chunkKey] }),
       },
     )
     if (res.ok) {
@@ -180,7 +221,7 @@ export function SearchIndexView() {
   const handleFullRebuild = async () => {
     if (
       !confirm(
-        "Full rebuild will drop and recreate all search indexes from the orchestrator source of truth. Continue?",
+        "Full rebuild will drop and recreate all search indexes from memory files on disk. Continue?",
       )
     )
       return
@@ -197,7 +238,7 @@ export function SearchIndexView() {
     if (res.ok) {
       const data = await res.json()
       setRebuildResult(
-        `Indexed ${data.indexed} messages, ${data.errors} errors${data.skipped_vectors ? " (vectors skipped — Ollama unreachable)" : ""}`,
+        `Indexed ${data.indexed} chunks from ${data.total_source} files, ${data.errors} errors${data.skipped_vectors ? " (vectors skipped — Ollama unreachable)" : ""}`,
       )
       fetchStats()
       handleSearch()
@@ -213,12 +254,23 @@ export function SearchIndexView() {
     )
     if (res.ok) {
       setMemoryFiles((prev) => prev.filter((f) => f.name !== filename))
+      fetchStats()
     }
   }
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes}B`
     return `${(bytes / 1024).toFixed(1)}KB`
+  }
+
+  /** Extract just the filename from a file_path like "memory/2026-04-07.md" */
+  const shortFile = (fp: string) => fp.split("/").pop() ?? fp
+
+  /** Extract a short session ref from something like "sessions/abc123.jsonl" */
+  const shortRef = (ref: string) => {
+    if (ref === "compacted") return ref
+    const name = ref.split("/").pop() ?? ref
+    return name.replace(".jsonl", "").slice(0, 12)
   }
 
   return (
@@ -266,28 +318,23 @@ export function SearchIndexView() {
             {stats && (
               <div className="flex items-center gap-4 rounded-md border px-4 py-2 text-sm">
                 <span>
-                  FTS:{" "}
+                  Files:{" "}
+                  <span className="font-mono font-medium">
+                    {stats.memory_files_count}
+                  </span>
+                </span>
+                <span>
+                  FTS Chunks:{" "}
                   <span className="font-mono font-medium">
                     {stats.fts_count}
                   </span>
                 </span>
                 <span>
-                  Vec:{" "}
+                  Vec Chunks:{" "}
                   <span className="font-mono font-medium">
                     {stats.vec_count}
                   </span>
                 </span>
-                <span>
-                  Source:{" "}
-                  <span className="font-mono font-medium">
-                    {stats.orchestrator_count}
-                  </span>
-                </span>
-                {stats.fts_count !== stats.orchestrator_count && (
-                  <Badge variant="secondary">
-                    {Math.abs(stats.fts_count - stats.orchestrator_count)} drift
-                  </Badge>
-                )}
               </div>
             )}
 
@@ -296,7 +343,7 @@ export function SearchIndexView() {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search indexed messages..."
+                placeholder="Search memory summaries..."
                 className="flex-1"
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
@@ -330,9 +377,8 @@ export function SearchIndexView() {
                 <thead>
                   <tr className="border-b bg-muted/50 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     <th className="w-6 px-1 py-2" />
-                    <th className="w-[10%] px-2 py-2">ID</th>
-                    <th className="w-[6%] px-2 py-2">Role</th>
-                    <th className="w-[10%] px-2 py-2">Session</th>
+                    <th className="w-[14%] px-2 py-2">File</th>
+                    <th className="w-[12%] px-2 py-2">Session</th>
                     <th className="px-2 py-2">Content</th>
                     <th className="w-[12%] px-2 py-2">Created</th>
                     <th className="w-[14%] px-2 py-2">Actions</th>
@@ -340,45 +386,36 @@ export function SearchIndexView() {
                 </thead>
                 <tbody>
                   {results.map((entry) => (
-                    <Fragment key={entry.message_id}>
+                    <Fragment key={entry.chunk_key}>
                       <tr
                         className="border-b last:border-b-0 cursor-pointer hover:bg-muted/30"
                         onClick={() =>
-                          editingId !== entry.message_id &&
+                          editingId !== entry.chunk_key &&
                           setExpandedId(
-                            expandedId === entry.message_id
+                            expandedId === entry.chunk_key
                               ? null
-                              : entry.message_id,
+                              : entry.chunk_key,
                           )
                         }
                       >
                         <td className="px-1 py-2 text-muted-foreground">
-                          {expandedId === entry.message_id ? (
+                          {expandedId === entry.chunk_key ? (
                             <ChevronDown className="size-3.5" />
                           ) : (
                             <ChevronRight className="size-3.5" />
                           )}
                         </td>
                         <td
-                          className="truncate px-2 py-2 font-mono text-xs text-muted-foreground"
-                          title={entry.message_id}
+                          className="truncate px-2 py-2 font-mono text-xs"
+                          title={entry.file_path}
                         >
-                          {entry.message_id.slice(0, 8)}
-                        </td>
-                        <td className="px-2 py-2">
-                          <Badge
-                            variant={
-                              entry.role === "user" ? "default" : "secondary"
-                            }
-                          >
-                            {entry.role}
-                          </Badge>
+                          {shortFile(entry.file_path)}
                         </td>
                         <td
                           className="truncate px-2 py-2 font-mono text-xs text-muted-foreground"
-                          title={entry.session_id}
+                          title={entry.session_ref}
                         >
-                          {entry.session_id.slice(0, 8)}
+                          {shortRef(entry.session_ref)}
                         </td>
                         <td className="truncate px-2 py-2" title={entry.content}>
                           <span className="block truncate">{entry.content}</span>
@@ -391,12 +428,12 @@ export function SearchIndexView() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <div className="flex items-center gap-1">
-                            {editingId === entry.message_id ? (
+                            {editingId === entry.chunk_key ? (
                               <>
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => saveEditing(entry.message_id)}
+                                  onClick={() => saveEditing(entry.chunk_key)}
                                 >
                                   <Save className="size-3.5" />
                                 </Button>
@@ -421,7 +458,9 @@ export function SearchIndexView() {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => handleReindex(entry.message_id)}
+                                  onClick={() =>
+                                    handleReindex(entry.chunk_key)
+                                  }
                                   title="Reindex from source"
                                 >
                                   <RotateCcw className="size-3.5" />
@@ -429,7 +468,7 @@ export function SearchIndexView() {
                                 <Button
                                   variant="destructive"
                                   size="sm"
-                                  onClick={() => handleDelete(entry.message_id)}
+                                  onClick={() => handleDelete(entry.chunk_key)}
                                   title="Delete from index"
                                 >
                                   <Trash2 className="size-3.5" />
@@ -439,12 +478,10 @@ export function SearchIndexView() {
                           </div>
                         </td>
                       </tr>
-                      {expandedId === entry.message_id && (
-                        <tr
-                          className="border-b bg-muted/20"
-                        >
-                          <td colSpan={7} className="px-4 py-3">
-                            {editingId === entry.message_id ? (
+                      {expandedId === entry.chunk_key && (
+                        <tr className="border-b bg-muted/20">
+                          <td colSpan={6} className="px-4 py-3">
+                            {editingId === entry.chunk_key ? (
                               <textarea
                                 value={editContent}
                                 onChange={(e) => setEditContent(e.target.value)}
@@ -478,7 +515,7 @@ export function SearchIndexView() {
 
             {/* Memory Files Section */}
             <div className="mt-4">
-              <div className="flex items-center justify-between mb-2">
+              <div className="mb-2 flex items-center justify-between">
                 <span className="text-sm font-medium">Memory Files</span>
                 <Button
                   variant="outline"
@@ -499,7 +536,12 @@ export function SearchIndexView() {
                     <div key={f.name}>
                       <div className="flex items-center justify-between border-b px-4 py-2 last:border-b-0">
                         <div className="flex items-center gap-3">
-                          <span className="text-sm font-mono">{f.name}</span>
+                          <a
+                            href={`/agents/${selectedAgentId}/files?file=memory/${encodeURIComponent(f.name)}`}
+                            className="text-sm font-mono underline hover:text-primary"
+                          >
+                            {f.name}
+                          </a>
                           <span className="text-xs text-muted-foreground">
                             {formatSize(f.size)}
                           </span>

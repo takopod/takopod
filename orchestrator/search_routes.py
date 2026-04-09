@@ -1,8 +1,8 @@
 """Search index management API routes.
 
 Provides endpoints to inspect, edit, delete, and rebuild the per-agent
-FTS5 and vec0 search indexes stored in worker databases.  Also exposes
-memory file management for viewing and deleting agent memory files.
+memory search indexes (memory_fts / memory_vec) stored in worker databases.
+Also exposes memory file management for viewing and deleting agent memory files.
 
 The orchestrator opens worker databases directly (synchronous sqlite3
 via run_in_executor) — this is the only place where the orchestrator
@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 import urllib.error
@@ -41,23 +42,28 @@ DATA_DIR = Path("data")
 OLLAMA_URL = os.environ.get("OLLAMA_HOST_URL", "http://localhost:11434")
 EMBED_MODEL = "nomic-embed-text"
 
-SEARCH_TABLES_SQL = """\
-CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
+MEMORY_TABLES_SQL = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     content,
-    role,
-    session_id UNINDEXED,
-    message_id UNINDEXED,
+    file_path UNINDEXED,
+    chunk_key UNINDEXED,
+    session_ref UNINDEXED,
     created_at UNINDEXED,
     tokenize = 'porter'
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS message_vec USING vec0(
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(
     embedding float[768],
     +content TEXT,
-    +role TEXT,
-    +session_id TEXT,
-    +message_id TEXT,
+    +file_path TEXT,
+    +chunk_key TEXT,
+    +session_ref TEXT,
     +created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS memory_vec_map (
+    chunk_key TEXT NOT NULL PRIMARY KEY,
+    vec_rowid INTEGER NOT NULL
 );
 """
 
@@ -68,12 +74,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS message_vec USING vec0(
 
 
 def _open_worker_db(agent_id: str) -> sqlite3.Connection:
-    """Open a synchronous connection to an agent's worker database.
-
-    Raises FileNotFoundError if the worker DB doesn't exist (agent never started).
-    Callers running inside run_in_executor should let this propagate —
-    the _handle_worker_db_error wrapper will convert it to an HTTPException.
-    """
+    """Open a synchronous connection to an agent's worker database."""
     path = DATA_DIR / "agents" / agent_id / "worker_db.sqlite"
     if not path.is_file():
         raise FileNotFoundError(f"Worker DB not found: {path}")
@@ -114,7 +115,6 @@ async def _run_worker_op(func):
 
 def _sanitize_fts5_query(text: str) -> str:
     """Escape special FTS5 characters by quoting each word."""
-    import re
     words = re.findall(r"\w+", text)
     if not words:
         return '""'
@@ -147,6 +147,117 @@ def _check_ollama() -> bool:
         return False
 
 
+def _parse_memory_chunks(file_path: str, content: str) -> list[dict[str, str]]:
+    """Split a memory file into per-session chunks.
+
+    Mirrors worker/search.py parse_memory_chunks() — duplicated here because
+    the orchestrator cannot import worker code.
+    """
+    parts = re.split(r"(?=^## Session: )", content, flags=re.MULTILINE)
+    chunks: list[dict[str, str]] = []
+
+    for i, part in enumerate(parts):
+        part = part.strip()
+        if not part:
+            continue
+
+        header_match = re.match(r"^## Session:\s*(.+)", part)
+        if header_match:
+            session_ref = header_match.group(1).strip()
+            body = re.sub(r"^## Session:.+\n*", "", part).strip().rstrip("-").strip()
+        else:
+            session_ref = "compacted"
+            body = part
+
+        if not body:
+            continue
+
+        chunks.append({
+            "chunk_key": f"{file_path}#{i}",
+            "file_path": file_path,
+            "session_ref": session_ref,
+            "content": body,
+        })
+
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# Reindex a single memory file (callable from other modules)
+# ---------------------------------------------------------------------------
+
+
+async def reindex_memory_file(agent_id: str, rel_path: str, content: str) -> None:
+    """Re-index a memory file's chunks into memory_fts/memory_vec.
+
+    Called after a memory file is written to disk, from any endpoint.
+    Silently skips if the worker DB doesn't exist yet.
+    """
+    def _do():
+        try:
+            conn = _open_worker_db(agent_id)
+        except FileNotFoundError:
+            return
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        try:
+            # Ensure tables exist
+            conn.executescript(MEMORY_TABLES_SQL)
+
+            # Delete old FTS entries for this file
+            conn.execute(
+                "DELETE FROM memory_fts WHERE rowid IN ("
+                "  SELECT rowid FROM memory_fts WHERE file_path = ?"
+                ")",
+                (rel_path,),
+            )
+            # Delete old vec entries via mapping table
+            rows = conn.execute(
+                "SELECT chunk_key, vec_rowid FROM memory_vec_map "
+                "WHERE chunk_key LIKE ?",
+                (f"{rel_path}#%",),
+            ).fetchall()
+            for chunk_key, vec_rowid in rows:
+                try:
+                    conn.execute("DELETE FROM memory_vec WHERE rowid = ?", (vec_rowid,))
+                except sqlite3.OperationalError:
+                    pass
+                conn.execute("DELETE FROM memory_vec_map WHERE chunk_key = ?", (chunk_key,))
+
+            # Re-index chunks
+            chunks = _parse_memory_chunks(rel_path, content)
+            ollama_ok = _check_ollama()
+            for chunk in chunks:
+                ck = chunk["chunk_key"]
+                conn.execute(
+                    "INSERT INTO memory_fts "
+                    "(content, file_path, chunk_key, session_ref, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (chunk["content"], rel_path, ck, chunk["session_ref"], now),
+                )
+                if ollama_ok:
+                    embedding = _embed_sync(chunk["content"])
+                    if embedding:
+                        conn.execute(
+                            "INSERT INTO memory_vec "
+                            "(embedding, content, file_path, chunk_key, session_ref, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (json.dumps(embedding), chunk["content"], rel_path,
+                             ck, chunk["session_ref"], now),
+                        )
+                        vec_rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                        conn.execute(
+                            "INSERT OR REPLACE INTO memory_vec_map (chunk_key, vec_rowid) "
+                            "VALUES (?, ?)",
+                            (ck, vec_rowid),
+                        )
+            conn.commit()
+        finally:
+            conn.close()
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _do)
+
+
 # ---------------------------------------------------------------------------
 # Search / List
 # ---------------------------------------------------------------------------
@@ -154,7 +265,7 @@ def _check_ollama() -> bool:
 
 @router.get("/agents/{agent_id}/search-index")
 async def search_index(agent_id: str, q: str = "", limit: int = 50):
-    """Search or list entries in the agent's FTS index."""
+    """Search or list entries in the agent's memory FTS index."""
     await _validate_agent(agent_id)
 
     def _query():
@@ -163,21 +274,21 @@ async def search_index(agent_id: str, q: str = "", limit: int = 50):
             if q.strip():
                 fts_query = _sanitize_fts5_query(q)
                 rows = conn.execute(
-                    "SELECT message_id, content, role, session_id, created_at, rank "
-                    "FROM message_fts WHERE message_fts MATCH ? "
+                    "SELECT chunk_key, content, file_path, session_ref, created_at, rank "
+                    "FROM memory_fts WHERE memory_fts MATCH ? "
                     "ORDER BY rank LIMIT ?",
                     (fts_query, min(limit, 200)),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT message_id, content, role, session_id, created_at, 0.0 "
-                    "FROM message_fts ORDER BY rowid DESC LIMIT ?",
+                    "SELECT chunk_key, content, file_path, session_ref, created_at, 0.0 "
+                    "FROM memory_fts ORDER BY rowid DESC LIMIT ?",
                     (min(limit, 200),),
                 ).fetchall()
             return [
                 {
-                    "message_id": r[0], "content": r[1], "role": r[2],
-                    "session_id": r[3], "created_at": r[4], "rank": r[5],
+                    "chunk_key": r[0], "content": r[1], "file_path": r[2],
+                    "session_ref": r[3], "created_at": r[4], "rank": r[5],
                 }
                 for r in rows
             ]
@@ -188,30 +299,30 @@ async def search_index(agent_id: str, q: str = "", limit: int = 50):
 
 
 # ---------------------------------------------------------------------------
-# Stats (must be before {message_id} to avoid path parameter capture)
+# Stats (must be before {chunk_key} to avoid path parameter capture)
 # ---------------------------------------------------------------------------
 
 
 @router.get("/agents/{agent_id}/search-index/stats")
 async def index_stats(agent_id: str):
-    """Return index health stats: counts and sync status."""
+    """Return index health stats: counts for memory files, FTS, and vec."""
     await _validate_agent(agent_id)
 
-    orch_db = await get_db()
-    async with orch_db.execute(
-        "SELECT COUNT(*) FROM messages m "
-        "JOIN sessions s ON s.id = m.session_id "
-        "WHERE s.agent_id = ? AND m.visibility = 'visible'",
-        (agent_id,),
-    ) as cur:
-        orch_count = (await cur.fetchone())[0]
+    # Count memory files on disk
+    memory_dir = DATA_DIR / "agents" / agent_id / "memory"
+    memory_files_count = 0
+    if memory_dir.is_dir():
+        memory_files_count = sum(1 for f in memory_dir.iterdir() if f.is_file() and f.suffix == ".md")
 
     def _worker_stats():
         conn = _open_worker_db(agent_id)
         try:
-            fts_count = conn.execute("SELECT COUNT(*) FROM message_fts").fetchone()[0]
             try:
-                vec_count = conn.execute("SELECT COUNT(*) FROM message_vec").fetchone()[0]
+                fts_count = conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
+            except sqlite3.OperationalError:
+                fts_count = 0
+            try:
+                vec_count = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
             except sqlite3.OperationalError:
                 vec_count = 0
             return {"fts_count": fts_count, "vec_count": vec_count}
@@ -220,28 +331,26 @@ async def index_stats(agent_id: str):
 
     worker = await _run_worker_op(_worker_stats)
     return {
-        "orchestrator_count": orch_count,
+        "memory_files_count": memory_files_count,
         "fts_count": worker["fts_count"],
         "vec_count": worker["vec_count"],
     }
 
 
 # ---------------------------------------------------------------------------
-# Reindex (must be before {message_id} to avoid path parameter capture)
+# Reindex (must be before {chunk_key} to avoid path parameter capture)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/agents/{agent_id}/search-index/reindex")
 async def reindex(agent_id: str, req: ReindexRequest | None = None):
-    """Reindex specific entries or perform a full rebuild from orchestrator source of truth."""
+    """Reindex specific chunks or perform a full rebuild from memory files on disk."""
     await _validate_agent(agent_id)
 
-    orch_db = await get_db()
+    if req and req.chunk_keys:
+        return await _reindex_chunks(agent_id, req.chunk_keys)
 
-    if req and req.message_ids:
-        return await _reindex_messages(agent_id, req.message_ids, orch_db)
-
-    return await _full_rebuild(agent_id, orch_db)
+    return await _full_rebuild(agent_id)
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +358,8 @@ async def reindex(agent_id: str, req: ReindexRequest | None = None):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/agents/{agent_id}/search-index/{message_id}")
-async def get_index_entry(agent_id: str, message_id: str):
+@router.get("/agents/{agent_id}/search-index/{chunk_key:path}")
+async def get_index_entry(agent_id: str, chunk_key: str):
     """Get full details of a single indexed entry."""
     await _validate_agent(agent_id)
 
@@ -258,20 +367,20 @@ async def get_index_entry(agent_id: str, message_id: str):
         conn = _open_worker_db(agent_id)
         try:
             row = conn.execute(
-                "SELECT message_id, content, role, session_id, created_at "
-                "FROM message_fts WHERE message_id = ? LIMIT 1",
-                (message_id,),
+                "SELECT chunk_key, content, file_path, session_ref, created_at "
+                "FROM memory_fts WHERE chunk_key = ? LIMIT 1",
+                (chunk_key,),
             ).fetchone()
             if not row:
                 return None
 
             vec_row = conn.execute(
-                "SELECT rowid FROM message_vec WHERE message_id = ? LIMIT 1",
-                (message_id,),
+                "SELECT vec_rowid FROM memory_vec_map WHERE chunk_key = ?",
+                (chunk_key,),
             ).fetchone()
             return {
-                "message_id": row[0], "content": row[1], "role": row[2],
-                "session_id": row[3], "created_at": row[4],
+                "chunk_key": row[0], "content": row[1], "file_path": row[2],
+                "session_ref": row[3], "created_at": row[4],
                 "has_embedding": vec_row is not None,
             }
         finally:
@@ -288,11 +397,11 @@ async def get_index_entry(agent_id: str, message_id: str):
 # ---------------------------------------------------------------------------
 
 
-@router.put("/agents/{agent_id}/search-index/{message_id}")
+@router.put("/agents/{agent_id}/search-index/{chunk_key:path}")
 async def update_index_entry(
-    agent_id: str, message_id: str, req: SearchIndexUpdateRequest,
+    agent_id: str, chunk_key: str, req: SearchIndexUpdateRequest,
 ):
-    """Update content in worker FTS and vec indexes (not the orchestrator source of truth)."""
+    """Update content in memory FTS and vec indexes."""
     await _validate_agent(agent_id)
 
     def _update():
@@ -300,42 +409,57 @@ async def update_index_entry(
         try:
             # Get existing row metadata
             row = conn.execute(
-                "SELECT role, session_id, created_at FROM message_fts "
-                "WHERE message_id = ? LIMIT 1",
-                (message_id,),
+                "SELECT file_path, session_ref, created_at FROM memory_fts "
+                "WHERE chunk_key = ? LIMIT 1",
+                (chunk_key,),
             ).fetchone()
             if not row:
                 return {"error": "not_found"}
 
-            role, session_id, created_at = row
+            file_path, session_ref, created_at = row
 
             # Delete old FTS entry and insert new
             conn.execute(
-                "DELETE FROM message_fts WHERE rowid IN ("
-                "  SELECT rowid FROM message_fts WHERE message_id = ?"
+                "DELETE FROM memory_fts WHERE rowid IN ("
+                "  SELECT rowid FROM memory_fts WHERE chunk_key = ?"
                 ")",
-                (message_id,),
+                (chunk_key,),
             )
             conn.execute(
-                "INSERT INTO message_fts (content, role, session_id, message_id, created_at) "
+                "INSERT INTO memory_fts (content, file_path, chunk_key, session_ref, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (req.content, role, session_id, message_id, created_at),
+                (req.content, file_path, chunk_key, session_ref, created_at),
             )
 
-            # Delete old vec entry and re-embed
+            # Delete old vec entry via mapping table and re-embed
             vec_warning = None
-            conn.execute(
-                "DELETE FROM message_vec WHERE rowid IN ("
-                "  SELECT rowid FROM message_vec WHERE message_id = ?"
-                ")",
-                (message_id,),
-            )
+            map_row = conn.execute(
+                "SELECT vec_rowid FROM memory_vec_map WHERE chunk_key = ?",
+                (chunk_key,),
+            ).fetchone()
+            if map_row:
+                try:
+                    conn.execute("DELETE FROM memory_vec WHERE rowid = ?", (map_row[0],))
+                except sqlite3.OperationalError:
+                    pass
+                conn.execute(
+                    "DELETE FROM memory_vec_map WHERE chunk_key = ?", (chunk_key,),
+                )
+
             embedding = _embed_sync(req.content)
             if embedding:
                 conn.execute(
-                    "INSERT INTO message_vec (embedding, content, role, session_id, message_id, created_at) "
+                    "INSERT INTO memory_vec "
+                    "(embedding, content, file_path, chunk_key, session_ref, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (json.dumps(embedding), req.content, role, session_id, message_id, created_at),
+                    (json.dumps(embedding), req.content, file_path,
+                     chunk_key, session_ref, created_at),
+                )
+                vec_rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "INSERT OR REPLACE INTO memory_vec_map (chunk_key, vec_rowid) "
+                    "VALUES (?, ?)",
+                    (chunk_key, vec_rowid),
                 )
             else:
                 vec_warning = "Ollama unreachable — FTS updated but vector embedding skipped"
@@ -356,26 +480,37 @@ async def update_index_entry(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/agents/{agent_id}/search-index/{message_id}")
-async def delete_index_entry(agent_id: str, message_id: str):
-    """Delete an entry from worker FTS and vec indexes."""
+@router.delete("/agents/{agent_id}/search-index/{chunk_key:path}")
+async def delete_index_entry(agent_id: str, chunk_key: str):
+    """Delete an entry from memory FTS and vec indexes."""
     await _validate_agent(agent_id)
 
     def _delete():
         conn = _open_worker_db(agent_id)
         try:
             fts_deleted = conn.execute(
-                "DELETE FROM message_fts WHERE rowid IN ("
-                "  SELECT rowid FROM message_fts WHERE message_id = ?"
+                "DELETE FROM memory_fts WHERE rowid IN ("
+                "  SELECT rowid FROM memory_fts WHERE chunk_key = ?"
                 ")",
-                (message_id,),
+                (chunk_key,),
             ).rowcount
-            vec_deleted = conn.execute(
-                "DELETE FROM message_vec WHERE rowid IN ("
-                "  SELECT rowid FROM message_vec WHERE message_id = ?"
-                ")",
-                (message_id,),
-            ).rowcount
+
+            # Delete vec via mapping table
+            vec_deleted = 0
+            map_row = conn.execute(
+                "SELECT vec_rowid FROM memory_vec_map WHERE chunk_key = ?",
+                (chunk_key,),
+            ).fetchone()
+            if map_row:
+                try:
+                    conn.execute("DELETE FROM memory_vec WHERE rowid = ?", (map_row[0],))
+                    vec_deleted = 1
+                except sqlite3.OperationalError:
+                    pass
+                conn.execute(
+                    "DELETE FROM memory_vec_map WHERE chunk_key = ?", (chunk_key,),
+                )
+
             conn.commit()
             return {"fts_deleted": fts_deleted, "vec_deleted": vec_deleted}
         finally:
@@ -384,58 +519,97 @@ async def delete_index_entry(agent_id: str, message_id: str):
     return await _run_worker_op(_delete)
 
 
-async def _reindex_messages(agent_id: str, message_ids: list[str], orch_db):
-    """Reindex specific messages from orchestrator source of truth."""
-    # Fetch messages from orchestrator
-    placeholders = ",".join("?" for _ in message_ids)
-    async with orch_db.execute(
-        f"SELECT m.id, m.session_id, m.role, m.content, m.created_at "
-        f"FROM messages m "
-        f"JOIN sessions s ON s.id = m.session_id "
-        f"WHERE s.agent_id = ? AND m.id IN ({placeholders})",
-        [agent_id, *message_ids],
-    ) as cur:
-        messages = await cur.fetchall()
+# ---------------------------------------------------------------------------
+# Reindex helpers
+# ---------------------------------------------------------------------------
+
+
+async def _reindex_chunks(agent_id: str, chunk_keys: list[str]):
+    """Reindex specific chunks by re-reading their source memory files."""
+    # Determine which files to read
+    file_paths = set()
+    for ck in chunk_keys:
+        if "#" in ck:
+            file_paths.add(ck.rsplit("#", 1)[0])
 
     def _do_reindex():
         conn = _open_worker_db(agent_id)
         indexed = 0
         errors = 0
         skipped_vectors = False
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
         try:
-            for msg_id, session_id, role, content, created_at in messages:
-                try:
-                    # Delete old entries
-                    conn.execute(
-                        "DELETE FROM message_fts WHERE rowid IN ("
-                        "  SELECT rowid FROM message_fts WHERE message_id = ?"
-                        ")", (msg_id,),
-                    )
-                    conn.execute(
-                        "DELETE FROM message_vec WHERE rowid IN ("
-                        "  SELECT rowid FROM message_vec WHERE message_id = ?"
-                        ")", (msg_id,),
-                    )
-                    # Re-insert FTS
-                    conn.execute(
-                        "INSERT INTO message_fts (content, role, session_id, message_id, created_at) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (content, role, session_id, msg_id, created_at),
-                    )
-                    # Re-insert vec
-                    embedding = _embed_sync(content)
-                    if embedding:
-                        conn.execute(
-                            "INSERT INTO message_vec (embedding, content, role, session_id, message_id, created_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
-                            (json.dumps(embedding), content, role, session_id, msg_id, created_at),
-                        )
-                    else:
-                        skipped_vectors = True
-                    indexed += 1
-                except Exception as e:
-                    logger.warning("Reindex failed for %s: %s", msg_id, e)
+            for fp in file_paths:
+                abs_path = DATA_DIR / "agents" / agent_id / fp
+                if not abs_path.is_file():
                     errors += 1
+                    continue
+
+                content = abs_path.read_text()
+                chunks = _parse_memory_chunks(fp, content)
+                target_keys = {ck for ck in chunk_keys if ck.startswith(fp + "#")}
+
+                for chunk in chunks:
+                    if chunk["chunk_key"] not in target_keys:
+                        continue
+                    try:
+                        ck = chunk["chunk_key"]
+                        # Delete old FTS
+                        conn.execute(
+                            "DELETE FROM memory_fts WHERE rowid IN ("
+                            "  SELECT rowid FROM memory_fts WHERE chunk_key = ?"
+                            ")", (ck,),
+                        )
+                        # Insert new FTS
+                        conn.execute(
+                            "INSERT INTO memory_fts "
+                            "(content, file_path, chunk_key, session_ref, created_at) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (chunk["content"], fp, ck, chunk["session_ref"], now),
+                        )
+                        # Delete old vec via map
+                        map_row = conn.execute(
+                            "SELECT vec_rowid FROM memory_vec_map WHERE chunk_key = ?",
+                            (ck,),
+                        ).fetchone()
+                        if map_row:
+                            try:
+                                conn.execute(
+                                    "DELETE FROM memory_vec WHERE rowid = ?",
+                                    (map_row[0],),
+                                )
+                            except sqlite3.OperationalError:
+                                pass
+                            conn.execute(
+                                "DELETE FROM memory_vec_map WHERE chunk_key = ?",
+                                (ck,),
+                            )
+                        # Re-embed
+                        embedding = _embed_sync(chunk["content"])
+                        if embedding:
+                            conn.execute(
+                                "INSERT INTO memory_vec "
+                                "(embedding, content, file_path, chunk_key, session_ref, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?)",
+                                (json.dumps(embedding), chunk["content"], fp,
+                                 ck, chunk["session_ref"], now),
+                            )
+                            vec_rowid = conn.execute(
+                                "SELECT last_insert_rowid()"
+                            ).fetchone()[0]
+                            conn.execute(
+                                "INSERT OR REPLACE INTO memory_vec_map "
+                                "(chunk_key, vec_rowid) VALUES (?, ?)",
+                                (ck, vec_rowid),
+                            )
+                        else:
+                            skipped_vectors = True
+                        indexed += 1
+                    except Exception as e:
+                        logger.warning("Reindex failed for %s: %s", chunk["chunk_key"], e)
+                        errors += 1
+
             conn.commit()
             return {"indexed": indexed, "errors": errors, "skipped_vectors": skipped_vectors}
         finally:
@@ -444,63 +618,86 @@ async def _reindex_messages(agent_id: str, message_ids: list[str], orch_db):
     return await _run_worker_op(_do_reindex)
 
 
-async def _full_rebuild(agent_id: str, orch_db):
-    """Drop and recreate indexes, re-index all messages from orchestrator."""
-    # Fetch all messages for this agent
-    async with orch_db.execute(
-        "SELECT m.id, m.session_id, m.role, m.content, m.created_at "
-        "FROM messages m "
-        "JOIN sessions s ON s.id = m.session_id "
-        "WHERE s.agent_id = ? AND m.visibility = 'visible' "
-        "ORDER BY m.created_at",
-        (agent_id,),
-    ) as cur:
-        messages = await cur.fetchall()
+async def _full_rebuild(agent_id: str):
+    """Drop and recreate memory indexes, re-index all memory files from disk."""
+    memory_dir = DATA_DIR / "agents" / agent_id / "memory"
+
+    # Collect all memory files
+    memory_files: list[tuple[str, str]] = []  # (rel_path, content)
+    if memory_dir.is_dir():
+        for md_file in sorted(memory_dir.iterdir()):
+            if md_file.is_file() and md_file.suffix == ".md":
+                rel_path = f"memory/{md_file.name}"
+                memory_files.append((rel_path, md_file.read_text()))
 
     def _do_rebuild():
         conn = _open_worker_db(agent_id)
         indexed = 0
         errors = 0
         skipped_vectors = False
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
         try:
             # Drop and recreate tables
-            conn.execute("DROP TABLE IF EXISTS message_fts")
-            conn.execute("DROP TABLE IF EXISTS message_vec")
-            conn.executescript(SEARCH_TABLES_SQL)
+            conn.execute("DROP TABLE IF EXISTS memory_fts")
+            conn.execute("DROP TABLE IF EXISTS memory_vec")
+            conn.execute("DROP TABLE IF EXISTS memory_vec_map")
+            conn.executescript(MEMORY_TABLES_SQL)
 
             ollama_ok = _check_ollama()
             if not ollama_ok:
                 skipped_vectors = True
                 logger.warning("Ollama unreachable — rebuilding FTS only")
 
-            for msg_id, session_id, role, content, created_at in messages:
-                try:
-                    conn.execute(
-                        "INSERT INTO message_fts (content, role, session_id, message_id, created_at) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (content, role, session_id, msg_id, created_at),
-                    )
-                    if ollama_ok:
-                        embedding = _embed_sync(content)
-                        if embedding:
-                            conn.execute(
-                                "INSERT INTO message_vec (embedding, content, role, session_id, message_id, created_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?)",
-                                (json.dumps(embedding), content, role, session_id, msg_id, created_at),
-                            )
-                        else:
-                            skipped_vectors = True
-                    indexed += 1
-                    # Commit every 50 to allow recovery from interruption
-                    if indexed % 50 == 0:
-                        conn.commit()
-                except Exception as e:
-                    logger.warning("Rebuild: failed to index %s: %s", msg_id, e)
-                    errors += 1
+            for rel_path, content in memory_files:
+                chunks = _parse_memory_chunks(rel_path, content)
+                for chunk in chunks:
+                    try:
+                        conn.execute(
+                            "INSERT INTO memory_fts "
+                            "(content, file_path, chunk_key, session_ref, created_at) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (chunk["content"], rel_path, chunk["chunk_key"],
+                             chunk["session_ref"], now),
+                        )
+                        if ollama_ok:
+                            embedding = _embed_sync(chunk["content"])
+                            if embedding:
+                                conn.execute(
+                                    "INSERT INTO memory_vec "
+                                    "(embedding, content, file_path, chunk_key, "
+                                    "session_ref, created_at) "
+                                    "VALUES (?, ?, ?, ?, ?, ?)",
+                                    (json.dumps(embedding), chunk["content"],
+                                     rel_path, chunk["chunk_key"],
+                                     chunk["session_ref"], now),
+                                )
+                                vec_rowid = conn.execute(
+                                    "SELECT last_insert_rowid()"
+                                ).fetchone()[0]
+                                conn.execute(
+                                    "INSERT INTO memory_vec_map "
+                                    "(chunk_key, vec_rowid) VALUES (?, ?)",
+                                    (chunk["chunk_key"], vec_rowid),
+                                )
+                            else:
+                                skipped_vectors = True
+                        indexed += 1
+                        if indexed % 50 == 0:
+                            conn.commit()
+                    except Exception as e:
+                        logger.warning(
+                            "Rebuild: failed to index %s: %s",
+                            chunk["chunk_key"], e,
+                        )
+                        errors += 1
 
             conn.commit()
-            return {"indexed": indexed, "errors": errors, "skipped_vectors": skipped_vectors,
-                    "total_source": len(messages)}
+            return {
+                "indexed": indexed, "errors": errors,
+                "skipped_vectors": skipped_vectors,
+                "total_source": len(memory_files),
+            }
         finally:
             conn.close()
 
@@ -540,7 +737,7 @@ async def list_memory_files(agent_id: str):
 
 @router.delete("/agents/{agent_id}/memory-files/{filename}")
 async def delete_memory_file(agent_id: str, filename: str):
-    """Delete a memory file from disk and the worker DB's memory_files table."""
+    """Delete a memory file from disk, the memory_files table, and search indexes."""
     await _validate_agent(agent_id)
 
     # Prevent path traversal
@@ -553,16 +750,42 @@ async def delete_memory_file(agent_id: str, filename: str):
         raise HTTPException(status_code=404, detail="Memory file not found")
 
     file_path.unlink()
+    rel_path = f"memory/{filename}"
 
-    # Also remove from worker DB memory_files table
     def _clean_db():
         try:
             conn = _open_worker_db(agent_id)
             try:
+                # Remove from memory_files table
                 conn.execute(
                     "DELETE FROM memory_files WHERE file_path = ?",
-                    (f"memory/{filename}",),
+                    (rel_path,),
                 )
+                # Remove from memory_fts
+                conn.execute(
+                    "DELETE FROM memory_fts WHERE rowid IN ("
+                    "  SELECT rowid FROM memory_fts WHERE file_path = ?"
+                    ")",
+                    (rel_path,),
+                )
+                # Remove from memory_vec via mapping table
+                rows = conn.execute(
+                    "SELECT chunk_key, vec_rowid FROM memory_vec_map "
+                    "WHERE chunk_key LIKE ?",
+                    (f"{rel_path}#%",),
+                ).fetchall()
+                for chunk_key, vec_rowid in rows:
+                    try:
+                        conn.execute(
+                            "DELETE FROM memory_vec WHERE rowid = ?",
+                            (vec_rowid,),
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+                    conn.execute(
+                        "DELETE FROM memory_vec_map WHERE chunk_key = ?",
+                        (chunk_key,),
+                    )
                 conn.commit()
             finally:
                 conn.close()

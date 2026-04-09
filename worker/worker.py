@@ -34,6 +34,11 @@ _orch_session_id: str | None = None
 # into the next query's system prompt so the new SDK session has continuity.
 _continuation_summary: str | None = None
 
+# In-memory transcript of the current session's conversation.
+# Accumulates (role, content) tuples for summarization at session end
+# or context overflow.  Cleared on split/end.
+_session_transcript: list[tuple[str, str]] = []
+
 # Module-level DB connection, set in main().
 _conn = None
 
@@ -111,25 +116,28 @@ async def _split_session(conn) -> None:
     for the next query, and resets the SDK session.  The orchestrator session
     and WebSocket connection are unaffected.
     """
-    global _session_id, _continuation_summary
+    global _session_id, _continuation_summary, _session_transcript
 
     try:
-        from worker.memory import (
-            summarize_session,
-            write_memory_file,
-        )
+        from worker.memory import summarize_session, write_memory_file
+        from worker.search import index_memory_vectors
 
-        # Summarize the session (used both for memory and continuation seed)
-        summary = await summarize_session(conn, _orch_session_id)
+        # Summarize from in-memory transcript
+        summary = await summarize_session(_session_transcript)
         if summary:
-            # Write to daily memory file
             sdk_path = (
                 f"sessions/{_session_id}.jsonl"
                 if _session_id
                 else f"sessions/unknown-{(_orch_session_id or 'none')[:8]}"
             )
+            # write_memory_file indexes into memory_fts internally
             _path, needs_compaction = write_memory_file(conn, summary, sdk_path)
             _continuation_summary = summary
+
+            # Async vector indexing
+            if _path:
+                file_content = (WORKSPACE / _path).read_text()
+                await index_memory_vectors(conn, _path, file_content)
 
             if needs_compaction:
                 today = time.strftime("%Y-%m-%d", time.gmtime())
@@ -137,8 +145,9 @@ async def _split_session(conn) -> None:
                 sys.stderr.write(f"worker: scheduled compaction for {today}\n")
                 sys.stderr.flush()
 
-        # Reset SDK session — next query creates a fresh one
+        # Reset SDK session and transcript
         _session_id = None
+        _session_transcript = []
         sys.stderr.write("worker: session split complete\n")
         sys.stderr.flush()
 
@@ -177,20 +186,25 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             # Summarize the current session before clearing
             try:
                 from worker.memory import run_session_end
-                compaction_date = await run_session_end(conn, _orch_session_id, _session_id)
+                compaction_date = await run_session_end(
+                    conn, _session_transcript, _session_id, _orch_session_id,
+                )
                 if compaction_date:
                     emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
             except Exception as e:
                 sys.stderr.write(f"worker: session-end summary failed: {e}\n")
                 sys.stderr.flush()
             _session_id = None  # Next query starts a fresh SDK session
+            _session_transcript = []
             emit({"type": "status", "status": "context_cleared", "message_id": ""})
         elif command == "shutdown":
             sys.stderr.write("worker: received shutdown command, summarizing session\n")
             sys.stderr.flush()
             try:
                 from worker.memory import run_session_end
-                compaction_date = await run_session_end(conn, _orch_session_id, _session_id)
+                compaction_date = await run_session_end(
+                    conn, _session_transcript, _session_id, _orch_session_id,
+                )
                 if compaction_date:
                     emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
             except Exception as e:
@@ -229,17 +243,17 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         return
 
     content = msg.get("content", "")
-    session_id_for_index = msg.get("session_id", "")
-    _orch_session_id = session_id_for_index or _orch_session_id
+    session_id_from_msg = msg.get("session_id", "")
+    _orch_session_id = session_id_from_msg or _orch_session_id
     sys.stderr.write(f"worker: query message_id={message_id} content={content!r}\n")
     sys.stderr.flush()
     emit({"type": "status", "status": "thinking", "message_id": message_id})
 
-    # Retrieve relevant past context via hybrid search
+    # Retrieve relevant past context via hybrid search (memory summaries)
     retrieved_context = None
     try:
         from worker.search import search_hybrid, format_context
-        results = await search_hybrid(conn, content, exclude_session_id=_orch_session_id)
+        results = await search_hybrid(conn, content)
         retrieved_context = format_context(results)
         if retrieved_context:
             sys.stderr.write(
@@ -297,21 +311,13 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             "message_id": message_id,
         })
 
+    # Accumulate transcript for summarization at session end / split
+    _session_transcript.append(("user", content))
+    if response_text:
+        _session_transcript.append(("assistant", response_text))
+
     _mark_processed(conn, message_id)
     emit({"type": "status", "status": "done", "message_id": message_id})
-
-    # Index the conversation turn for future retrieval
-    try:
-        from worker.search import index_message, index_vector
-        _, user_ts = index_message(conn, message_id, session_id_for_index, "user", content)
-        await index_vector(conn, message_id, session_id_for_index, "user", content, user_ts)
-        if response_text:
-            resp_id = message_id + "-response"
-            _, resp_ts = index_message(conn, resp_id, session_id_for_index, "assistant", response_text)
-            await index_vector(conn, resp_id, session_id_for_index, "assistant", response_text, resp_ts)
-    except Exception as e:
-        sys.stderr.write(f"worker: indexing failed: {e}\n")
-        sys.stderr.flush()
 
 
 async def main() -> None:
@@ -343,6 +349,30 @@ async def main() -> None:
         sys.stderr.write(
             f"worker: Ollama not reachable: {e} — embeddings disabled\n"
         )
+        sys.stderr.flush()
+
+    # Backfill memory search index if empty but memory files exist on disk
+    try:
+        fts_count = conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
+        if fts_count == 0:
+            memory_dir = WORKSPACE / "memory"
+            if memory_dir.is_dir():
+                from worker.search import index_memory_file, index_memory_vectors
+                md_files = sorted(memory_dir.glob("*.md"))
+                if md_files:
+                    sys.stderr.write(
+                        f"worker: backfilling memory index ({len(md_files)} files)\n"
+                    )
+                    sys.stderr.flush()
+                    for md_file in md_files:
+                        rel_path = f"memory/{md_file.name}"
+                        file_content = md_file.read_text()
+                        index_memory_file(conn, rel_path, file_content)
+                        await index_memory_vectors(conn, rel_path, file_content)
+                    sys.stderr.write("worker: memory index backfill complete\n")
+                    sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"worker: memory index backfill failed: {e}\n")
         sys.stderr.flush()
 
     sys.stderr.write("worker: ready, polling for input.json\n")

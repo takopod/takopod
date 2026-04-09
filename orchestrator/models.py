@@ -165,17 +165,17 @@ class GitHubAgentToggle(BaseModel):
 
 
 class SearchIndexEntry(BaseModel):
-    message_id: str
+    chunk_key: str
     content: str
-    role: str
-    session_id: str
+    file_path: str
+    session_ref: str
     created_at: str
     rank: float = 0.0
     has_embedding: bool = False
 
 
 class SearchIndexStats(BaseModel):
-    orchestrator_count: int
+    memory_files_count: int
     fts_count: int
     vec_count: int
 
@@ -185,7 +185,7 @@ class SearchIndexUpdateRequest(BaseModel):
 
 
 class ReindexRequest(BaseModel):
-    message_ids: list[str] | None = None
+    chunk_keys: list[str] | None = None
 
 
 class ReindexResponse(BaseModel):
@@ -200,3 +200,5 @@ class MemoryFileEntry(BaseModel):
     modified_at: str
     content_preview: str
     content: str
+
+

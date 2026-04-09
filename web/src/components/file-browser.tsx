@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { FileEntry } from "@/lib/types"
@@ -9,6 +10,7 @@ interface FileBrowserProps {
 }
 
 export function FileBrowser({ agentId }: FileBrowserProps) {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [currentPath, setCurrentPath] = useState("")
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [openFile, setOpenFile] = useState<string | null>(null)
@@ -16,6 +18,7 @@ export function FileBrowser({ agentId }: FileBrowserProps) {
   const [originalContent, setOriginalContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
+  const deepLinked = useRef(false)
 
   const IDENTITY_FILES = new Set(["CLAUDE.md", "SOUL.md", "MEMORY.md"])
   const dirty = content !== originalContent
@@ -37,6 +40,41 @@ export function FileBrowser({ agentId }: FileBrowserProps) {
   useEffect(() => {
     fetchEntries(currentPath)
   }, [currentPath, fetchEntries])
+
+  // Deep-link: open a file specified via ?file= query param
+  useEffect(() => {
+    if (deepLinked.current) return
+    const filePath = searchParams.get("file")
+    if (!filePath) return
+    deepLinked.current = true
+
+    // Set the directory so the back button works
+    const dir = filePath.includes("/")
+      ? filePath.substring(0, filePath.lastIndexOf("/"))
+      : ""
+    setCurrentPath(dir)
+
+    // Open the file
+    const open = async () => {
+      const res = await fetch(
+        `/api/agents/${agentId}/files/${encodeURIComponent(filePath)}`,
+      )
+      if (res.ok) {
+        const text = await res.text()
+        setContent(text)
+        setOriginalContent(text)
+        setOpenFile(filePath)
+      }
+    }
+    open()
+
+    // Clean the param from URL
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.delete("file")
+      return next
+    }, { replace: true })
+  }, [agentId, searchParams, setSearchParams])
 
   const handleOpenFile = async (entry: FileEntry) => {
     if (entry.type === "directory") {

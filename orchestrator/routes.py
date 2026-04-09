@@ -23,6 +23,8 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
+from orchestrator.search_routes import reindex_memory_file
+
 from orchestrator.container_manager import (
     MCP_CONFIGS_DIR,
     create_agent_workspace,
@@ -447,6 +449,10 @@ async def write_agent_file(agent_id: str, file_path: str, request: Request):
             (content, agent_id),
         )
         await db.commit()
+
+    # Re-index memory search if a memory file was edited
+    if file_path.startswith("memory/") and file_path.endswith(".md"):
+        await reindex_memory_file(agent_id, file_path, content)
 
     return {"status": "ok", "path": file_path, "size": len(content)}
 

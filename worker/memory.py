@@ -54,31 +54,22 @@ COMPACT_SYSTEM_PROMPT = (
 
 
 async def summarize_session(
-    conn: sqlite3.Connection, session_id: str,
+    transcript_turns: list[tuple[str, str]],
 ) -> str | None:
     """Summarize a session's conversation by calling Claude.
 
-    Queries message_fts for all messages in the session, formats them as a
-    transcript, and asks Claude for a summary. Returns None if the session
-    has no messages or if summarization fails.
+    Takes a list of (role, content) tuples representing the conversation
+    transcript.  Returns None if the transcript is empty or summarization
+    fails.
     """
-    if not session_id:
-        return None
-
-    rows = conn.execute(
-        "SELECT role, content FROM message_fts "
-        "WHERE session_id = ? ORDER BY rowid",
-        (session_id,),
-    ).fetchall()
-
-    if not rows:
+    if not transcript_turns:
         sys.stderr.write("memory: no messages to summarize\n")
         sys.stderr.flush()
         return None
 
     # Format as transcript
     transcript_parts: list[str] = []
-    for role, content in rows:
+    for role, content in transcript_turns:
         transcript_parts.append(f"[{role}]: {content}")
     transcript = "\n\n".join(transcript_parts)
 
@@ -86,8 +77,8 @@ async def summarize_session(
         transcript = transcript[:MAX_SUMMARY_INPUT] + "\n\n[...truncated]"
 
     sys.stderr.write(
-        f"memory: summarizing session {session_id} "
-        f"({len(rows)} messages, {len(transcript)} chars)\n"
+        f"memory: summarizing session "
+        f"({len(transcript_turns)} messages, {len(transcript)} chars)\n"
     )
     sys.stderr.flush()
 
@@ -194,8 +185,10 @@ async def compact_memory_files(
     abs_canonical = WORKSPACE / canonical_path
     abs_canonical.write_text(f"## Compacted Memory — {date}\n\n{distilled}\n")
 
-    # Delete continuation files
+    # Delete continuation files and their search indexes
+    from worker.search import delete_memory_index, index_memory_file, index_memory_vectors
     for rel_path in paths:
+        delete_memory_index(conn, rel_path)
         if rel_path != canonical_path:
             abs_path = WORKSPACE / rel_path
             if abs_path.is_file():
@@ -211,6 +204,11 @@ async def compact_memory_files(
         (file_id, date, canonical_path, now, now),
     )
     conn.commit()
+
+    # Index the compacted file
+    compacted_content = abs_canonical.read_text()
+    index_memory_file(conn, canonical_path, compacted_content)
+    await index_memory_vectors(conn, canonical_path, compacted_content)
 
     sys.stderr.write(
         f"memory: compacted {len(paths)} files into {canonical_path} "
@@ -253,6 +251,8 @@ def write_memory_file(
     the write still proceeds but the caller is signalled to compact.
 
     Returns (file_path, needs_compaction). file_path is None on failure.
+    After writing, the file is indexed into memory_fts for search.
+    The caller should also call index_memory_vectors() for vector indexing.
     """
     today = time.strftime("%Y-%m-%d", time.gmtime())
 
@@ -308,6 +308,11 @@ def write_memory_file(
             (file_id, today, rel_path, now, now, now),
         )
         conn.commit()
+
+        # Index into memory_fts for search retrieval
+        from worker.search import index_memory_file
+        file_content = abs_path.read_text()
+        index_memory_file(conn, rel_path, file_content)
 
         sys.stderr.write(f"memory: wrote summary to {rel_path}\n")
         sys.stderr.flush()
@@ -377,22 +382,24 @@ def load_memory_context(conn: sqlite3.Connection) -> str | None:
 
 async def run_session_end(
     conn: sqlite3.Connection,
-    session_id: str | None,
+    transcript: list[tuple[str, str]],
     sdk_session_id: str | None,
+    orch_session_id: str | None = None,
 ) -> str | None:
     """Run session-end memory operations: summarize and write memory file.
 
-    Called on shutdown and clear_context. Returns the date string that needs
-    compaction, or None if no compaction is needed. The caller is responsible
-    for scheduling compaction (e.g., emitting a schedule_compaction event).
+    Called on shutdown and clear_context. Takes the in-memory transcript
+    (list of (role, content) tuples) for summarization.
+    Returns the date string that needs compaction, or None if no compaction
+    is needed. The caller is responsible for scheduling compaction.
     Failures are non-fatal.
     """
-    if not session_id:
-        sys.stderr.write("memory: no session_id, skipping session-end summary\n")
+    if not transcript:
+        sys.stderr.write("memory: no transcript, skipping session-end summary\n")
         sys.stderr.flush()
         return None
 
-    summary = await summarize_session(conn, session_id)
+    summary = await summarize_session(transcript)
     if not summary:
         sys.stderr.write("memory: no summary produced, skipping memory write\n")
         sys.stderr.flush()
@@ -402,9 +409,16 @@ async def run_session_end(
     if sdk_session_id:
         session_filepath = f"sessions/{sdk_session_id}.jsonl"
     else:
-        session_filepath = f"sessions/unknown-{session_id[:8]}"
+        orch_prefix = orch_session_id[:8] if orch_session_id else "none"
+        session_filepath = f"sessions/unknown-{orch_prefix}"
 
     _path, needs_compaction = write_memory_file(conn, summary, session_filepath)
+
+    # Trigger async vector indexing for the written file
+    if _path:
+        from worker.search import index_memory_vectors
+        file_content = (WORKSPACE / _path).read_text()
+        await index_memory_vectors(conn, _path, file_content)
 
     if needs_compaction:
         today = time.strftime("%Y-%m-%d", time.gmtime())
