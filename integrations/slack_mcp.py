@@ -27,10 +27,37 @@ client = WebClient(
     headers={"Cookie": f"d={SLACK_COOKIE}"},
 )
 
+# Cache mapping Slack user IDs to display names
+_user_cache: dict[str, str] = {}
+
+
+def _resolve_user(user_id: str) -> str:
+    """Resolve a Slack user ID to a display name, with caching."""
+    if not user_id or user_id == "unknown":
+        return "unknown"
+    if user_id in _user_cache:
+        return _user_cache[user_id]
+    try:
+        resp = client.users_info(user=user_id)
+        profile = resp["user"].get("profile", {})
+        name = (
+            profile.get("display_name")
+            or profile.get("real_name")
+            or resp["user"].get("real_name")
+            or resp["user"].get("name")
+            or user_id
+        )
+        _user_cache[user_id] = name
+        return name
+    except SlackApiError:
+        _user_cache[user_id] = user_id
+        return user_id
+
 
 def _format_message(msg: dict) -> str:
     """Format a single Slack message for display."""
-    user = msg.get("user", "unknown")
+    user_id = msg.get("user", "unknown")
+    user = _resolve_user(user_id)
     text = msg.get("text", "")
     ts = msg.get("ts", "")
     return f"[{ts}] {user}: {text}"
@@ -60,7 +87,8 @@ async def list_channels() -> str:
             for ch in response["channels"]:
                 if ch.get("is_im"):
                     user_id = ch.get("user", "unknown")
-                    channels.append(f"{ch['id']}: @{user_id} (DM)")
+                    display = _resolve_user(user_id)
+                    channels.append(f"{ch['id']}: @{display} (DM)")
                 elif ch.get("is_mpim"):
                     name = ch.get("name", "group-dm")
                     channels.append(f"{ch['id']}: group:{name}")
@@ -124,7 +152,8 @@ async def search_messages(query: str, limit: int = 10) -> str:
         lines = []
         for m in matches:
             channel_name = m.get("channel", {}).get("name", "unknown")
-            user = m.get("user", m.get("username", "unknown"))
+            raw_user = m.get("user", m.get("username", "unknown"))
+            user = _resolve_user(raw_user)
             text = m.get("text", "")
             ts = m.get("ts", "")
             lines.append(f"[{ts}] #{channel_name} | {user}: {text}")
