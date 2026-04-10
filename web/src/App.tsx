@@ -16,6 +16,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
@@ -24,7 +25,7 @@ import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Eraser, Moon, Plus, Sun, X } from "lucide-react"
+import { Eraser, Moon, Sun, X } from "lucide-react"
 
 interface Template {
   id: string
@@ -134,7 +135,7 @@ export function App() {
     })
     if (res.ok) {
       const agent: Agent = await res.json()
-      setAgents((prev) => [...prev, agent])
+      setAgents((prev) => [agent, ...prev])
       setSelectedAgentId(agent.id)
       setShowCreateDialog(false)
     }
@@ -213,33 +214,30 @@ export function App() {
               Search Index
             </NavLink>
           </div>
-          <div className="mt-auto flex flex-col gap-2 px-3 py-4">
-            {agents.length > 0 && (
-              <Select
-                value={selectedAgentId ?? undefined}
-                onValueChange={setSelectedAgentId}
-              >
-                <SelectTrigger className="w-full text-xs">
-                  <SelectValue placeholder="Select agent" />
-                </SelectTrigger>
-                <SelectContent>
-                  {agents.map((agent) => (
-                    <SelectItem key={agent.id} value={agent.id}>
-                      {agent.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              onClick={openCreateDialog}
+          <div className="mt-auto px-3 py-4">
+            <Select
+              value={selectedAgentId ?? undefined}
+              onValueChange={(value) => {
+                if (value === "__create__") {
+                  openCreateDialog()
+                } else {
+                  setSelectedAgentId(value)
+                }
+              }}
             >
-              <Plus className="mr-1.5 size-3.5" />
-              Create Agent
-            </Button>
+              <SelectTrigger className="w-full text-xs">
+                <SelectValue placeholder="No Agent" />
+              </SelectTrigger>
+              <SelectContent>
+                {agents.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </SelectItem>
+                ))}
+                {agents.length > 0 && <SelectSeparator />}
+                <SelectItem value="__create__">+ Create Agent</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </nav>
 
