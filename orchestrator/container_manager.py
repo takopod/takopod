@@ -95,10 +95,14 @@ def create_agent_workspace(
         if content:
             target.write_text(content)
 
-    # Copy skill templates if they exist
+    # Copy skills: common first, then template-specific (can override)
+    dest_skills = host_dir / ".claude" / "skills"
+    common_skills = TEMPLATES_DIR / "common_skills"
+    if common_skills.is_dir():
+        dest_skills.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(common_skills, dest_skills, dirs_exist_ok=True)
     template_skills = template_dir / ".claude" / "skills"
     if template_skills.is_dir():
-        dest_skills = host_dir / ".claude" / "skills"
         dest_skills.mkdir(parents=True, exist_ok=True)
         shutil.copytree(template_skills, dest_skills, dirs_exist_ok=True)
 
