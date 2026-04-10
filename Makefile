@@ -1,7 +1,6 @@
 .PHONY: build install build-worker setup-ollama start-ollama stop-ollama dev web-ui clean clean-all
 
-build: install build-worker
-	cd web && npm run build
+build: install build-worker web-ui
 
 install:
 	uv sync
