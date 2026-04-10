@@ -215,7 +215,7 @@ async def list_templates():
 async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     db = await get_db()
     agent_id = str(uuid.uuid4())
-    host_dir = create_agent_workspace(agent_id, req.agent_type)
+    host_dir = create_agent_workspace(agent_id, req.agent_type, agent_name=req.name)
 
     await db.execute(
         "INSERT INTO agents (id, name, agent_type, host_dir, slack_enabled, github_enabled) "

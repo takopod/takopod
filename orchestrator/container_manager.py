@@ -56,6 +56,7 @@ async def build_image() -> None:
 def create_agent_workspace(
     agent_id: str,
     agent_type: str,
+    agent_name: str | None = None,
     claude_md: str | None = None,
     soul_md: str | None = None,
     memory_md: str | None = None,
@@ -81,10 +82,18 @@ def create_agent_workspace(
             content = memory_md
 
         target = host_dir / filename
+        if not content and (template_dir / filename).is_file():
+            content = (template_dir / filename).read_text()
+
+        # Prepend agent identity to MEMORY.md
+        if filename == "MEMORY.md" and agent_name and content:
+            identity = f"Your name is {agent_name}.\n\n"
+            content = identity + content
+        elif filename == "MEMORY.md" and agent_name and not content:
+            content = f"Your name is {agent_name}.\n"
+
         if content:
             target.write_text(content)
-        elif (template_dir / filename).is_file():
-            shutil.copy2(template_dir / filename, target)
 
     # Copy skill templates if they exist
     template_skills = template_dir / ".claude" / "skills"

@@ -21,10 +21,6 @@ WORKSPACE = Path("/workspace")
 MEMORY_DIR = WORKSPACE / "memory"
 MEMORY_MD = WORKSPACE / "MEMORY.md"
 
-MEMORY_TOKEN_BUDGET = 4000
-CHARS_PER_TOKEN = 4
-MEMORY_CHAR_BUDGET = MEMORY_TOKEN_BUDGET * CHARS_PER_TOKEN
-
 MAX_FILE_SIZE = 8000  # chars; triggers continuation file
 MAX_SUMMARY_INPUT = 50000  # chars; truncation for summarization input
 SUMMARIZE_TIMEOUT = 45  # seconds
@@ -346,60 +342,19 @@ def write_memory_file(
         return None, False
 
 
-def load_memory_context(conn: sqlite3.Connection) -> str | None:
-    """Load MEMORY.md and recent daily memory files for context injection.
+def load_memory_context() -> str | None:
+    """Load MEMORY.md for persistent identity context injection.
 
-    Returns assembled memory context string, or None if nothing to load.
-    Memory files are loaded most-recent-first until the character budget
-    (MEMORY_CHAR_BUDGET) is exhausted.
+    Daily memory files are no longer loaded here — they are surfaced
+    via search_hybrid() which returns only relevant chunks, avoiding
+    duplication with the "Relevant Past Conversations" section.
     """
-    parts: list[str] = []
-
-    # Always include MEMORY.md in full
-    memory_md_content = None
     if MEMORY_MD.is_file():
         text = MEMORY_MD.read_text().strip()
         if text:
-            memory_md_content = text
+            return f"## Persistent Memory\n\n{text}"
 
-    if memory_md_content:
-        parts.append(f"## Persistent Memory\n\n{memory_md_content}")
-
-    # Load daily memory files (most recent first)
-    rows = conn.execute(
-        "SELECT file_path FROM memory_files ORDER BY date DESC, file_path DESC",
-    ).fetchall()
-
-    if rows:
-        budget = MEMORY_CHAR_BUDGET
-        daily_parts: list[str] = []
-
-        for (rel_path,) in rows:
-            if budget <= 0:
-                break
-            abs_path = WORKSPACE / rel_path
-            if not abs_path.is_file():
-                continue
-            content = abs_path.read_text().strip()
-            if not content:
-                continue
-            if len(content) > budget:
-                content = content[:budget] + "\n\n[...truncated]"
-                budget = 0
-            else:
-                budget -= len(content)
-            daily_parts.append(content)
-
-        if daily_parts:
-            parts.append(
-                "## Session History\n\n"
-                + "\n\n".join(daily_parts)
-            )
-
-    if not parts:
-        return None
-
-    return "\n\n".join(parts)
+    return None
 
 
 async def run_session_end(

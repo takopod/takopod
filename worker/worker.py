@@ -268,7 +268,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
     memory_context = None
     try:
         from worker.memory import load_memory_context
-        memory_context = load_memory_context(conn)
+        memory_context = load_memory_context()
         if memory_context:
             sys.stderr.write(
                 f"worker: loaded memory context ({len(memory_context)} chars)\n"
