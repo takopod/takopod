@@ -11,6 +11,7 @@ Usage (standalone testing):
 from __future__ import annotations
 
 import os
+import re
 
 from mcp.server.fastmcp import FastMCP
 from slack_sdk import WebClient
@@ -52,6 +53,70 @@ def _resolve_user(user_id: str) -> str:
     except SlackApiError:
         _user_cache[user_id] = user_id
         return user_id
+
+
+def _find_user_id(username: str) -> tuple[str, str] | None:
+    """Find a Slack user ID by matching display name, real name, or username.
+
+    Returns (user_id, display_name) or None if not found.
+
+    If the input is already a Slack user ID (e.g. U0A3LPN2FKP), resolves it
+    directly via users.info.  Otherwise, scans open DM conversations for a
+    case-insensitive partial match on display/real name.
+    """
+    cleaned = username.strip().lstrip("@")
+
+    # If input is already a user ID, resolve directly
+    if re.fullmatch(r"U[A-Z0-9]+", cleaned):
+        display = _resolve_user(cleaned)
+        if display != cleaned:
+            return cleaned, display
+        return None
+
+    query = cleaned.lower()
+
+    # Scan open DM conversations for a name match
+    try:
+        cursor = None
+        while True:
+            response = client.conversations_list(
+                types="im",
+                limit=200,
+                cursor=cursor or "",
+            )
+            for ch in response["channels"]:
+                user_id = ch.get("user", "")
+                if not user_id:
+                    continue
+                display = _resolve_user(user_id)
+                if query in display.lower():
+                    return user_id, display
+            cursor = response.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+    except SlackApiError:
+        pass
+
+    # Fallback: search messages to find the user ID from results
+    try:
+        response = client.search_messages(query=f"from:{cleaned}", count=1)
+        matches = response.get("messages", {}).get("matches", [])
+        if matches and matches[0].get("user"):
+            user_id = matches[0]["user"]
+            return user_id, _resolve_user(user_id)
+    except SlackApiError:
+        pass
+
+    return None
+
+
+def _open_dm(user_id: str) -> str | None:
+    """Open (or get) a DM channel with a user. Returns channel ID or None."""
+    try:
+        resp = client.conversations_open(users=[user_id])
+        return resp["channel"]["id"]
+    except SlackApiError:
+        return None
 
 
 def _format_message(msg: dict) -> str:
@@ -124,20 +189,47 @@ async def read_channel(channel_id: str, limit: int = 20) -> str:
 
 
 @mcp.tool()
+async def read_dm(username: str, limit: int = 20) -> str:
+    """Read recent messages from a direct message conversation with a user.
+
+    Use this instead of search_messages for reading DM history, as Slack's
+    search API may not index DMs on all workspaces.
+
+    Args:
+        username: Display name, real name, or Slack username of the person.
+                  Case-insensitive partial match (e.g. "marcus" matches "Marcus Kok").
+        limit: Number of messages to retrieve (max 100, default 20).
+    """
+    limit = min(max(1, limit), 100)
+    result = _find_user_id(username)
+    if result is None:
+        return f"No Slack user found matching '{username}'."
+    user_id, display_name = result
+    channel_id = _open_dm(user_id)
+    if channel_id is None:
+        return f"Could not open DM channel with {display_name}."
+    try:
+        response = client.conversations_history(channel=channel_id, limit=limit)
+        if not response["messages"]:
+            return f"No messages in DM with {display_name}."
+        lines = [_format_message(m) for m in reversed(response["messages"])]
+        return f"DM with {display_name}:\n" + "\n".join(lines)
+    except SlackApiError as e:
+        return f"Slack API error: {e.response['error']}"
+
+
+@mcp.tool()
 async def search_messages(query: str, limit: int = 10) -> str:
-    """Search Slack messages across all accessible channels and DMs.
+    """Search Slack messages across all accessible channels.
+
+    NOTE: DM search may not work on all workspaces due to Slack privacy
+    settings. Use read_dm instead for reading DM conversations directly.
 
     Supports Slack search operators:
         from:@user     — messages sent by a specific user
         in:#channel    — messages in a specific channel
-        in:@user       — messages in a DM with a specific user
-        to:@user       — messages directed at a user (DMs)
         has:link       — messages containing links
         before:2024-01-01 / after:2024-01-01 — date filters
-
-    For finding conversations WITH someone, search "in:@username" to get
-    the full DM thread, or combine "from:username" with a second search
-    for your own messages mentioning them.
 
     Args:
         query: Slack search query string (supports operators above).
@@ -152,11 +244,16 @@ async def search_messages(query: str, limit: int = 10) -> str:
         lines = []
         for m in matches:
             channel_name = m.get("channel", {}).get("name", "unknown")
+            # DM channels use the other user's ID as the channel name
+            if re.fullmatch(r"U[A-Z0-9]+", channel_name):
+                channel_label = f"@{_resolve_user(channel_name)} (DM)"
+            else:
+                channel_label = f"#{channel_name}"
             raw_user = m.get("user", m.get("username", "unknown"))
             user = _resolve_user(raw_user)
             text = m.get("text", "")
             ts = m.get("ts", "")
-            lines.append(f"[{ts}] #{channel_name} | {user}: {text}")
+            lines.append(f"[{ts}] {channel_label} | {user}: {text}")
         return "\n".join(lines)
     except SlackApiError as e:
         return f"Slack API error: {e.response['error']}"
