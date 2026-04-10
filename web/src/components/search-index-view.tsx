@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
+  ArrowLeft,
   ChevronDown,
   ChevronRight,
   Eye,
@@ -277,7 +278,14 @@ export function SearchIndexView() {
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-sm font-medium">Search Index</span>
+        <div className="flex items-center gap-2">
+          <Link to="/settings">
+            <Button variant="ghost" size="icon-sm">
+              <ArrowLeft className="size-3.5" />
+            </Button>
+          </Link>
+          <span className="text-sm font-medium">Search Index</span>
+        </div>
         <div className="flex items-center gap-2">
           {agents.length > 0 && (
             <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>

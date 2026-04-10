@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
-import { FileText, RefreshCw, Trash2, X } from "lucide-react"
+import { ArrowLeft, FileText, RefreshCw, Trash2, X } from "lucide-react"
 
 interface Container {
   id: string
@@ -120,7 +121,14 @@ export function ContainersView() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-sm font-medium">Containers</span>
+        <div className="flex items-center gap-2">
+          <Link to="/settings">
+            <Button variant="ghost" size="icon-sm">
+              <ArrowLeft className="size-3.5" />
+            </Button>
+          </Link>
+          <span className="text-sm font-medium">Containers</span>
+        </div>
         <Button variant="outline" size="sm" onClick={fetchContainers} disabled={loading}>
           <RefreshCw className={`mr-1.5 size-3.5 ${loading ? "animate-spin" : ""}`} />
           Refresh

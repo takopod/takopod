@@ -1,4 +1,4 @@
-.PHONY: build install build-worker setup-ollama start-ollama stop-ollama dev clean clean-all
+.PHONY: build install build-worker setup-ollama start-ollama stop-ollama dev web-ui clean clean-all
 
 build: install build-worker
 	cd web && npm run build
@@ -23,6 +23,9 @@ start-ollama:
 stop-ollama:
 	/opt/podman/bin/podman stop -t 10 ollama 2>/dev/null || true
 	/opt/podman/bin/podman rm -f ollama 2>/dev/null || true
+
+web-ui:
+	cd web && npm run build
 
 dev: build-worker
 	.venv/bin/python -m uvicorn orchestrator.main:app --host 0.0.0.0 --port 8000

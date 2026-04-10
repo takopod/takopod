@@ -195,23 +195,8 @@ export function App() {
             <NavLink to="/schedules" match={currentPath === "/schedules"}>
               Schedules
             </NavLink>
-            <NavLink to="/containers" match={currentPath === "/containers"}>
-              Containers
-            </NavLink>
-            <NavLink to="/queue" match={currentPath === "/queue"}>
-              Queue Status
-            </NavLink>
-            <NavLink to="/settings" match={currentPath === "/settings"}>
+            <NavLink to="/settings" match={currentPath.startsWith("/settings")}>
               Settings
-            </NavLink>
-            <NavLink to="/slack" match={currentPath === "/slack"}>
-              Slack
-            </NavLink>
-            <NavLink to="/github" match={currentPath === "/github"}>
-              GitHub
-            </NavLink>
-            <NavLink to="/search-index" match={currentPath === "/search-index"}>
-              Search Index
             </NavLink>
           </div>
           <div className="mt-auto px-3 py-4">
@@ -321,19 +306,19 @@ export function App() {
               element={<SchedulesView />}
             />
             <Route
-              path="/containers"
+              path="/settings/containers"
               element={<ContainersView />}
             />
             <Route
-              path="/queue"
+              path="/settings/queue"
               element={
                 <QueueStatusPanel status={queueStatus} connected={connected} />
               }
             />
             <Route path="/settings" element={<SettingsView />} />
-            <Route path="/slack" element={<SlackView />} />
-            <Route path="/github" element={<GitHubView />} />
-            <Route path="/search-index" element={<SearchIndexView />} />
+            <Route path="/settings/slack" element={<SlackView />} />
+            <Route path="/settings/github" element={<GitHubView />} />
+            <Route path="/settings/search-index" element={<SearchIndexView />} />
           </Routes>
         </main>
 
@@ -392,7 +377,7 @@ export function App() {
                 <Label
                   htmlFor="slack-enabled"
                   className={`text-sm ${!slackConfigured ? "text-muted-foreground" : ""}`}
-                  title={!slackConfigured ? "Configure Slack credentials in the Slack tab first" : ""}
+                  title={!slackConfigured ? "Configure Slack credentials in Settings first" : ""}
                 >
                   Enable Slack integration
                 </Label>
@@ -412,7 +397,7 @@ export function App() {
                 <Label
                   htmlFor="github-enabled"
                   className={`text-sm ${!githubConfigured ? "text-muted-foreground" : ""}`}
-                  title={!githubConfigured ? "Configure GitHub token in the GitHub tab first" : ""}
+                  title={!githubConfigured ? "Configure GitHub token in Settings first" : ""}
                 >
                   Enable GitHub integration
                 </Label>

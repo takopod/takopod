@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { RefreshCw, Trash2 } from "lucide-react"
+import { ArrowLeft, RefreshCw, Trash2 } from "lucide-react"
 import type { Agent } from "@/lib/types"
 
 interface GitHubConfig {
@@ -129,7 +130,14 @@ export function GitHubView() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-sm font-medium">GitHub Integration</span>
+        <div className="flex items-center gap-2">
+          <Link to="/settings">
+            <Button variant="ghost" size="icon-sm">
+              <ArrowLeft className="size-3.5" />
+            </Button>
+          </Link>
+          <span className="text-sm font-medium">GitHub Integration</span>
+        </div>
         <Button
           variant="ghost"
           size="icon-sm"

@@ -1,5 +1,8 @@
+import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { ArrowLeft } from "lucide-react"
 import type { QueueStatusFrame } from "@/lib/types"
 
 interface QueueStatusPanelProps {
@@ -9,7 +12,16 @@ interface QueueStatusPanelProps {
 
 export function QueueStatusPanel({ status, connected: _connected }: QueueStatusPanelProps) {
   return (
-    <div className="flex flex-1 items-start justify-center p-6">
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex items-center border-b px-4 py-2">
+        <Link to="/settings">
+          <Button variant="ghost" size="icon-sm">
+            <ArrowLeft className="size-3.5" />
+          </Button>
+        </Link>
+        <span className="ml-2 text-sm font-medium">Queue Status</span>
+      </div>
+      <div className="flex flex-1 items-start justify-center p-6">
       <Card className="w-full max-w-sm">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium">Queue Status</CardTitle>
@@ -29,6 +41,7 @@ export function QueueStatusPanel({ status, connected: _connected }: QueueStatusP
           </div>
         </CardContent>
       </Card>
+    </div>
     </div>
   )
 }
