@@ -25,7 +25,16 @@ import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Eraser, Moon, Sun, X } from "lucide-react"
+import {
+  Bot,
+  Calendar,
+  Eraser,
+  MessageSquare,
+  Moon,
+  Settings,
+  Sun,
+  X,
+} from "lucide-react"
 
 interface Template {
   id: string
@@ -36,20 +45,23 @@ function NavLink({
   to,
   children,
   match,
+  icon: Icon,
 }: {
   to: string
   children: React.ReactNode
   match: boolean
+  icon?: React.ComponentType<{ className?: string }>
 }) {
   return (
     <Link
       to={to}
-      className={`rounded-md px-3 py-1.5 text-left text-sm ${
+      className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors ${
         match
           ? "bg-muted font-medium text-foreground"
-          : "text-muted-foreground hover:text-foreground"
+          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
       }`}
     >
+      {Icon && <Icon className="size-4 shrink-0" />}
       {children}
     </Link>
   )
@@ -161,73 +173,74 @@ export function App() {
   const currentPath = location.pathname
 
   return (
-    <div className="flex h-svh flex-col">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-        <span className="text-sm font-medium">rhclaw</span>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-        >
-          {theme === "dark" ? (
-            <Sun className="size-4" />
-          ) : (
-            <Moon className="size-4" />
-          )}
-        </Button>
-      </header>
+    <div className="flex h-svh">
+      <nav className="flex w-64 shrink-0 flex-col border-r bg-sidebar">
+        <div className="flex items-center justify-between px-4 pt-5 pb-4">
+          <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">
+            rhclaw
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="text-sidebar-foreground/60 hover:text-sidebar-foreground"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          >
+            {theme === "dark" ? (
+              <Sun className="size-3.5" />
+            ) : (
+              <Moon className="size-3.5" />
+            )}
+          </Button>
+        </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        <nav className="flex w-52 shrink-0 flex-col border-r">
-          <div className="px-4 py-5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Navigation
-          </div>
-          <div className="flex flex-col gap-0.5 px-2">
-            <NavLink to="/" match={currentPath === "/"}>
-              Chat
-            </NavLink>
-            <NavLink
-              to="/agents"
-              match={currentPath.startsWith("/agents")}
-            >
-              Agents
-            </NavLink>
-            <NavLink to="/schedules" match={currentPath === "/schedules"}>
-              Schedules
-            </NavLink>
-            <NavLink to="/settings" match={currentPath.startsWith("/settings")}>
-              Settings
-            </NavLink>
-          </div>
-          <div className="mt-auto px-3 py-4">
-            <Select
-              value={selectedAgentId ?? undefined}
-              onValueChange={(value) => {
-                if (value === "__create__") {
-                  openCreateDialog()
-                } else {
-                  setSelectedAgentId(value)
-                }
-              }}
-            >
-              <SelectTrigger className="w-full text-xs">
-                <SelectValue placeholder="No Agent" />
-              </SelectTrigger>
-              <SelectContent>
-                {agents.map((agent) => (
-                  <SelectItem key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </SelectItem>
-                ))}
-                {agents.length > 0 && <SelectSeparator />}
-                <SelectItem value="__create__">+ Create Agent</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </nav>
+        <div className="px-3 pb-4">
+          <Select
+            value={selectedAgentId ?? undefined}
+            onValueChange={(value) => {
+              if (value === "__create__") {
+                openCreateDialog()
+              } else {
+                setSelectedAgentId(value)
+              }
+            }}
+          >
+            <SelectTrigger className="w-full bg-primary text-primary-foreground hover:bg-primary/90 border-0 text-xs font-medium [&_svg]:text-primary-foreground">
+              <SelectValue placeholder="Create Agent" />
+            </SelectTrigger>
+            <SelectContent>
+              {agents.map((agent) => (
+                <SelectItem key={agent.id} value={agent.id}>
+                  {agent.name}
+                </SelectItem>
+              ))}
+              {agents.length > 0 && <SelectSeparator />}
+              <SelectItem value="__create__">Create Agent</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
-        <main className="flex flex-1 flex-col">
-          <Routes>
+        <div className="flex flex-col gap-0.5 px-3">
+          <NavLink to="/" match={currentPath === "/"} icon={MessageSquare}>
+            Chat
+          </NavLink>
+          <NavLink
+            to="/agents"
+            match={currentPath.startsWith("/agents")}
+            icon={Bot}
+          >
+            Agents
+          </NavLink>
+          <NavLink to="/schedules" match={currentPath === "/schedules"} icon={Calendar}>
+            Schedules
+          </NavLink>
+          <NavLink to="/settings" match={currentPath.startsWith("/settings")} icon={Settings}>
+            Settings
+          </NavLink>
+        </div>
+      </nav>
+
+      <main className="flex flex-1 flex-col overflow-hidden">
+        <Routes>
             <Route
               path="/"
               element={
@@ -321,9 +334,6 @@ export function App() {
             <Route path="/settings/search-index" element={<SearchIndexView />} />
           </Routes>
         </main>
-
-        <aside className="w-52 shrink-0 border-l" />
-      </div>
 
       {showCreateDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">

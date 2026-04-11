@@ -26,6 +26,7 @@ SLACK_MESSAGE_CHAR_LIMIT = 40_000
 
 
 MIN_POLL_INTERVAL = 10  # seconds — floor for per-channel intervals
+BACKOFF_STEP = 10  # seconds added per consecutive failure
 
 
 async def run_slack_poller() -> None:
@@ -33,6 +34,8 @@ async def run_slack_poller() -> None:
     logger.info("Slack poller started")
     # Track last poll time per channel row id (monotonic)
     last_poll: dict[str, float] = {}
+    # Track consecutive failures per channel for backoff
+    fail_count: dict[str, int] = {}
 
     while True:
         try:
@@ -42,26 +45,62 @@ async def run_slack_poller() -> None:
                 now = asyncio.get_running_loop().time()
                 for ch in channels:
                     row_id = ch["id"]
-                    interval = max(ch["interval_seconds"], MIN_POLL_INTERVAL)
+                    base_interval = max(ch["interval_seconds"], MIN_POLL_INTERVAL)
+                    backoff = fail_count.get(row_id, 0) * BACKOFF_STEP
+                    max_backoff = max(base_interval * 2, 60) - base_interval
+                    interval = base_interval + min(backoff, max_backoff)
                     if now - last_poll.get(row_id, 0) >= interval:
                         try:
                             await _poll_channel(ch["channel_id"], ch["last_ts"])
                             last_poll[row_id] = now
+                            fail_count.pop(row_id, None)
                         except Exception:
-                            logger.exception(
-                                "Slack poller failed for channel %s",
-                                ch["channel_id"],
-                            )
+                            last_poll[row_id] = now
+                            fail_count[row_id] = fail_count.get(row_id, 0) + 1
+                            at_max = backoff >= max_backoff
+                            if at_max:
+                                logger.error(
+                                    "Slack poller giving up on channel %s "
+                                    "after %d consecutive failures, "
+                                    "disabling channel",
+                                    ch["channel_id"],
+                                    fail_count[row_id],
+                                )
+                                await _disable_channel(row_id)
+                                fail_count.pop(row_id, None)
+                            else:
+                                next_interval = base_interval + min(
+                                    fail_count[row_id] * BACKOFF_STEP,
+                                    max_backoff,
+                                )
+                                logger.exception(
+                                    "Slack poller failed for channel %s "
+                                    "(attempt %d, next retry in %ds)",
+                                    ch["channel_id"],
+                                    fail_count[row_id],
+                                    next_interval,
+                                )
                 # Clean up removed channels from tracking
                 active_ids = {ch["id"] for ch in channels}
                 for rid in list(last_poll):
                     if rid not in active_ids:
                         del last_poll[rid]
+                        fail_count.pop(rid, None)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Slack poller tick failed")
         await asyncio.sleep(5)  # base tick — individual intervals checked above
+
+
+async def _disable_channel(row_id: str) -> None:
+    """Disable a polling channel after non-retryable failure."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE slack_polling_channels SET enabled = 0 WHERE id = ?",
+        (row_id,),
+    )
+    await db.commit()
 
 
 async def _get_polling_channels() -> list[dict]:
@@ -106,6 +145,10 @@ async def _poll_channel(channel_id: str, last_ts: str) -> None:
         return
 
     messages = response.get("messages", [])
+    logger.info(
+        "Polled channel %s: %d new message(s)",
+        channel_id, len(messages),
+    )
     if not messages:
         return
 
@@ -185,27 +228,24 @@ async def _load_agent_map() -> dict[str, str]:
 def _parse_agent_mentions(
     text: str, agent_map: dict[str, str],
 ) -> list[str]:
-    """Find @AgentName mentions that match known agents.
+    """Find agent mentions using the ``AgentName: message`` format.
 
     Returns list of lowercase agent names that were mentioned.
     Matches longest names first to handle overlapping prefixes.
     """
     lower_text = text.lower()
     matched: list[str] = []
-    # Sort by length descending so "Research Agent" matches before "Research"
     for name in sorted(agent_map, key=len, reverse=True):
-        pattern = f"@{name}"
+        pattern = f"{name}:"
         if pattern in lower_text:
             matched.append(name)
-            # Remove matched mention to prevent substring matches
             lower_text = lower_text.replace(pattern, "", 1)
     return matched
 
 
 def _extract_prompt(text: str, agent_name: str) -> str:
-    """Remove the @AgentName mention from the text to get the prompt."""
-    # Case-insensitive removal of the first @AgentName occurrence
-    pattern = re.compile(re.escape(f"@{agent_name}"), re.IGNORECASE)
+    """Remove the ``AgentName:`` mention from the text to get the prompt."""
+    pattern = re.compile(re.escape(f"{agent_name}:"), re.IGNORECASE)
     return pattern.sub("", text, count=1).strip()
 
 

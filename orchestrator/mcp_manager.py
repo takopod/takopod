@@ -8,8 +8,8 @@ receives tool schemas and routes calls through file-based IPC.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import AsyncExitStack
 from typing import Any
 
 from mcp import ClientSession
@@ -21,13 +21,22 @@ DEFAULT_TOOL_TIMEOUT = 30.0  # seconds
 
 
 class _ServerConnection:
-    """A long-lived connection to a single MCP server process."""
+    """A long-lived connection to a single MCP server process.
+
+    The MCP stdio_client and ClientSession use anyio task groups that
+    must be entered and exited in the same asyncio task.  We run the
+    entire lifecycle in a dedicated background task and communicate
+    via an asyncio.Event for shutdown.
+    """
 
     def __init__(self, name: str, timeout: float = DEFAULT_TOOL_TIMEOUT):
         self.name = name
         self.timeout = timeout
         self.session: ClientSession | None = None
-        self._stack = AsyncExitStack()
+        self._shutdown_event = asyncio.Event()
+        self._task: asyncio.Task | None = None
+        self._ready_event = asyncio.Event()
+        self._start_error: BaseException | None = None
 
     async def start(
         self,
@@ -35,26 +44,59 @@ class _ServerConnection:
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
     ) -> None:
+        self._task = asyncio.create_task(
+            self._run(command, args or [], env),
+            name=f"mcp-server-{self.name}",
+        )
+        await self._ready_event.wait()
+        if self._start_error is not None:
+            raise self._start_error
+
+    async def _run(
+        self,
+        command: str,
+        args: list[str],
+        env: dict[str, str] | None,
+    ) -> None:
+        """Background task that owns the MCP context managers."""
         params = StdioServerParameters(
-            command=command,
-            args=args or [],
-            env=env if env else None,
+            command=command, args=args, env=env,
         )
-        read_stream, write_stream = await self._stack.enter_async_context(
-            stdio_client(params),
-        )
-        self.session = await self._stack.enter_async_context(
-            ClientSession(read_stream, write_stream),
-        )
-        await self.session.initialize()
-        logger.info("MCP server '%s' initialized (command=%s)", self.name, command)
+        try:
+            async with stdio_client(params) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    self.session = session
+                    logger.info(
+                        "MCP server '%s' initialized (command=%s)",
+                        self.name, command,
+                    )
+                    self._ready_event.set()
+                    await self._shutdown_event.wait()
+        except Exception as exc:
+            self._start_error = exc
+            self._ready_event.set()
+        finally:
+            self.session = None
 
     async def close(self) -> None:
-        try:
-            await self._stack.aclose()
-        except Exception:
-            logger.exception("Error closing MCP server '%s'", self.name)
-        self.session = None
+        self._shutdown_event.set()
+        if self._task is not None:
+            try:
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "MCP server '%s' did not shut down in time, cancelling",
+                    self.name,
+                )
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+            except Exception:
+                logger.exception("Error closing MCP server '%s'", self.name)
+            self._task = None
 
 
 class McpServerManager:
