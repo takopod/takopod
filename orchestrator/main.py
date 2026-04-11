@@ -20,6 +20,7 @@ from orchestrator.ollama import check_ollama_status
 from orchestrator.routes import router
 from orchestrator.scheduler import run_scheduler
 from orchestrator.settings import get_setting
+from orchestrator.slack_poller import run_slack_poller
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
@@ -38,10 +39,16 @@ async def lifespan(app: FastAPI):
     await build_image()
 
     scheduler_task = asyncio.create_task(run_scheduler(), name="scheduler")
+    slack_poller_task = asyncio.create_task(run_slack_poller(), name="slack-poller")
     yield
     scheduler_task.cancel()
+    slack_poller_task.cancel()
     try:
         await scheduler_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await slack_poller_task
     except asyncio.CancelledError:
         pass
 

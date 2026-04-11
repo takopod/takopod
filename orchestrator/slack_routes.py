@@ -9,11 +9,19 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from sqlite3 import IntegrityError
 
 from fastapi import APIRouter, HTTPException
 
 from orchestrator.db import get_db
-from orchestrator.models import SlackAgentToggle, SlackConfigRequest
+from orchestrator.models import (
+    SlackAgentToggle,
+    SlackConfigRequest,
+    SlackPollingChannelRequest,
+    SlackPollingChannelUpdate,
+    SlackPollingToggle,
+)
+from orchestrator.settings import get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +140,138 @@ async def put_agent_slack(agent_id: str, req: SlackAgentToggle):
     )
     await db.commit()
     return {"enabled": req.enabled}
+
+
+# --- Slack Channel Polling ---
+
+
+@router.get("/slack/polling")
+async def get_slack_polling():
+    """Return global polling toggle and list of configured channels."""
+    db = await get_db()
+    enabled = (await get_setting("slack_polling_enabled", "false")) == "true"
+    async with db.execute(
+        "SELECT id, channel_id, channel_name, interval_seconds, enabled, last_ts, created_at "
+        "FROM slack_polling_channels ORDER BY created_at",
+    ) as cur:
+        rows = await cur.fetchall()
+    channels = [
+        {
+            "id": r[0],
+            "channel_id": r[1],
+            "channel_name": r[2],
+            "interval_seconds": r[3],
+            "enabled": bool(r[4]),
+            "last_ts": r[5],
+            "created_at": r[6],
+        }
+        for r in rows
+    ]
+    return {"enabled": enabled, "channels": channels}
+
+
+@router.put("/slack/polling")
+async def put_slack_polling(req: SlackPollingToggle):
+    """Toggle global Slack polling on/off."""
+    await set_setting(
+        "slack_polling_enabled", "true" if req.enabled else "false",
+    )
+    return await get_slack_polling()
+
+
+@router.post("/slack/polling/channels")
+async def add_polling_channel(req: SlackPollingChannelRequest):
+    """Add a channel to poll."""
+    import uuid
+
+    db = await get_db()
+    row_id = str(uuid.uuid4())
+    try:
+        await db.execute(
+            "INSERT INTO slack_polling_channels "
+            "(id, channel_id, channel_name, interval_seconds) "
+            "VALUES (?, ?, ?, ?)",
+            (row_id, req.channel_id, req.channel_name, req.interval_seconds),
+        )
+        await db.commit()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409, detail="Channel already added",
+        )
+    return await get_slack_polling()
+
+
+@router.put("/slack/polling/channels/{channel_row_id}")
+async def update_polling_channel(
+    channel_row_id: str, req: SlackPollingChannelUpdate,
+):
+    """Update a polling channel's interval or enabled state."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT id FROM slack_polling_channels WHERE id = ?",
+        (channel_row_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Channel not found")
+
+    if req.interval_seconds is not None:
+        await db.execute(
+            "UPDATE slack_polling_channels SET interval_seconds = ? WHERE id = ?",
+            (req.interval_seconds, channel_row_id),
+        )
+    if req.enabled is not None:
+        await db.execute(
+            "UPDATE slack_polling_channels SET enabled = ? WHERE id = ?",
+            (1 if req.enabled else 0, channel_row_id),
+        )
+    await db.commit()
+    return await get_slack_polling()
+
+
+@router.delete("/slack/polling/channels/{channel_row_id}")
+async def delete_polling_channel(channel_row_id: str):
+    """Remove a channel from polling."""
+    db = await get_db()
+    await db.execute(
+        "DELETE FROM slack_polling_channels WHERE id = ?",
+        (channel_row_id,),
+    )
+    await db.commit()
+    return await get_slack_polling()
+
+
+@router.get("/slack/channels")
+async def list_slack_channels():
+    """List Slack channels the authenticated user is a member of."""
+    config = _read_slack_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="Slack not configured")
+
+    import asyncio
+
+    from slack_sdk import WebClient
+
+    client = WebClient(
+        token=config["xoxc_token"],
+        headers={"Cookie": f"d={config['d_cookie']}"},
+    )
+    try:
+        response = await asyncio.to_thread(
+            client.conversations_list,
+            types="public_channel,private_channel",
+            exclude_archived=True,
+            limit=200,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    channels = [
+        {
+            "id": ch["id"],
+            "name": ch["name"],
+            "is_private": ch.get("is_private", False),
+        }
+        for ch in response.get("channels", [])
+        if ch.get("is_member")
+    ]
+    return {"channels": channels}

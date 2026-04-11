@@ -81,6 +81,29 @@ async def store_scheduled_message(
     )
 
 
+async def store_slack_message(
+    session_id: str,
+    message_id: str,
+    content: str,
+    channel_id: str,
+    thread_ts: str,
+) -> None:
+    """Store a user message from Slack and queue it for processing."""
+    db = await get_db()
+    metadata = json.dumps({
+        "source": "slack",
+        "channel_id": channel_id,
+        "thread_ts": thread_ts,
+    })
+    await db.execute(
+        "INSERT INTO messages (id, session_id, role, content, metadata) "
+        "VALUES (?, ?, 'user', ?, ?)",
+        (message_id, session_id, content, metadata),
+    )
+    await db.commit()
+    await queue_message(session_id, message_id, content, source="slack")
+
+
 async def queue_system_command(session_id: str, command: str) -> None:
     db = await get_db()
     cmd_id = str(uuid.uuid4())
@@ -327,6 +350,17 @@ async def _process_event(
                 await db.commit()
             except Exception:
                 logger.exception("Failed to update agentic task %s last_result", task_id)
+
+        # Post response back to Slack thread
+        if source_metadata and source_metadata.get("source") == "slack":
+            ch = source_metadata.get("channel_id", "")
+            ts = source_metadata.get("thread_ts", "")
+            if ch and ts:
+                try:
+                    from orchestrator.slack_poller import post_slack_reply
+                    await post_slack_reply(ch, ts, event.get("content", ""))
+                except Exception:
+                    logger.exception("Failed to post Slack reply")
 
     elif event_type == "status" and event.get("status") == "done":
         # Worker finished processing — no DB action needed

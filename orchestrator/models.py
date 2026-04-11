@@ -153,6 +153,21 @@ class SlackAgentToggle(BaseModel):
     enabled: bool
 
 
+class SlackPollingToggle(BaseModel):
+    enabled: bool
+
+
+class SlackPollingChannelRequest(BaseModel):
+    channel_id: str = Field(..., min_length=1)
+    channel_name: str = ""
+    interval_seconds: int = Field(30, ge=10, le=300)
+
+
+class SlackPollingChannelUpdate(BaseModel):
+    interval_seconds: int | None = Field(None, ge=10, le=300)
+    enabled: bool | None = None
+
+
 class GitHubConfigRequest(BaseModel):
     personal_access_token: str
 

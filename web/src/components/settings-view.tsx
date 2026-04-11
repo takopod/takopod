@@ -127,7 +127,9 @@ export function SettingsView() {
   const isBoolean = (value: string) => value === "true" || value === "false"
 
   const ollamaValue = settings["ollama_enabled"]
-  const filteredSettings = Object.entries(settings).filter(([key]) => key !== "ollama_enabled")
+  const filteredSettings = Object.entries(settings).filter(
+    ([key]) => key !== "ollama_enabled" && !key.startsWith("slack_polling_"),
+  )
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
