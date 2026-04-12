@@ -22,7 +22,7 @@ import urllib.request
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from orchestrator.db import get_db
 from orchestrator.models import (
@@ -263,39 +263,70 @@ async def reindex_memory_file(agent_id: str, rel_path: str, content: str) -> Non
 # ---------------------------------------------------------------------------
 
 
-@router.get("/agents/{agent_id}/search-index")
-async def search_index(agent_id: str, q: str = "", limit: int = 50):
-    """Search or list entries in the agent's memory FTS index."""
-    await _validate_agent(agent_id)
+@router.get("/search-index")
+async def search_index(
+    agents: list[str] = Query(..., description="Agent names to search"),
+    q: str = "",
+    limit: int = 50,
+):
+    """Search memory FTS indexes for the given agents.
+
+    Accepts one or more agent names via repeated `agents` query params.
+    Single agent: ``?agents=MyAgent&q=hello``
+    All agents:   ``?agents=AgentA&agents=AgentB&q=hello``
+    """
+    if not agents:
+        raise HTTPException(status_code=400, detail="At least one agent name required")
+
+    # Resolve names → (id, name) pairs
+    db = await get_db()
+    placeholders = ", ".join("?" for _ in agents)
+    async with db.execute(
+        f"SELECT id, name FROM agents WHERE status = 'active' AND name IN ({placeholders})",
+        agents,
+    ) as cur:
+        agent_rows = await cur.fetchall()
+
+    if not agent_rows:
+        raise HTTPException(status_code=404, detail="No matching active agents found")
 
     def _query():
-        conn = _open_worker_db(agent_id)
-        try:
-            if q.strip():
-                fts_query = _sanitize_fts5_query(q)
-                rows = conn.execute(
-                    "SELECT chunk_key, content, file_path, session_ref, created_at, rank "
-                    "FROM memory_fts WHERE memory_fts MATCH ? "
-                    "ORDER BY rank LIMIT ?",
-                    (fts_query, min(limit, 200)),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT chunk_key, content, file_path, session_ref, created_at, 0.0 "
-                    "FROM memory_fts ORDER BY rowid DESC LIMIT ?",
-                    (min(limit, 200),),
-                ).fetchall()
-            return [
-                {
-                    "chunk_key": r[0], "content": r[1], "file_path": r[2],
-                    "session_ref": r[3], "created_at": r[4], "rank": r[5],
-                }
-                for r in rows
-            ]
-        finally:
-            conn.close()
+        all_results: list[dict] = []
+        cap = min(limit, 200)
+        for agent_id, agent_name in agent_rows:
+            try:
+                conn = _open_worker_db(agent_id)
+            except FileNotFoundError:
+                continue
+            try:
+                if q.strip():
+                    fts_query = _sanitize_fts5_query(q)
+                    rows = conn.execute(
+                        "SELECT chunk_key, content, file_path, session_ref, created_at, rank "
+                        "FROM memory_fts WHERE memory_fts MATCH ? "
+                        "ORDER BY rank LIMIT ?",
+                        (fts_query, cap),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT chunk_key, content, file_path, session_ref, created_at, 0.0 "
+                        "FROM memory_fts ORDER BY rowid DESC LIMIT ?",
+                        (cap,),
+                    ).fetchall()
+                for r in rows:
+                    all_results.append({
+                        "chunk_key": r[0], "content": r[1], "file_path": r[2],
+                        "session_ref": r[3], "created_at": r[4], "rank": r[5],
+                        "agent_name": agent_name,
+                    })
+            finally:
+                conn.close()
+        if q.strip():
+            all_results.sort(key=lambda x: x["rank"])
+        return all_results[:cap]
 
-    return await _run_worker_op(_query)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _query)
 
 
 # ---------------------------------------------------------------------------

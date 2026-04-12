@@ -6,6 +6,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
@@ -13,7 +14,6 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
-  Eye,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -30,6 +30,7 @@ interface IndexEntry {
   session_ref: string
   created_at: string
   rank: number
+  agent_name?: string
 }
 
 interface IndexStats {
@@ -38,18 +39,12 @@ interface IndexStats {
   vec_count: number
 }
 
-interface MemoryFile {
-  name: string
-  size: number
-  modified_at: string
-  content_preview: string
-  content: string
-}
-
 interface Agent {
   id: string
   name: string
 }
+
+const ALL_AGENTS = "__all__"
 
 export function SearchIndexView() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -59,6 +54,7 @@ export function SearchIndexView() {
 
   const selectedAgentId = searchParams.get("agent") ?? ""
   const query = searchParams.get("q") ?? ""
+  const isAllAgents = selectedAgentId === ALL_AGENTS
 
   const setSelectedAgentId = useCallback(
     (id: string) =>
@@ -88,8 +84,6 @@ export function SearchIndexView() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState("")
   const [stats, setStats] = useState<IndexStats | null>(null)
-  const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([])
-  const [expandedMemory, setExpandedMemory] = useState<string | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
   const [rebuildResult, setRebuildResult] = useState<string | null>(null)
 
@@ -98,8 +92,8 @@ export function SearchIndexView() {
     if (res.ok) {
       const data: Agent[] = await res.json()
       setAgents(data)
-      if (!searchParams.get("agent") && data.length > 0) {
-        setSelectedAgentId(data[0].id)
+      if (!searchParams.get("agent")) {
+        setSelectedAgentId(ALL_AGENTS)
       }
     }
   }, [searchParams, setSelectedAgentId])
@@ -109,16 +103,13 @@ export function SearchIndexView() {
   }, [fetchAgents])
 
   const fetchStats = useCallback(async () => {
-    if (!selectedAgentId) return
+    if (!selectedAgentId || isAllAgents) {
+      setStats(null)
+      return
+    }
     const res = await fetch(`/api/agents/${selectedAgentId}/search-index/stats`)
     if (res.ok) setStats(await res.json())
-  }, [selectedAgentId])
-
-  const fetchMemoryFiles = useCallback(async () => {
-    if (!selectedAgentId) return
-    const res = await fetch(`/api/agents/${selectedAgentId}/memory-files`)
-    if (res.ok) setMemoryFiles(await res.json())
-  }, [selectedAgentId])
+  }, [selectedAgentId, isAllAgents])
 
   const doSearch = useCallback(
     async (agentId: string, q: string) => {
@@ -127,13 +118,21 @@ export function SearchIndexView() {
       const params = new URLSearchParams()
       if (q.trim()) params.set("q", q.trim())
       params.set("limit", "100")
-      const res = await fetch(
-        `/api/agents/${agentId}/search-index?${params}`,
-      )
+
+      // Resolve selected agent(s) to names for the search endpoint
+      const targetAgents =
+        agentId === ALL_AGENTS
+          ? agents
+          : agents.filter((a) => a.id === agentId)
+      for (const a of targetAgents) {
+        params.append("agents", a.name)
+      }
+
+      const res = await fetch(`/api/search-index?${params}`)
       if (res.ok) setResults(await res.json())
       setLoading(false)
     },
-    [],
+    [agents],
   )
 
   const handleSearch = () => doSearch(selectedAgentId, query)
@@ -144,7 +143,6 @@ export function SearchIndexView() {
   useEffect(() => {
     if (!selectedAgentId) return
     fetchStats()
-    fetchMemoryFiles()
     setExpandedId(null)
     setEditingId(null)
 
@@ -159,6 +157,7 @@ export function SearchIndexView() {
   }, [selectedAgentId])
 
   const handleDelete = async (chunkKey: string) => {
+    if (isAllAgents) return
     if (!confirm("Delete this entry from the search index?")) return
     const res = await fetch(
       `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(chunkKey)}`,
@@ -171,6 +170,7 @@ export function SearchIndexView() {
   }
 
   const startEditing = (entry: IndexEntry) => {
+    if (isAllAgents) return
     setEditingId(entry.chunk_key)
     setEditContent(entry.content)
     setExpandedId(entry.chunk_key)
@@ -182,6 +182,7 @@ export function SearchIndexView() {
   }
 
   const saveEditing = async (chunkKey: string) => {
+    if (isAllAgents) return
     const res = await fetch(
       `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(chunkKey)}`,
       {
@@ -205,6 +206,7 @@ export function SearchIndexView() {
   }
 
   const handleReindex = async (chunkKey: string) => {
+    if (isAllAgents) return
     const res = await fetch(
       `/api/agents/${selectedAgentId}/search-index/reindex`,
       {
@@ -220,6 +222,7 @@ export function SearchIndexView() {
   }
 
   const handleFullRebuild = async () => {
+    if (isAllAgents) return
     if (
       !confirm(
         "Full rebuild will drop and recreate all search indexes from memory files on disk. Continue?",
@@ -247,23 +250,6 @@ export function SearchIndexView() {
     setRebuilding(false)
   }
 
-  const handleDeleteMemory = async (filename: string) => {
-    if (!confirm(`Delete memory file "${filename}"?`)) return
-    const res = await fetch(
-      `/api/agents/${selectedAgentId}/memory-files/${encodeURIComponent(filename)}`,
-      { method: "DELETE" },
-    )
-    if (res.ok) {
-      setMemoryFiles((prev) => prev.filter((f) => f.name !== filename))
-      fetchStats()
-    }
-  }
-
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes}B`
-    return `${(bytes / 1024).toFixed(1)}KB`
-  }
-
   /** Extract just the filename from a file_path like "memory/2026-04-07.md" */
   const shortFile = (fp: string) => fp.split("/").pop() ?? fp
 
@@ -286,33 +272,16 @@ export function SearchIndexView() {
           </Link>
           <span className="text-sm font-medium">Search Index</span>
         </div>
-        <div className="flex items-center gap-2">
-          {agents.length > 0 && (
-            <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>
-              <SelectTrigger className="h-7 w-40 text-xs">
-                <SelectValue placeholder="Select agent" />
-              </SelectTrigger>
-              <SelectContent>
-                {agents.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              fetchStats()
-              fetchMemoryFiles()
-            }}
-          >
-            <RefreshCw className="mr-1.5 size-3.5" />
-            Refresh
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            fetchStats()
+          }}
+        >
+          <RefreshCw className="mr-1.5 size-3.5" />
+          Refresh
+        </Button>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -323,7 +292,7 @@ export function SearchIndexView() {
         ) : (
           <div className="flex flex-col gap-4 p-4">
             {/* Stats */}
-            {stats && (
+            {stats && !isAllAgents && (
               <div className="flex items-center gap-4 rounded-md border px-4 py-2 text-sm">
                 <span>
                   Files:{" "}
@@ -348,6 +317,22 @@ export function SearchIndexView() {
 
             {/* Search bar */}
             <div className="flex items-center gap-2">
+              {agents.length > 0 && (
+                <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>
+                  <SelectTrigger className="h-9 w-40 shrink-0 text-xs">
+                    <SelectValue placeholder="Select agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_AGENTS}>All Agents</SelectItem>
+                    <SelectSeparator />
+                    {agents.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -361,16 +346,18 @@ export function SearchIndexView() {
                 />
                 Search
               </Button>
-              <Button
-                variant="outline"
-                onClick={handleFullRebuild}
-                disabled={rebuilding}
-              >
-                <RotateCcw
-                  className={`mr-1.5 size-3.5 ${rebuilding ? "animate-spin" : ""}`}
-                />
-                Full Rebuild
-              </Button>
+              {!isAllAgents && (
+                <Button
+                  variant="outline"
+                  onClick={handleFullRebuild}
+                  disabled={rebuilding}
+                >
+                  <RotateCcw
+                    className={`mr-1.5 size-3.5 ${rebuilding ? "animate-spin" : ""}`}
+                  />
+                  Full Rebuild
+                </Button>
+              )}
             </div>
 
             {rebuildResult && (
@@ -385,16 +372,21 @@ export function SearchIndexView() {
                 <thead>
                   <tr className="border-b bg-muted/50 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     <th className="w-6 px-1 py-2" />
+                    {isAllAgents && (
+                      <th className="w-[12%] px-2 py-2">Agent</th>
+                    )}
                     <th className="w-[14%] px-2 py-2">File</th>
                     <th className="w-[12%] px-2 py-2">Session</th>
                     <th className="px-2 py-2">Content</th>
                     <th className="w-[12%] px-2 py-2">Created</th>
-                    <th className="w-[14%] px-2 py-2">Actions</th>
+                    {!isAllAgents && (
+                      <th className="w-[14%] px-2 py-2">Actions</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {results.map((entry) => (
-                    <Fragment key={entry.chunk_key}>
+                    <Fragment key={`${entry.agent_name ?? ""}:${entry.chunk_key}`}>
                       <tr
                         className="border-b last:border-b-0 cursor-pointer hover:bg-muted/30"
                         onClick={() =>
@@ -413,6 +405,11 @@ export function SearchIndexView() {
                             <ChevronRight className="size-3.5" />
                           )}
                         </td>
+                        {isAllAgents && (
+                          <td className="truncate px-2 py-2 text-xs font-medium">
+                            {entry.agent_name}
+                          </td>
+                        )}
                         <td
                           className="truncate px-2 py-2 font-mono text-xs"
                           title={entry.file_path}
@@ -431,64 +428,66 @@ export function SearchIndexView() {
                         <td className="truncate px-2 py-2 text-xs">
                           {entry.created_at}
                         </td>
-                        <td
-                          className="px-2 py-2"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-center gap-1">
-                            {editingId === entry.chunk_key ? (
-                              <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => saveEditing(entry.chunk_key)}
-                                >
-                                  <Save className="size-3.5" />
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={cancelEditing}
-                                >
-                                  <X className="size-3.5" />
-                                </Button>
-                              </>
-                            ) : (
-                              <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => startEditing(entry)}
-                                  title="Edit content"
-                                >
-                                  <Pencil className="size-3.5" />
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    handleReindex(entry.chunk_key)
-                                  }
-                                  title="Reindex from source"
-                                >
-                                  <RotateCcw className="size-3.5" />
-                                </Button>
-                                <Button
-                                  variant="destructive"
-                                  size="sm"
-                                  onClick={() => handleDelete(entry.chunk_key)}
-                                  title="Delete from index"
-                                >
-                                  <Trash2 className="size-3.5" />
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                        </td>
+                        {!isAllAgents && (
+                          <td
+                            className="px-2 py-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center gap-1">
+                              {editingId === entry.chunk_key ? (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => saveEditing(entry.chunk_key)}
+                                  >
+                                    <Save className="size-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={cancelEditing}
+                                  >
+                                    <X className="size-3.5" />
+                                  </Button>
+                                </>
+                              ) : (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => startEditing(entry)}
+                                    title="Edit content"
+                                  >
+                                    <Pencil className="size-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      handleReindex(entry.chunk_key)
+                                    }
+                                    title="Reindex from source"
+                                  >
+                                    <RotateCcw className="size-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={() => handleDelete(entry.chunk_key)}
+                                    title="Delete from index"
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        )}
                       </tr>
                       {expandedId === entry.chunk_key && (
                         <tr className="border-b bg-muted/20">
-                          <td colSpan={6} className="px-4 py-3">
+                          <td colSpan={isAllAgents ? 6 : 6} className="px-4 py-3">
                             {editingId === entry.chunk_key ? (
                               <textarea
                                 value={editContent}
@@ -520,78 +519,6 @@ export function SearchIndexView() {
                 recent entries.
               </p>
             )}
-
-            {/* Memory Files Section */}
-            <div className="mt-4">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium">Memory Files</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={fetchMemoryFiles}
-                >
-                  <RefreshCw className="mr-1.5 size-3.5" />
-                  Refresh
-                </Button>
-              </div>
-              {memoryFiles.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No memory files for this agent.
-                </p>
-              ) : (
-                <div className="flex flex-col rounded-md border">
-                  {memoryFiles.map((f) => (
-                    <div key={f.name}>
-                      <div className="flex items-center justify-between border-b px-4 py-2 last:border-b-0">
-                        <div className="flex items-center gap-3">
-                          <a
-                            href={`/agents/${selectedAgentId}/files?file=memory/${encodeURIComponent(f.name)}`}
-                            className="text-sm font-mono underline hover:text-primary"
-                          >
-                            {f.name}
-                          </a>
-                          <span className="text-xs text-muted-foreground">
-                            {formatSize(f.size)}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {f.modified_at.slice(0, 10)}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              setExpandedMemory(
-                                expandedMemory === f.name ? null : f.name,
-                              )
-                            }
-                            title="View content"
-                          >
-                            <Eye className="size-3.5" />
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => handleDeleteMemory(f.name)}
-                            title="Delete memory file"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
-                      </div>
-                      {expandedMemory === f.name && (
-                        <div className="border-b bg-muted/20 px-4 py-3">
-                          <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                            {f.content}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
         )}
       </div>
