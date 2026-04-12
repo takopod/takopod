@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useCallback, useEffect, useState } from "react"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { FileEntry } from "@/lib/types"
@@ -10,18 +10,44 @@ interface FileBrowserProps {
 }
 
 export function FileBrowser({ agentId }: FileBrowserProps) {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [currentPath, setCurrentPath] = useState("")
   const [entries, setEntries] = useState<FileEntry[]>([])
-  const [openFile, setOpenFile] = useState<string | null>(null)
   const [content, setContent] = useState("")
   const [originalContent, setOriginalContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
-  const deepLinked = useRef(false)
+
+  const currentPath = searchParams.get("dir") ?? ""
+  const openFile = searchParams.get("file") ?? null
 
   const IDENTITY_FILES = new Set(["CLAUDE.md", "SOUL.md", "MEMORY.md"])
   const dirty = content !== originalContent
+
+  const setCurrentPath = useCallback(
+    (path: string) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        if (path) next.set("dir", path)
+        else next.delete("dir")
+        next.delete("file")
+        return next
+      })
+    },
+    [setSearchParams],
+  )
+
+  const setOpenFile = useCallback(
+    (filePath: string | null) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        if (filePath) next.set("file", filePath)
+        else next.delete("file")
+        return next
+      })
+    },
+    [setSearchParams],
+  )
 
   const fetchEntries = useCallback(
     async (path: string) => {
@@ -41,56 +67,38 @@ export function FileBrowser({ agentId }: FileBrowserProps) {
     fetchEntries(currentPath)
   }, [currentPath, fetchEntries])
 
-  // Deep-link: open a file specified via ?file= query param
+  // Load file content when openFile changes
   useEffect(() => {
-    if (deepLinked.current) return
-    const filePath = searchParams.get("file")
-    if (!filePath) return
-    deepLinked.current = true
-
-    // Set the directory so the back button works
-    const dir = filePath.includes("/")
-      ? filePath.substring(0, filePath.lastIndexOf("/"))
-      : ""
-    setCurrentPath(dir)
-
-    // Open the file
-    const open = async () => {
+    if (!openFile) return
+    const load = async () => {
       const res = await fetch(
-        `/api/agents/${agentId}/files/${encodeURIComponent(filePath)}`,
+        `/api/agents/${agentId}/files/${encodeURIComponent(openFile)}`,
       )
       if (res.ok) {
         const text = await res.text()
         setContent(text)
         setOriginalContent(text)
-        setOpenFile(filePath)
       }
     }
-    open()
+    load()
+  }, [agentId, openFile])
 
-    // Clean the param from URL
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev)
-      next.delete("file")
-      return next
-    }, { replace: true })
-  }, [agentId, searchParams, setSearchParams])
-
-  const handleOpenFile = async (entry: FileEntry) => {
+  const handleOpenFile = (entry: FileEntry) => {
     if (entry.type === "directory") {
       setCurrentPath(entry.path)
-      setOpenFile(null)
       return
     }
-    const res = await fetch(
-      `/api/agents/${agentId}/files/${encodeURIComponent(entry.path)}`,
-    )
-    if (res.ok) {
-      const text = await res.text()
-      setContent(text)
-      setOriginalContent(text)
-      setOpenFile(entry.path)
-    }
+    // Set dir to the file's parent so back button works
+    const dir = entry.path.includes("/")
+      ? entry.path.substring(0, entry.path.lastIndexOf("/"))
+      : ""
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (dir) next.set("dir", dir)
+      else next.delete("dir")
+      next.set("file", entry.path)
+      return next
+    })
   }
 
   const handleSave = async () => {
@@ -119,7 +127,6 @@ export function FileBrowser({ agentId }: FileBrowserProps) {
     const parts = currentPath.split("/").filter(Boolean)
     parts.pop()
     setCurrentPath(parts.join("/"))
-    setOpenFile(null)
   }
 
   if (openFile) {
@@ -170,11 +177,13 @@ export function FileBrowser({ agentId }: FileBrowserProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b px-4 py-2">
-        {currentPath && (
-          <Button variant="ghost" size="icon-sm" onClick={goUp}>
-            <ArrowLeft className="size-4" />
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={currentPath ? goUp : () => navigate(`/agents/${agentId}`)}
+        >
+          <ArrowLeft className="size-4" />
+        </Button>
         <span className="text-sm font-medium">
           {currentPath ? `/${currentPath}` : "Workspace"}
         </span>

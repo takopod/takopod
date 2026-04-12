@@ -30,6 +30,7 @@ interface IndexEntry {
   session_ref: string
   created_at: string
   rank: number
+  agent_id: string
   agent_name?: string
 }
 
@@ -414,7 +415,13 @@ export function SearchIndexView() {
                           className="truncate px-2 py-2 font-mono text-xs"
                           title={entry.file_path}
                         >
-                          {shortFile(entry.file_path)}
+                          <Link
+                            to={`/agents/${entry.agent_id ?? selectedAgentId}/files?file=${encodeURIComponent(entry.file_path)}`}
+                            className="underline decoration-muted-foreground/40 hover:text-primary hover:decoration-primary"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {shortFile(entry.file_path)}
+                          </Link>
                         </td>
                         <td
                           className="truncate px-2 py-2 font-mono text-xs text-muted-foreground"

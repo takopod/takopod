@@ -15,3 +15,5 @@ node_modules/
 # Virtual environments
 .venv
 data/
+
+.claude/

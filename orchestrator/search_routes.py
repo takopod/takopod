@@ -317,7 +317,7 @@ async def search_index(
                     all_results.append({
                         "chunk_key": r[0], "content": r[1], "file_path": r[2],
                         "session_ref": r[3], "created_at": r[4], "rank": r[5],
-                        "agent_name": agent_name,
+                        "agent_id": agent_id, "agent_name": agent_name,
                     })
             finally:
                 conn.close()
