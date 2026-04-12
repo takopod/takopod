@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { FileEditor } from "@/components/file-editor"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -147,17 +148,6 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
     setSaving(false)
   }
 
-  const handleDeleteFile = async (filePath: string) => {
-    if (!selected) return
-    const res = await fetch(
-      `/api/agents/${agentId}/skills/${selected.id}/files/${filePath}`,
-      { method: "DELETE" },
-    )
-    if (res.ok) {
-      await handleSelect(selected.id)
-    }
-  }
-
   // Detail view for a selected skill
   if (selected) {
     return (
@@ -215,63 +205,32 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="flex flex-col gap-4">
-            {selected.description && (
-              <p className="text-sm text-muted-foreground">
-                {selected.description}
-              </p>
+        <FileEditor
+          value={editing ? editContent : selected.content}
+          onChange={editing ? (v) => setEditContent(v) : undefined}
+          readOnly={!editing}
+        />
+
+        <div className="flex items-center gap-2 border-t px-4 py-2">
+          {selected.description && (
+            <span className="text-xs text-muted-foreground truncate">
+              {selected.description}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {selected.files.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {selected.files.length} file{selected.files.length !== 1 ? "s" : ""}
+              </span>
             )}
-
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-xs">SKILL.md</Label>
-              <Textarea
-                value={editing ? editContent : selected.content}
-                onChange={(e) => setEditContent(e.target.value)}
-                readOnly={!editing}
-                className="min-h-64 resize-none font-mono text-xs"
-                spellCheck={false}
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Supporting Files</Label>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowUpload(true)}
-                >
-                  <Upload className="mr-1.5 size-3.5" />
-                  Upload
-                </Button>
-              </div>
-
-              {selected.files.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No supporting files. Upload scripts, templates, or reference
-                  docs.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  {selected.files.map((f) => (
-                    <div
-                      key={f}
-                      className="flex items-center justify-between rounded-md border px-3 py-1.5"
-                    >
-                      <code className="text-xs">{f}</code>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => handleDeleteFile(f)}
-                      >
-                        <Trash2 className="size-3 text-destructive" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowUpload(true)}
+            >
+              <Upload className="mr-1.5 size-3.5" />
+              Files
+            </Button>
           </div>
         </div>
       </div>

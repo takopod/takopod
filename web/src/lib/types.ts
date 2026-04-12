@@ -74,6 +74,7 @@ export interface FileEntry {
 export interface Agent {
   id: string
   name: string
+  icon: string
   agent_type: string
   status: string
   created_at: string

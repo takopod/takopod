@@ -114,6 +114,24 @@ def create_agent_workspace(
     elif (template_dir / ".mcp.json").is_file():
         shutil.copy2(template_dir / ".mcp.json", mcp_path)
 
+    # Merge system-level MCP defaults into agent config
+    system_mcp_path = Path("data/mcp-defaults.json")
+    if system_mcp_path.is_file():
+        try:
+            system_defaults = json.loads(system_mcp_path.read_text())
+            system_servers = system_defaults.get("mcpServers", {})
+            if system_servers:
+                existing = {}
+                if mcp_path.is_file():
+                    existing = json.loads(mcp_path.read_text())
+                existing.setdefault("mcpServers", {})
+                # System defaults are applied first; template/explicit config overrides
+                merged = {**system_servers, **existing["mcpServers"]}
+                existing["mcpServers"] = merged
+                mcp_path.write_text(json.dumps(existing, indent=2))
+        except (json.JSONDecodeError, OSError):
+            pass
+
     return host_dir
 
 

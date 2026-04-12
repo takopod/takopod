@@ -5,6 +5,8 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { ChatInput } from "@/components/chat-input"
 import { ContainersView } from "@/components/containers-view"
 import { SchedulesView } from "@/components/schedules-view"
+import { SystemSkillsView } from "@/components/system-skills-view"
+import { SystemMcpView } from "@/components/system-mcp-view"
 import { SettingsView } from "@/components/settings-view"
 import { SlackView } from "@/components/slack-view"
 import { GitHubView } from "@/components/github-view"
@@ -176,6 +178,7 @@ export function App() {
                       <SidebarTrigger className="-ml-1" />
                       <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
                       <span className="text-sm font-medium truncate">
+                        {agents.find((a) => a.id === selectedAgentId)?.icon}{" "}
                         {agents.find((a) => a.id === selectedAgentId)?.name}
                       </span>
                       <DropdownMenu>
@@ -264,6 +267,8 @@ export function App() {
               path="/schedules"
               element={<SchedulesView />}
             />
+            <Route path="/skills" element={<SystemSkillsView />} />
+            <Route path="/mcp" element={<SystemMcpView />} />
             <Route
               path="/settings/containers"
               element={<ContainersView />}

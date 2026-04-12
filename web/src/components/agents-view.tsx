@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { FileBrowser } from "@/components/file-browser"
+import { FileEditor } from "@/components/file-editor"
 import { SkillsPanel } from "@/components/skills-panel"
 import type { Agent } from "@/lib/types"
 import {
@@ -497,8 +498,6 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
     setSaving(false)
   }
 
-  const lineCount = content.split("\n").length
-
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {!agentId || !detail ? (
@@ -516,7 +515,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
           <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-            <span className="text-sm font-medium truncate">{detail.name}</span>
+            <span className="text-sm font-medium truncate">{detail.icon} {detail.name}</span>
             <Badge variant="secondary">{detail.agent_type}</Badge>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -693,27 +692,13 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
               </Button>
             </div>
           </div>
-          <div className="flex flex-1 overflow-hidden font-mono text-xs">
-            <div
-              className="shrink-0 select-none border-r bg-muted/50 px-3 py-3 text-right text-muted-foreground"
-              aria-hidden
-            >
-              {Array.from({ length: lineCount }, (_, i) => (
-                <div key={i} className="leading-5">
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-            <Textarea
-              value={content}
-              onChange={(e) => {
-                setContent(e.target.value)
-                setDirty(true)
-              }}
-              className="flex-1 resize-none rounded-none border-0 p-3 leading-5 shadow-none focus-visible:ring-0"
-              spellCheck={false}
-            />
-          </div>
+          <FileEditor
+            value={content}
+            onChange={(v) => {
+              setContent(v)
+              setDirty(true)
+            }}
+          />
         </div>
       )}
     </div>

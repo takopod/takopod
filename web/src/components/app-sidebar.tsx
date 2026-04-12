@@ -36,8 +36,11 @@ import {
   ChevronRight,
   GitBranch,
   Hash,
+  MessageSquare,
   Moon,
+  Server,
   Settings,
+  Sparkles,
   Sun,
 } from "lucide-react"
 
@@ -102,6 +105,7 @@ export function AppSidebar({
             <SelectContent>
               {agents.map((agent) => (
                 <SelectItem key={agent.id} value={agent.id}>
+                  {agent.icon && <span className="mr-1.5">{agent.icon}</span>}
                   {agent.name}
                 </SelectItem>
               ))}
@@ -119,12 +123,51 @@ export function AppSidebar({
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
+                isActive={currentPath === "/"}
+                tooltip="Chat"
+              >
+                <Link to="/">
+                  <MessageSquare />
+                  <span>Chat</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
                 isActive={currentPath === "/schedules"}
                 tooltip="Schedules"
               >
                 <Link to="/schedules">
                   <Calendar />
                   <span>Schedules</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={currentPath === "/skills"}
+                tooltip="Skills"
+              >
+                <Link to="/skills">
+                  <Sparkles />
+                  <span>Skills</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={currentPath === "/mcp"}
+                tooltip="MCP Servers"
+              >
+                <Link to="/mcp">
+                  <Server />
+                  <span>MCP Servers</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

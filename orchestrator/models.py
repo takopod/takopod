@@ -40,6 +40,7 @@ class CreateAgentRequest(BaseModel):
 class AgentResponse(BaseModel):
     id: str
     name: str
+    icon: str = ""
     agent_type: str
     status: str
     created_at: str
@@ -123,6 +124,7 @@ class SkillSummary(BaseModel):
     id: str
     name: str
     description: str
+    builtin: bool = False
 
 
 class SkillDetail(SkillSummary):

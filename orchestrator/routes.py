@@ -3,6 +3,7 @@ import dataclasses
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import sys
@@ -72,6 +73,13 @@ router = APIRouter(prefix="/api")
 router.include_router(slack_router)
 router.include_router(github_router)
 router.include_router(search_router)
+
+AGENT_ICONS = [
+    "🤖", "🧠", "⚡", "🔮", "🎯", "🦊", "🐙", "🦾", "🔬", "🧬",
+    "🚀", "💎", "🌟", "🎨", "🛡️", "🔥", "🌀", "🎭", "🧩", "🦉",
+    "🐺", "🦅", "🐋", "🦈", "🐉", "🦇", "🕷️", "🦎", "🐍", "🦁",
+    "🌊", "⭐", "🌙", "☀️", "🌈", "💫", "🔷", "🟣", "🟢", "🔴",
+]
 
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 10
@@ -215,26 +223,27 @@ async def list_templates():
 async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     db = await get_db()
     agent_id = str(uuid.uuid4())
+    icon = random.choice(AGENT_ICONS)
     host_dir = create_agent_workspace(agent_id, req.agent_type, agent_name=req.name)
 
     await db.execute(
-        "INSERT INTO agents (id, name, agent_type, host_dir, slack_enabled, github_enabled) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (agent_id, req.name, req.agent_type, str(host_dir),
+        "INSERT INTO agents (id, name, icon, agent_type, host_dir, slack_enabled, github_enabled) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (agent_id, req.name, icon, req.agent_type, str(host_dir),
          1 if req.slack_enabled else 0, 1 if req.github_enabled else 0),
     )
     await db.commit()
 
     async with db.execute(
-        "SELECT id, name, agent_type, status, created_at, slack_enabled, github_enabled "
+        "SELECT id, name, icon, agent_type, status, created_at, slack_enabled, github_enabled "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
 
     return AgentResponse(
-        id=row[0], name=row[1], agent_type=row[2], status=row[3], created_at=row[4],
-        slack_enabled=bool(row[5]), github_enabled=bool(row[6]),
+        id=row[0], name=row[1], icon=row[2], agent_type=row[3], status=row[4],
+        created_at=row[5], slack_enabled=bool(row[6]), github_enabled=bool(row[7]),
     )
 
 
@@ -242,7 +251,7 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
 async def list_agents() -> list[AgentResponse]:
     db = await get_db()
     async with db.execute(
-        "SELECT a.id, a.name, a.agent_type, a.status, a.created_at, "
+        "SELECT a.id, a.name, a.icon, a.agent_type, a.status, a.created_at, "
         "  (SELECT c.status FROM agent_containers c "
         "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
         "  (SELECT COUNT(*) FROM sessions s "
@@ -256,9 +265,9 @@ async def list_agents() -> list[AgentResponse]:
         rows = await cur.fetchall()
     return [
         AgentResponse(
-            id=r[0], name=r[1], agent_type=r[2], status=r[3], created_at=r[4],
-            container_status=r[5], active_session_count=r[6] or 0,
-            slack_enabled=bool(r[7]), github_enabled=bool(r[8]),
+            id=r[0], name=r[1], icon=r[2] or "", agent_type=r[3], status=r[4],
+            created_at=r[5], container_status=r[6], active_session_count=r[7] or 0,
+            slack_enabled=bool(r[8]), github_enabled=bool(r[9]),
         )
         for r in rows
     ]
@@ -268,7 +277,7 @@ async def list_agents() -> list[AgentResponse]:
 async def get_agent(agent_id: str) -> AgentDetailResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, agent_type, status, created_at, host_dir, slack_enabled, github_enabled "
+        "SELECT id, name, icon, agent_type, status, created_at, host_dir, slack_enabled, github_enabled "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
@@ -276,15 +285,15 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    host_dir = Path(row[5])
+    host_dir = Path(row[6])
     claude_md = (host_dir / "CLAUDE.md").read_text() if (host_dir / "CLAUDE.md").is_file() else ""
     soul_md = (host_dir / "SOUL.md").read_text() if (host_dir / "SOUL.md").is_file() else ""
     memory_md = (host_dir / "MEMORY.md").read_text() if (host_dir / "MEMORY.md").is_file() else ""
 
     return AgentDetailResponse(
-        id=row[0], name=row[1], agent_type=row[2], status=row[3],
-        created_at=row[4], claude_md=claude_md, soul_md=soul_md, memory_md=memory_md,
-        slack_enabled=bool(row[6]), github_enabled=bool(row[7]),
+        id=row[0], name=row[1], icon=row[2] or "", agent_type=row[3], status=row[4],
+        created_at=row[5], claude_md=claude_md, soul_md=soul_md, memory_md=memory_md,
+        slack_enabled=bool(row[7]), github_enabled=bool(row[8]),
     )
 
 
@@ -732,6 +741,251 @@ async def delete_skill_file(agent_id: str, skill_id: str, file_path: str):
         parent.rmdir()
         parent = parent.parent
     return {"status": "ok", "deleted": file_path}
+
+
+# --- System-Level Skills API ---
+
+SYSTEM_SKILLS_DIR = Path("skills")
+
+
+def _system_skills_dir() -> Path:
+    """Return the system-level skills directory, creating it if needed."""
+    SYSTEM_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    return SYSTEM_SKILLS_DIR
+
+
+def _list_system_skills() -> list[tuple[str, Path, str]]:
+    """Scan system skills dir for both flat .md files and subdirectories with SKILL.md.
+
+    Returns list of (skill_id, skill_md_path, format) tuples.
+    """
+    sdir = _system_skills_dir()
+    results: list[tuple[str, Path, str]] = []
+    for item in sorted(sdir.iterdir()):
+        if item.is_file() and item.suffix == ".md":
+            results.append((item.stem, item, "flat"))
+        elif item.is_dir() and (item / "SKILL.md").is_file():
+            results.append((item.name, item / "SKILL.md", "dir"))
+    return results
+
+
+def _is_builtin_skill(skill_id: str) -> bool:
+    """Check if a skill is git-tracked (builtin) by querying git."""
+    import subprocess
+    for git_path in (f"skills/{skill_id}.md", f"skills/{skill_id}/SKILL.md"):
+        try:
+            subprocess.run(
+                ["git", "cat-file", "-e", f"HEAD:{git_path}"],
+                capture_output=True, check=True,
+            )
+            return True
+        except subprocess.CalledProcessError:
+            continue
+    return False
+
+
+@router.get("/skills")
+async def list_system_skills() -> list[SkillSummary]:
+    result: list[SkillSummary] = []
+    for skill_id, skill_path, _ in _list_system_skills():
+        content = skill_path.read_text()
+        name, desc = _parse_skill_frontmatter(content)
+        result.append(SkillSummary(
+            id=skill_id,
+            name=name or skill_id,
+            description=desc,
+            builtin=_is_builtin_skill(skill_id),
+        ))
+    return result
+
+
+@router.get("/skills/{skill_id}")
+async def get_system_skill(skill_id: str) -> SkillDetail:
+    sdir = _system_skills_dir()
+    # Check directory-based first, then flat
+    dir_path = sdir / skill_id
+    flat_path = sdir / f"{skill_id}.md"
+
+    if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
+        skill_path = dir_path / "SKILL.md"
+        files = _collect_supporting_files(dir_path)
+    elif flat_path.is_file():
+        skill_path = flat_path
+        files = []
+    else:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    content = skill_path.read_text()
+    name, desc = _parse_skill_frontmatter(content)
+    return SkillDetail(
+        id=skill_id,
+        name=name or skill_id,
+        description=desc,
+        content=content,
+        files=files,
+        builtin=_is_builtin_skill(skill_id),
+    )
+
+
+@router.post("/skills")
+async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
+    sdir = _system_skills_dir()
+    skill_dir = sdir / req.name
+    flat_path = sdir / f"{req.name}.md"
+    if skill_dir.exists() or flat_path.exists():
+        raise HTTPException(status_code=409, detail=f"Skill '{req.name}' already exists")
+    skill_dir.mkdir(parents=True)
+
+    content = req.content
+    if not content.strip():
+        content = (
+            f"---\nname: {req.name}\n"
+            f"description: {req.description}\n"
+            f"---\n\n# {req.name}\n\nTODO: Add skill instructions here.\n"
+        )
+    (skill_dir / "SKILL.md").write_text(content)
+
+    name, desc = _parse_skill_frontmatter(content)
+    return SkillDetail(
+        id=req.name,
+        name=name or req.name,
+        description=desc,
+        content=content,
+        files=[],
+    )
+
+
+@router.put("/skills/{skill_id}")
+async def update_system_skill(skill_id: str, req: UpdateSkillRequest) -> SkillDetail:
+    sdir = _system_skills_dir()
+    # Check directory-based first, then flat
+    dir_path = sdir / skill_id
+    flat_path = sdir / f"{skill_id}.md"
+
+    if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
+        skill_path = dir_path / "SKILL.md"
+        files = _collect_supporting_files(dir_path)
+    elif flat_path.is_file():
+        skill_path = flat_path
+        files = []
+    else:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    skill_path.write_text(req.content)
+    name, desc = _parse_skill_frontmatter(req.content)
+    return SkillDetail(
+        id=skill_id,
+        name=name or skill_id,
+        description=desc,
+        content=req.content,
+        files=files,
+    )
+
+
+@router.delete("/skills/{skill_id}")
+async def delete_system_skill(skill_id: str):
+    if _is_builtin_skill(skill_id):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete builtin skill '{skill_id}'. Use reset to restore defaults.",
+        )
+
+    sdir = _system_skills_dir()
+    dir_path = sdir / skill_id
+    flat_path = sdir / f"{skill_id}.md"
+
+    if dir_path.is_dir():
+        shutil.rmtree(dir_path)
+    elif flat_path.is_file():
+        flat_path.unlink()
+    else:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return {"status": "ok", "skill_id": skill_id}
+
+
+@router.post("/skills/{skill_id}/reset")
+async def reset_system_skill(skill_id: str) -> SkillDetail:
+    """Reset a system skill to its git-committed default content."""
+    sdir = _system_skills_dir()
+    dir_path = sdir / skill_id
+    flat_path = sdir / f"{skill_id}.md"
+
+    # Determine the file's repo-relative path to query git
+    if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
+        skill_path = dir_path / "SKILL.md"
+        git_path = f"skills/{skill_id}/SKILL.md"
+    elif flat_path.is_file():
+        skill_path = flat_path
+        git_path = f"skills/{skill_id}.md"
+    else:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    # Retrieve the committed version via git
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{git_path}"],
+            capture_output=True, text=True, check=True,
+        )
+        default_content = result.stdout
+    except subprocess.CalledProcessError:
+        raise HTTPException(
+            status_code=404,
+            detail="No default version found in git history for this skill",
+        )
+
+    skill_path.write_text(default_content)
+    name, desc = _parse_skill_frontmatter(default_content)
+    return SkillDetail(
+        id=skill_id,
+        name=name or skill_id,
+        description=desc,
+        content=default_content,
+        files=[],
+    )
+
+
+# --- System-Level MCP Defaults API ---
+
+SYSTEM_MCP_CONFIG_PATH = Path("data/mcp-defaults.json")
+
+
+def _read_system_mcp_config() -> dict:
+    if SYSTEM_MCP_CONFIG_PATH.is_file():
+        try:
+            return json.loads(SYSTEM_MCP_CONFIG_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"mcpServers": {}}
+
+
+def _write_system_mcp_config(config: dict) -> None:
+    SYSTEM_MCP_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SYSTEM_MCP_CONFIG_PATH.write_text(json.dumps(config, indent=2))
+
+
+@router.get("/mcp")
+async def get_system_mcp_config():
+    return _read_system_mcp_config()
+
+
+@router.put("/mcp")
+async def put_system_mcp_config(req: McpConfigRequest):
+    data = req.model_dump(exclude_defaults=True)
+    data.setdefault("mcpServers", {})
+    _write_system_mcp_config(data)
+    return data
+
+
+@router.delete("/mcp/servers/{server_name}")
+async def delete_system_mcp_server(server_name: str):
+    config = _read_system_mcp_config()
+    servers = config.get("mcpServers", {})
+    if server_name not in servers:
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+    del servers[server_name]
+    _write_system_mcp_config(config)
+    return {"status": "ok", "removed": server_name}
 
 
 # --- Containers API ---
