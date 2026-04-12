@@ -10,10 +10,13 @@ Usage (standalone testing):
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -22,6 +25,7 @@ mcp = FastMCP("GitHubIntegration")
 
 GITHUB_TOKEN = os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")
 GITHUB_USERNAME = os.environ.get("GITHUB_USERNAME", "")
+AGENT_WORKSPACE = os.environ.get("AGENT_WORKSPACE_HOST_DIR", "")
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +477,211 @@ async def get_issue(owner: str, repo: str, issue_number: int) -> str:
         parts.append("\n(could not fetch comments)")
 
     return "\n".join(parts)
+
+
+@mcp.tool()
+async def get_pr_diff(owner: str, repo: str, pr_number: int) -> str:
+    """Get the full unified diff for a pull request.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        pr_number: Pull request number.
+    """
+    MAX_DIFF_BYTES = 100_000
+
+    try:
+        raw = _client.get(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}",
+            accept="application/vnd.github.diff",
+        )
+    except GitHubAPIError as exc:
+        return _api_error_response(exc)
+
+    if not isinstance(raw, str):
+        raw = str(raw)
+
+    if len(raw) > MAX_DIFF_BYTES:
+        truncated = raw[:MAX_DIFF_BYTES]
+        # Cut at the last complete line
+        last_nl = truncated.rfind("\n")
+        if last_nl > 0:
+            truncated = truncated[:last_nl]
+        return (
+            f"[Diff truncated — showing first ~100KB of {len(raw)} bytes]\n\n"
+            + truncated
+        )
+
+    return raw
+
+
+@mcp.tool()
+async def get_pr_files(owner: str, repo: str, pr_number: int) -> str:
+    """List files changed in a pull request with per-file stats.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        pr_number: Pull request number.
+    """
+    all_files: list[dict] = []
+    page = 1
+
+    try:
+        while True:
+            batch = _client.get(
+                f"/repos/{owner}/{repo}/pulls/{pr_number}/files",
+                params={"per_page": "100", "page": str(page)},
+            )
+            if not batch:
+                break
+            all_files.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    except GitHubAPIError as exc:
+        return _api_error_response(exc)
+
+    if not all_files:
+        return f"No files changed in PR #{pr_number}."
+
+    total_add = sum(f.get("additions", 0) for f in all_files)
+    total_del = sum(f.get("deletions", 0) for f in all_files)
+    lines = [f"Files changed: {len(all_files)}  (+{total_add} -{total_del})\n"]
+
+    for f in all_files:
+        status = f.get("status", "unknown")
+        adds = f.get("additions", 0)
+        dels = f.get("deletions", 0)
+        lines.append(f"  [{status}] {f['filename']}  (+{adds} -{dels})")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_repo_contents(
+    owner: str, repo: str, path: str, ref: str = ""
+) -> str:
+    """Read a file or list a directory from a repository.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        path: Path within the repository (e.g. "data/migrations/versions").
+        ref: Git ref (branch, tag, or commit SHA). Defaults to the repo's default branch.
+    """
+    params: dict[str, str] = {}
+    if ref:
+        params["ref"] = ref
+
+    try:
+        data = _client.get(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            params=params or None,
+        )
+    except GitHubAPIError as exc:
+        return _api_error_response(exc)
+
+    # Directory listing
+    if isinstance(data, list):
+        entries = sorted(data, key=lambda e: (e.get("type", ""), e.get("name", "")))
+        lines = [f"Directory: {path}/ ({len(entries)} entries)\n"]
+        for entry in entries:
+            kind = entry.get("type", "unknown")
+            name = entry.get("name", "?")
+            marker = "/" if kind == "dir" else ""
+            lines.append(f"  [{kind}] {name}{marker}")
+        return "\n".join(lines)
+
+    # Single file
+    if isinstance(data, dict) and data.get("type") == "file":
+        content_b64 = data.get("content", "")
+        try:
+            content = base64.b64decode(content_b64).decode("utf-8", errors="replace")
+        except Exception:
+            return f"File: {path} (binary or could not decode, size: {data.get('size', '?')} bytes)"
+
+        MAX_FILE_BYTES = 100_000
+        if len(content) > MAX_FILE_BYTES:
+            content = content[:MAX_FILE_BYTES]
+            return (
+                f"File: {path} [truncated to ~100KB of {data.get('size', '?')} bytes]\n\n"
+                + content
+            )
+        return f"File: {path} ({data.get('size', '?')} bytes)\n\n{content}"
+
+    return f"Unexpected response type for {path}."
+
+
+async def _run_git(*args: str, cwd: str | Path | None = None) -> tuple[int, str, str]:
+    """Run a git command and return (returncode, stdout, stderr)."""
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return proc.returncode, stdout.decode(), stderr.decode()
+
+
+@mcp.tool()
+async def clone_repository(owner: str, repo: str, ref: str = "") -> str:
+    """Clone a GitHub repository into the agent's workspace for local analysis.
+
+    Clones to /workspace/repos/{owner}/{repo} (visible inside the container).
+    If the repo is already cloned, fetches latest changes instead.
+    Supports both public and private repositories (uses the configured token).
+
+    Args:
+        owner: Repository owner (e.g. "quay").
+        repo: Repository name (e.g. "quay").
+        ref: Optional branch or tag to checkout after cloning. Defaults to the repo's default branch.
+    """
+    if not AGENT_WORKSPACE:
+        return "Error: agent workspace path not configured."
+
+    repo_dir = Path(AGENT_WORKSPACE) / "repos" / owner / repo
+    clone_url = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{owner}/{repo}.git"
+    container_path = f"/workspace/repos/{owner}/{repo}"
+
+    if repo_dir.is_dir() and (repo_dir / ".git").is_dir():
+        # Already cloned — fetch latest
+        rc, out, err = await _run_git("fetch", "origin", cwd=repo_dir)
+        if rc != 0:
+            return f"Error fetching updates: {err}"
+
+        if ref:
+            rc, out, err = await _run_git("checkout", ref, cwd=repo_dir)
+            if rc != 0:
+                # Try as remote branch
+                rc, out, err = await _run_git(
+                    "checkout", "-B", ref, f"origin/{ref}", cwd=repo_dir
+                )
+                if rc != 0:
+                    return f"Error checking out {ref}: {err}"
+            rc, out, err = await _run_git("pull", "origin", ref, cwd=repo_dir)
+
+        return (
+            f"Repository {owner}/{repo} updated (fetched latest).\n"
+            f"Local path inside container: {container_path}"
+        )
+
+    # Fresh clone
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    clone_args = ["clone", "--depth", "50", clone_url, str(repo_dir)]
+    if ref:
+        clone_args = ["clone", "--depth", "50", "--branch", ref, clone_url, str(repo_dir)]
+
+    rc, out, err = await _run_git(*clone_args)
+    if rc != 0:
+        return f"Error cloning {owner}/{repo}: {err}"
+
+    return (
+        f"Repository {owner}/{repo} cloned successfully.\n"
+        f"Local path inside container: {container_path}"
+    )
 
 
 if __name__ == "__main__":

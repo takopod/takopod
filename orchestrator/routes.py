@@ -180,6 +180,7 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
                 "env": {
                     "GITHUB_PERSONAL_ACCESS_TOKEN": github_config["personal_access_token"],
                     "GITHUB_USERNAME": github_config.get("username", ""),
+                    "AGENT_WORKSPACE_HOST_DIR": str(host_dir),
                 },
                 "timeout": 30.0,
             }
