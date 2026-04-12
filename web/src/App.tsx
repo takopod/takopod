@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom"
+import { Route, Routes, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
+import { AppSidebar } from "@/components/app-sidebar"
 import { ChatInput } from "@/components/chat-input"
 import { ContainersView } from "@/components/containers-view"
 import { SchedulesView } from "@/components/schedules-view"
@@ -16,60 +17,35 @@ import {
   Select,
   SelectContent,
   SelectItem,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useTheme } from "@/components/theme-provider"
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  Bot,
-  Calendar,
   Eraser,
   MessageSquare,
-  Moon,
+  MoreHorizontal,
   Settings,
-  Sun,
   X,
 } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Separator } from "@/components/ui/separator"
 
 interface Template {
   id: string
   name: string
 }
 
-function NavLink({
-  to,
-  children,
-  match,
-  icon: Icon,
-}: {
-  to: string
-  children: React.ReactNode
-  match: boolean
-  icon?: React.ComponentType<{ className?: string }>
-}) {
-  return (
-    <Link
-      to={to}
-      className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-        match
-          ? "bg-muted font-medium text-foreground"
-          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-      }`}
-    >
-      {Icon && <Icon className="size-4 shrink-0" />}
-      {children}
-    </Link>
-  )
-}
-
 export function App() {
-  const { theme, setTheme } = useTheme()
-  const location = useLocation()
   const navigate = useNavigate()
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
@@ -170,76 +146,22 @@ export function App() {
     }
   }
 
-  const currentPath = location.pathname
-
   return (
-    <div className="flex h-svh">
-      <nav className="flex w-64 shrink-0 flex-col border-r bg-sidebar">
-        <div className="flex items-center justify-between px-4 pt-5 pb-4">
-          <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">
-            rhclaw
-          </span>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            className="text-sidebar-foreground/60 hover:text-sidebar-foreground"
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          >
-            {theme === "dark" ? (
-              <Sun className="size-3.5" />
-            ) : (
-              <Moon className="size-3.5" />
-            )}
-          </Button>
-        </div>
+    <SidebarProvider>
+      <AppSidebar
+        agents={agents}
+        selectedAgentId={selectedAgentId}
+        onAgentChange={(value) => {
+          if (value === "__create__") {
+            openCreateDialog()
+          } else {
+            setSelectedAgentId(value)
+            navigate("/")
+          }
+        }}
+      />
 
-        <div className="px-3 pb-4">
-          <Select
-            value={selectedAgentId ?? undefined}
-            onValueChange={(value) => {
-              if (value === "__create__") {
-                openCreateDialog()
-              } else {
-                setSelectedAgentId(value)
-              }
-            }}
-          >
-            <SelectTrigger className="w-full bg-primary text-primary-foreground hover:bg-primary/90 border-0 text-xs font-medium [&_svg]:text-primary-foreground">
-              <SelectValue placeholder="Create Agent" />
-            </SelectTrigger>
-            <SelectContent>
-              {agents.map((agent) => (
-                <SelectItem key={agent.id} value={agent.id}>
-                  {agent.name}
-                </SelectItem>
-              ))}
-              {agents.length > 0 && <SelectSeparator />}
-              <SelectItem value="__create__">Create Agent</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex flex-col gap-0.5 px-3">
-          <NavLink to="/" match={currentPath === "/"} icon={MessageSquare}>
-            Chat
-          </NavLink>
-          <NavLink
-            to="/agents"
-            match={currentPath.startsWith("/agents")}
-            icon={Bot}
-          >
-            Agents
-          </NavLink>
-          <NavLink to="/schedules" match={currentPath === "/schedules"} icon={Calendar}>
-            Schedules
-          </NavLink>
-          <NavLink to="/settings" match={currentPath.startsWith("/settings")} icon={Settings}>
-            Settings
-          </NavLink>
-        </div>
-      </nav>
-
-      <main className="flex flex-1 flex-col overflow-hidden">
+      <SidebarInset>
         <Routes>
             <Route
               path="/"
@@ -250,17 +172,41 @@ export function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="flex items-center justify-end border-b px-4 py-1.5">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-xs text-muted-foreground"
-                        disabled={!connected || !!sessionEnded}
-                        onClick={() => sendSystemCommand("clear_context")}
-                      >
-                        <Eraser className="mr-1.5 size-3.5" />
-                        Clear Context
-                      </Button>
+                    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
+                      <SidebarTrigger className="-ml-1" />
+                      <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+                      <span className="text-sm font-medium truncate">
+                        {agents.find((a) => a.id === selectedAgentId)?.name}
+                      </span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon-sm">
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuCheckboxItem checked={true} onClick={() => navigate("/")}>
+                            <MessageSquare className="mr-2 size-3.5" />
+                            Chat
+                          </DropdownMenuCheckboxItem>
+                          <DropdownMenuCheckboxItem checked={false} onClick={() => navigate(`/agents/${selectedAgentId}`)} className="whitespace-nowrap">
+                            <Settings className="mr-2 size-3.5" />
+                            Agent Settings
+                          </DropdownMenuCheckboxItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      <div className="ml-auto">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs text-muted-foreground"
+                          disabled={!connected || !!sessionEnded}
+                          onClick={() => sendSystemCommand("clear_context")}
+                        >
+                          <Eraser className="mr-1.5 size-3.5" />
+                          Clear Context
+                        </Button>
+                      </div>
                     </div>
                     <ChatMessageList messages={messages} hasOlderMessages={hasOlderMessages} loadingOlder={loadingOlder} onLoadOlder={loadOlderMessages} />
                     {(queueStatus.queued > 0 || queueStatus.in_flight > 0) &&
@@ -333,7 +279,7 @@ export function App() {
             <Route path="/settings/github" element={<GitHubView />} />
             <Route path="/settings/search-index" element={<SearchIndexView />} />
           </Routes>
-        </main>
+      </SidebarInset>
 
       {showCreateDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -435,7 +381,7 @@ export function App() {
           </div>
         </div>
       )}
-    </div>
+    </SidebarProvider>
   )
 }
 
