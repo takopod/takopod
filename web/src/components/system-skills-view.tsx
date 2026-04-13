@@ -6,8 +6,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
-import { Badge } from "@/components/ui/badge"
-import { Info, Plus, Trash2, RotateCcw, X, ArrowLeft } from "lucide-react"
+import { Info, Pencil, Plus, Trash2, RotateCcw, X, ArrowLeft } from "lucide-react"
 
 interface SkillSummary {
   id: string
@@ -183,7 +182,7 @@ export function SystemSkillsView() {
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-        <span className="text-sm font-medium">Default Skills</span>
+        <span className="text-sm font-medium">Available Skills</span>
         <div className="ml-auto">
           <Button size="sm" onClick={() => setShowAdd(true)} disabled={showAdd}>
             <Plus className="mr-1.5 size-3.5" />
@@ -213,27 +212,44 @@ export function SystemSkillsView() {
                 </p>
               )}
 
-              {skills.map((skill) => (
-                <button
+              {skills
+                .sort((a, b) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0))
+                .map((skill) => (
+                <div
                   key={skill.id}
-                  type="button"
-                  className="flex flex-col gap-1 rounded-md border px-4 py-3 text-left hover:bg-muted/50"
-                  onClick={() => handleSelect(skill.id)}
+                  className="flex items-start justify-between rounded-md border px-4 py-3"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-1">
                     <span className="text-sm font-medium">{skill.name}</span>
-                    {skill.builtin && (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                        builtin
-                      </Badge>
+                    {skill.description && (
+                      <code className="text-xs text-muted-foreground">
+                        {skill.description}
+                      </code>
                     )}
                   </div>
-                  {skill.description && (
-                    <span className="text-xs text-muted-foreground">
-                      {skill.description}
-                    </span>
-                  )}
-                </button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleSelect(skill.id)}
+                    >
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    {skill.builtin ? (
+                      <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider">
+                        builtin
+                      </span>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => handleDelete(skill.id)}
+                      >
+                        <Trash2 className="size-3.5 text-destructive" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
               ))}
 
               {showAdd && (

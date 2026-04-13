@@ -1165,6 +1165,12 @@ async def reset_system_skill(skill_id: str) -> SkillDetail:
 
 SYSTEM_MCP_CONFIG_PATH = Path("data/mcp-defaults.json")
 
+BUILTIN_MCP_SERVERS = {"slack", "github"}
+
+
+def _is_builtin_mcp_server(server_name: str) -> bool:
+    return server_name in BUILTIN_MCP_SERVERS
+
 
 def _read_system_mcp_config() -> dict:
     if SYSTEM_MCP_CONFIG_PATH.is_file():
@@ -1182,7 +1188,24 @@ def _write_system_mcp_config(config: dict) -> None:
 
 @router.get("/mcp")
 async def get_system_mcp_config():
-    return _read_system_mcp_config()
+    config = _read_system_mcp_config()
+    servers = config.get("mcpServers", {})
+
+    # Inject builtin MCP servers when their integrations are configured
+    slack_config = _read_slack_config()
+    if slack_config and "slack" not in servers:
+        servers["slack"] = {"builtin": True}
+    elif "slack" in servers:
+        servers["slack"]["builtin"] = True
+
+    github_config = _read_github_config()
+    if github_config and "github" not in servers:
+        servers["github"] = {"builtin": True}
+    elif "github" in servers:
+        servers["github"]["builtin"] = True
+
+    config["mcpServers"] = servers
+    return config
 
 
 @router.put("/mcp")
@@ -1195,6 +1218,11 @@ async def put_system_mcp_config(req: McpConfigRequest):
 
 @router.delete("/mcp/servers/{server_name}")
 async def delete_system_mcp_server(server_name: str):
+    if _is_builtin_mcp_server(server_name):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete builtin MCP server '{server_name}'",
+        )
     config = _read_system_mcp_config()
     servers = config.get("mcpServers", {})
     if server_name not in servers:

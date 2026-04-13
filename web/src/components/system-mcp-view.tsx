@@ -14,6 +14,7 @@ interface McpServerConfig {
   url?: string
   auth?: "none" | "basic" | "oauth"
   env?: Record<string, string>
+  builtin?: boolean
 }
 
 interface McpConfig {
@@ -221,14 +222,16 @@ export function SystemMcpView() {
     setSaving(false)
   }
 
-  const servers = Object.entries(config.mcpServers)
+  const servers = Object.entries(config.mcpServers).sort(
+    ([, a], [, b]) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0),
+  )
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-        <span className="text-sm font-medium">Default MCP Servers</span>
+        <span className="text-sm font-medium">Available MCP Servers</span>
         <div className="ml-auto">
           <Button size="sm" onClick={() => setShowAdd(true)} disabled={showAdd}>
             <Plus className="mr-1.5 size-3.5" />
@@ -391,9 +394,11 @@ export function SystemMcpView() {
                     <div className="flex flex-col gap-1">
                       <span className="text-sm font-medium">{name}</span>
                       <code className="text-xs text-muted-foreground">
-                        {srv.transport === "http"
-                          ? `HTTP: ${srv.url}`
-                          : `${srv.command || ""} ${(srv.args || []).join(" ")}`}
+                        {srv.builtin
+                          ? `Managed by ${name} integration settings`
+                          : srv.transport === "http"
+                            ? `HTTP: ${srv.url}`
+                            : `${srv.command || ""} ${(srv.args || []).join(" ")}`}
                       </code>
                       {srv.auth === "oauth" && (
                         <span
@@ -425,20 +430,28 @@ export function SystemMcpView() {
                               : "Authorize"}
                         </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => startEdit(name, srv)}
-                      >
-                        <Pencil className="size-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => handleRemove(name)}
-                      >
-                        <Trash2 className="size-3.5 text-destructive" />
-                      </Button>
+                      {srv.builtin ? (
+                        <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider">
+                          builtin
+                        </span>
+                      ) : (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => startEdit(name, srv)}
+                          >
+                            <Pencil className="size-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => handleRemove(name)}
+                          >
+                            <Trash2 className="size-3.5 text-destructive" />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ),
