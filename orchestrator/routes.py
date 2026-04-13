@@ -540,6 +540,18 @@ async def remove_mcp_server_from_agent(agent_id: str, server_name: str):
     return {"status": "ok", "removed": server_name}
 
 
+@router.get("/agents/{agent_id}/mcp/status")
+async def get_mcp_status(agent_id: str):
+    """Return running MCP server status for this agent's active worker."""
+    await _resolve_agent_path(agent_id)
+    worker = _active_workers.get(agent_id)
+    if not worker:
+        return {"running": False, "servers": []}
+    if not worker.mcp_manager:
+        return {"running": True, "servers": []}
+    return {"running": True, "servers": worker.mcp_manager.get_status()}
+
+
 # --- Per-Agent Tool Config API ---
 
 

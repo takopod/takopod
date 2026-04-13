@@ -13,6 +13,7 @@ import { GitHubView } from "@/components/github-view"
 import { SearchIndexView } from "@/components/search-index-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
+import { McpStatusPanel } from "@/components/mcp-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { Button } from "@/components/ui/button"
 import {
@@ -288,7 +289,9 @@ export function App() {
           </Routes>
       </SidebarInset>
 
-      <aside className="w-52 shrink-0 border-l" />
+      <aside className="w-52 shrink-0 border-l sticky top-0 h-svh overflow-y-auto">
+        {selectedAgentId && <McpStatusPanel agentId={selectedAgentId} />}
+      </aside>
 
       {showCreateDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">

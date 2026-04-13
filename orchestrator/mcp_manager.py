@@ -278,6 +278,22 @@ class McpServerManager:
         """Return all tool schemas from all managed servers."""
         return list(self._tool_schemas)
 
+    def get_status(self) -> list[dict[str, Any]]:
+        """Return status info for all managed MCP servers."""
+        statuses = []
+        for name, conn in self._servers.items():
+            tool_names = [
+                t for t, s in self._tool_to_server.items() if s == name
+            ]
+            statuses.append({
+                "name": name,
+                "connected": conn.session is not None,
+                "timeout": conn.timeout,
+                "tool_count": len(tool_names),
+                "tools": tool_names,
+            })
+        return statuses
+
     async def stop(self) -> None:
         """Stop all managed MCP server processes."""
         for name, conn in self._servers.items():
