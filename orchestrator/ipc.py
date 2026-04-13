@@ -306,7 +306,7 @@ async def _process_event(
     if not message_id:
         return None
 
-    row_id = f"assistant-{message_id}"
+    row_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, message_id))
 
     if event_type == "status" and event.get("status") == "thinking":
         await _db_ensure_row(row_id, session_id, source_metadata)

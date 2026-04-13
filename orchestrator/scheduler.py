@@ -330,7 +330,7 @@ async def _wait_for_completion(
 ) -> str:
     """Poll the messages table until the assistant response is complete."""
     db = await get_db()
-    row_id = f"assistant-{message_id}"
+    row_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, message_id))
     deadline = time.monotonic() + timeout_seconds
 
     while time.monotonic() < deadline:
