@@ -1981,7 +1981,29 @@ async def _monitor_worker(agent_id: str) -> None:
         "error_message = ? WHERE id = ?",
         (now, f"Process exited with code {returncode}", worker.container_record_id),
     )
+
+    # Finalize any messages stuck in "streaming" — worker is dead, nothing
+    # will complete them.  Notify the frontend so the typing indicator clears.
+    cursor = await db.execute(
+        "SELECT id FROM messages WHERE agent_id = ? AND status = 'streaming'",
+        (agent_id,),
+    )
+    stale_ids = [row[0] for row in await cursor.fetchall()]
+    if stale_ids:
+        await db.execute(
+            "UPDATE messages SET status = 'complete' "
+            "WHERE agent_id = ? AND status = 'streaming'",
+            (agent_id,),
+        )
     await db.commit()
+
+    for mid in stale_ids:
+        try:
+            await worker.ws_manager.send(
+                json.dumps({"type": "message_updated", "message_id": mid})
+            )
+        except Exception:
+            pass
 
     # Check if WebSocket is connected
     if not worker.ws_manager.connected:

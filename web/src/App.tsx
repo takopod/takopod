@@ -13,6 +13,7 @@ import { GitHubView } from "@/components/github-view"
 import { SearchIndexView } from "@/components/search-index-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
+import { ContainerStatusPanel } from "@/components/container-status-panel"
 import { McpStatusPanel } from "@/components/mcp-status-panel"
 import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
@@ -227,7 +228,8 @@ export function App() {
                     <ErrorNotification error={error} />
                     <SystemErrorNotification error={systemError} />
                     <SessionEndedBanner reason={sessionEnded} onReconnect={reconnect} />
-                    {messages.some((m) => m.status === "streaming") && (
+                    {(queueStatus.in_flight > 0 || queueStatus.queued > 0) &&
+                      messages.some((m) => m.status === "streaming") && (
                       <div className="flex items-center gap-2 border-t px-4 py-1.5 text-xs text-muted-foreground">
                         <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
                         {agents.find((a) => a.id === selectedAgentId)?.name ?? "Agent"} is typing...
@@ -294,8 +296,13 @@ export function App() {
       <aside className="w-52 shrink-0 border-l sticky top-0 h-svh overflow-y-auto">
         {selectedAgentId && (
           <>
-            <McpStatusPanel agentId={selectedAgentId} />
             <SkillsStatusPanel agentId={selectedAgentId} />
+            <McpStatusPanel agentId={selectedAgentId} />
+            <ContainerStatusPanel
+              agentId={selectedAgentId}
+              status={agents.find((a) => a.id === selectedAgentId)?.container_status}
+              onKilled={fetchAgents}
+            />
           </>
         )}
       </aside>

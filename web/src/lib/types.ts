@@ -78,6 +78,7 @@ export interface Agent {
   agent_type: string
   status: string
   created_at: string
+  container_status?: string | null
   slack_enabled?: boolean
   github_enabled?: boolean
 }

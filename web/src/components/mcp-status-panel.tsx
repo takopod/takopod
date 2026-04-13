@@ -80,11 +80,9 @@ export function McpStatusPanel({ agentId }: { agentId: string }) {
           <div key={srv.name} className="flex items-center gap-2 py-0.5">
             <span
               className={`inline-block size-1.5 shrink-0 rounded-full ${
-                !srv.enabled
-                  ? "bg-muted-foreground/40"
-                  : running
-                    ? "bg-green-500"
-                    : "bg-muted-foreground/40"
+                srv.enabled
+                  ? "bg-green-500"
+                  : "bg-muted-foreground/40"
               }`}
             />
             <span className="text-xs text-muted-foreground truncate">
