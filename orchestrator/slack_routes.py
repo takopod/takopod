@@ -182,16 +182,18 @@ async def put_slack_polling(req: SlackPollingToggle):
 @router.post("/slack/polling/channels")
 async def add_polling_channel(req: SlackPollingChannelRequest):
     """Add a channel to poll."""
+    import time
     import uuid
 
     db = await get_db()
     row_id = str(uuid.uuid4())
+    now_ts = str(time.time())
     try:
         await db.execute(
             "INSERT INTO slack_polling_channels "
-            "(id, channel_id, channel_name, interval_seconds) "
-            "VALUES (?, ?, ?, ?)",
-            (row_id, req.channel_id, req.channel_name, req.interval_seconds),
+            "(id, channel_id, channel_name, interval_seconds, last_ts) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (row_id, req.channel_id, req.channel_name, req.interval_seconds, now_ts),
         )
         await db.commit()
     except IntegrityError:
