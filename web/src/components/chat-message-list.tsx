@@ -128,7 +128,7 @@ export function ChatMessageList({
                 msg.blocks.map((block, i) =>
                   block.type === "text" ? (
                     <div key={i} className="markdown-body">
-                      <Markdown remarkPlugins={[remarkGfm]}>{block.text}</Markdown>
+                      <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{block.text}</Markdown>
                     </div>
                   ) : (
                     <ToolCallBlock key={block.tool.tool_call_id} tool={block.tool} />
@@ -138,7 +138,7 @@ export function ChatMessageList({
                 <span className="inline-block animate-pulse text-muted-foreground text-xs">&nbsp;</span>
               ) : msg.role === "assistant" ? (
                 <div className="markdown-body">
-                  <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
+                  <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{msg.content}</Markdown>
                 </div>
               ) : (
                 <span className="whitespace-pre-wrap">{msg.content}</span>
