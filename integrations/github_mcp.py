@@ -145,6 +145,7 @@ async def list_pull_requests(owner: str, repo: str, state: str = "open") -> str:
         draft = " [DRAFT]" if pr.get("draft") else ""
         lines.append(
             f"#{pr['number']} {pr['title']}{draft}\n"
+            f"  {pr['html_url']}\n"
             f"  Author: {pr['user']['login']}  |  Branch: {pr['head']['ref']}  |  "
             f"Created: {pr['created_at']}"
         )
@@ -195,6 +196,7 @@ async def search_pull_requests(
         state_str = pr.get("state", "unknown")
         lines.append(
             f"#{pr['number']} {pr['title']}  [{state_str.upper()}]\n"
+            f"  {pr['html_url']}\n"
             f"  Repo: {repo_name}  |  Author: {pr['user']['login']}  |  "
             f"Updated: {pr.get('updated_at', '')}"
         )
@@ -220,6 +222,7 @@ async def get_pull_request(owner: str, repo: str, pr_number: int) -> str:
 
     return (
         f"#{pr['number']} {pr['title']}\n"
+        f"URL: {pr['html_url']}\n"
         f"State: {pr['state']}  |  Draft: {pr.get('draft', False)}\n"
         f"Author: {pr['user']['login']}\n"
         f"Branch: {pr['head']['ref']} → {pr['base']['ref']}\n"
