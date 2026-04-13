@@ -25,7 +25,7 @@ _inflight_source: dict[str, dict] = {}
 
 
 async def queue_message(
-    session_id: str,
+    agent_id: str,
     message_id: str,
     content: str,
     *,
@@ -38,7 +38,7 @@ async def queue_message(
         "message_id": message_id,
         "type": "user_message",
         "content": content,
-        "session_id": session_id,
+        "agent_id": agent_id,
         "source": source,
     }
     if agentic_task_id:
@@ -47,15 +47,15 @@ async def queue_message(
         payload_dict["allowed_tools"] = allowed_tools
     payload = json.dumps(payload_dict)
     await db.execute(
-        "INSERT INTO message_queue (id, session_id, payload, agentic_task_id) "
+        "INSERT INTO message_queue (id, agent_id, payload, agentic_task_id) "
         "VALUES (?, ?, ?, ?)",
-        (message_id, session_id, payload, agentic_task_id),
+        (message_id, agent_id, payload, agentic_task_id),
     )
     await db.commit()
 
 
 async def store_scheduled_message(
-    session_id: str,
+    agent_id: str,
     message_id: str,
     content: str,
     agentic_task_id: str,
@@ -68,13 +68,13 @@ async def store_scheduled_message(
         "agentic_task_id": agentic_task_id,
     })
     await db.execute(
-        "INSERT INTO messages (id, session_id, role, content, metadata) "
+        "INSERT INTO messages (id, agent_id, role, content, metadata) "
         "VALUES (?, ?, 'user', ?, ?)",
-        (message_id, session_id, content, metadata),
+        (message_id, agent_id, content, metadata),
     )
     await db.commit()
     await queue_message(
-        session_id, message_id, content,
+        agent_id, message_id, content,
         source="scheduled_task",
         agentic_task_id=agentic_task_id,
         allowed_tools=allowed_tools,
@@ -82,7 +82,7 @@ async def store_scheduled_message(
 
 
 async def store_slack_message(
-    session_id: str,
+    agent_id: str,
     message_id: str,
     content: str,
     channel_id: str,
@@ -96,15 +96,15 @@ async def store_slack_message(
         "thread_ts": thread_ts,
     })
     await db.execute(
-        "INSERT INTO messages (id, session_id, role, content, metadata) "
+        "INSERT INTO messages (id, agent_id, role, content, metadata) "
         "VALUES (?, ?, 'user', ?, ?)",
-        (message_id, session_id, content, metadata),
+        (message_id, agent_id, content, metadata),
     )
     await db.commit()
-    await queue_message(session_id, message_id, content, source="slack")
+    await queue_message(agent_id, message_id, content, source="slack")
 
 
-async def queue_system_command(session_id: str, command: str) -> None:
+async def queue_system_command(agent_id: str, command: str) -> None:
     db = await get_db()
     cmd_id = str(uuid.uuid4())
     payload = json.dumps({
@@ -112,18 +112,18 @@ async def queue_system_command(session_id: str, command: str) -> None:
         "command": command,
     })
     await db.execute(
-        "INSERT INTO message_queue (id, session_id, payload) VALUES (?, ?, ?)",
-        (cmd_id, session_id, payload),
+        "INSERT INTO message_queue (id, agent_id, payload) VALUES (?, ?, ?)",
+        (cmd_id, agent_id, payload),
     )
     await db.commit()
 
 
-async def get_queue_counts(session_id: str) -> dict[str, int]:
+async def get_queue_counts(agent_id: str) -> dict[str, int]:
     db = await get_db()
     counts = {"queued": 0, "in_flight": 0, "processed": 0}
     async with db.execute(
-        "SELECT status, COUNT(*) FROM message_queue WHERE session_id = ? GROUP BY status",
-        (session_id,),
+        "SELECT status, COUNT(*) FROM message_queue WHERE agent_id = ? GROUP BY status",
+        (agent_id,),
     ) as cur:
         async for row in cur:
             key = row[0].lower().replace("-", "_")
@@ -169,7 +169,7 @@ async def _db_get_metadata(db, row_id: str) -> tuple[str, dict] | None:
 
 
 async def _db_ensure_row(
-    row_id: str, session_id: str, extra_metadata: dict | None = None,
+    row_id: str, agent_id: str, extra_metadata: dict | None = None,
 ) -> None:
     meta: dict = {"blocks": []}
     if extra_metadata:
@@ -179,9 +179,9 @@ async def _db_ensure_row(
         db = await get_db()
         await db.execute(
             "INSERT OR IGNORE INTO messages "
-            "(id, session_id, role, content, status, metadata) "
+            "(id, agent_id, role, content, status, metadata) "
             "VALUES (?, ?, 'assistant', '', 'streaming', ?)",
-            (row_id, session_id, metadata),
+            (row_id, agent_id, metadata),
         )
         await db.commit()
     except Exception:
@@ -285,7 +285,7 @@ async def _db_complete(
 
 
 async def _process_event(
-    event: dict, session_id: str, ws_mgr: WebSocketManager,
+    event: dict, agent_id: str, ws_mgr: WebSocketManager,
     source_metadata: dict | None = None,
 ) -> str | None:
     """Process a single worker event. Returns the message_id if DB was touched."""
@@ -299,7 +299,7 @@ async def _process_event(
     if event_type == "schedule_compaction":
         date = event.get("date")
         if date:
-            await _schedule_compaction_task(session_id, date)
+            await _schedule_compaction_task(agent_id, date)
         return None
 
     message_id = event.get("message_id", "")
@@ -309,14 +309,14 @@ async def _process_event(
     row_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, message_id))
 
     if event_type == "status" and event.get("status") == "thinking":
-        await _db_ensure_row(row_id, session_id, source_metadata)
+        await _db_ensure_row(row_id, agent_id, source_metadata)
 
     elif event_type == "token":
-        await _db_ensure_row(row_id, session_id, source_metadata)
+        await _db_ensure_row(row_id, agent_id, source_metadata)
         await _db_append_token(row_id, event.get("content", ""))
 
     elif event_type == "tool_call":
-        await _db_ensure_row(row_id, session_id, source_metadata)
+        await _db_ensure_row(row_id, agent_id, source_metadata)
         block = {
             "type": "tool_call",
             "tool": {
@@ -368,7 +368,7 @@ async def _process_event(
 
     elif event_type == "system_error":
         logger.warning(
-            "Worker error for session %s: %s", session_id, event.get("error"),
+            "Worker error for agent %s: %s", agent_id, event.get("error"),
         )
 
     else:
@@ -382,7 +382,7 @@ async def _process_event(
 
 
 async def _handle_tool_request(
-    session_id: str,
+    agent_id: str,
     request: dict,
     mcp_manager: McpServerManager | None = None,
 ) -> dict:
@@ -393,15 +393,6 @@ async def _handle_tool_request(
 
     try:
         db = await get_db()
-
-        # Look up agent_id from session
-        async with db.execute(
-            "SELECT agent_id FROM sessions WHERE id = ?", (session_id,),
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return {"request_id": request_id, "status": "error", "error": "Session not found"}
-        agent_id = row[0]
 
         if action == "create_schedule":
             task_id = str(uuid.uuid4())
@@ -434,10 +425,9 @@ async def _handle_tool_request(
                 "SELECT t.id, t.prompt, t.interval_seconds, t.status, "
                 "t.last_executed_at, t.allowed_tools "
                 "FROM agentic_tasks t "
-                "JOIN sessions s ON s.agent_id = t.agent_id "
-                "WHERE s.id = ?"
+                "WHERE t.agent_id = ?"
             )
-            sql_params: list = [session_id]
+            sql_params: list = [agent_id]
             if status_filter:
                 sql += " AND t.status = ?"
                 sql_params.append(status_filter)
@@ -541,7 +531,7 @@ async def _handle_tool_request(
                 return {
                     "request_id": request_id,
                     "status": "error",
-                    "error": "No MCP servers configured for this session",
+                    "error": "No MCP servers configured for this agent",
                 }
 
             try:
@@ -567,18 +557,9 @@ async def _handle_tool_request(
         return {"request_id": request_id, "status": "error", "error": str(e)}
 
 
-async def _schedule_compaction_task(session_id: str, date: str) -> None:
-    """Insert a memory_compaction scheduled task for the agent owning this session."""
+async def _schedule_compaction_task(agent_id: str, date: str) -> None:
+    """Insert a memory_compaction scheduled task for the given agent."""
     db = await get_db()
-    async with db.execute(
-        "SELECT agent_id FROM sessions WHERE id = ?", (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if not row:
-        logger.warning("Cannot schedule compaction: session %s not found", session_id)
-        return
-
-    agent_id = row[0]
     task_id = str(uuid.uuid4())
     await db.execute(
         "INSERT INTO scheduled_tasks (id, agent_id, task_type, payload, timeout_seconds) "
@@ -595,8 +576,8 @@ async def _schedule_compaction_task(session_id: str, date: str) -> None:
 # --- Queue status ---
 
 
-async def _send_queue_status(ws_mgr: WebSocketManager, session_id: str) -> None:
-    counts = await get_queue_counts(session_id)
+async def _send_queue_status(ws_mgr: WebSocketManager, agent_id: str) -> None:
+    counts = await get_queue_counts(agent_id)
     frame = QueueStatusFrame(**counts)
     await ws_mgr.send(frame.model_dump_json())
 
@@ -605,7 +586,7 @@ async def _send_queue_status(ws_mgr: WebSocketManager, session_id: str) -> None:
 
 
 async def _polling_loop(
-    session_id: str,
+    agent_id: str,
     host_dir: Path,
     ws_mgr: WebSocketManager,
     mcp_manager: McpServerManager | None = None,
@@ -622,8 +603,8 @@ async def _polling_loop(
             # --- Input ACK: IN-FLIGHT messages + input.json gone = PROCESSED ---
             async with db.execute(
                 "SELECT COUNT(*) FROM message_queue "
-                "WHERE session_id = ? AND status = 'IN-FLIGHT'",
-                (session_id,),
+                "WHERE agent_id = ? AND status = 'IN-FLIGHT'",
+                (agent_id,),
             ) as cur:
                 row = await cur.fetchone()
                 in_flight_count = row[0]
@@ -632,18 +613,18 @@ async def _polling_loop(
                 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 await db.execute(
                     "UPDATE message_queue SET status = 'PROCESSED', processed_at = ? "
-                    "WHERE session_id = ? AND status = 'IN-FLIGHT'",
-                    (now, session_id),
+                    "WHERE agent_id = ? AND status = 'IN-FLIGHT'",
+                    (now, agent_id),
                 )
                 await db.commit()
-                await _send_queue_status(ws_mgr, session_id)
+                await _send_queue_status(ws_mgr, agent_id)
 
             # --- Input flush: QUEUED messages + no input.json = write input.json ---
             async with db.execute(
                 "SELECT id, payload FROM message_queue "
-                "WHERE session_id = ? AND status = 'QUEUED' "
+                "WHERE agent_id = ? AND status = 'QUEUED' "
                 "ORDER BY created_at",
-                (session_id,),
+                (agent_id,),
             ) as cur:
                 queued = await cur.fetchall()
 
@@ -673,11 +654,11 @@ async def _polling_loop(
                 # Update last_activity on the container (drives idle reaper)
                 await db.execute(
                     "UPDATE agent_containers SET last_activity = ? "
-                    "WHERE session_id = ? AND status IN ('running', 'idle')",
-                    (now, session_id),
+                    "WHERE agent_id = ? AND status IN ('running', 'idle')",
+                    (now, agent_id),
                 )
                 await db.commit()
-                await _send_queue_status(ws_mgr, session_id)
+                await _send_queue_status(ws_mgr, agent_id)
 
             # --- Request polling: handle tool execution requests from worker ---
             if request_path.exists():
@@ -695,7 +676,7 @@ async def _polling_loop(
 
                 if request:
                     result = await _handle_tool_request(
-                        session_id, request, mcp_manager,
+                        agent_id, request, mcp_manager,
                     )
                     atomic_write(
                         response_path,
@@ -723,7 +704,7 @@ async def _polling_loop(
                         msg_id = event.get("message_id", "")
                         source_meta = _inflight_source.get(msg_id)
                         row_id = await _process_event(
-                            event, session_id, ws_mgr, source_meta,
+                            event, agent_id, ws_mgr, source_meta,
                         )
                         if row_id:
                             notified.add(row_id)
@@ -732,8 +713,8 @@ async def _polling_loop(
                             _inflight_source.pop(msg_id, None)
                     except Exception:
                         logger.exception(
-                            "Error processing output event for session %s",
-                            session_id,
+                            "Error processing output event for agent %s",
+                            agent_id,
                         )
 
                 # Send one message_updated notification per unique message
@@ -750,16 +731,16 @@ async def _polling_loop(
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Polling loop error for session %s", session_id)
+            logger.exception("Polling loop error for agent %s", agent_id)
 
 
 def start_polling_loop(
-    session_id: str,
+    agent_id: str,
     host_dir: Path,
     ws_mgr: WebSocketManager,
     mcp_manager: McpServerManager | None = None,
 ) -> asyncio.Task:
     return asyncio.create_task(
-        _polling_loop(session_id, host_dir, ws_mgr, mcp_manager),
-        name=f"poll-{session_id[:8]}",
+        _polling_loop(agent_id, host_dir, ws_mgr, mcp_manager),
+        name=f"poll-{agent_id[:8]}",
     )

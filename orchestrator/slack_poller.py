@@ -262,10 +262,9 @@ async def _dispatch_to_agent(
 ) -> None:
     """Route a Slack message through the normal message pipeline."""
     from orchestrator.ipc import _inflight_source, store_slack_message
-    from orchestrator.routes import _get_or_create_session, ensure_worker_headless
+    from orchestrator.routes import ensure_worker_headless
 
-    session_id = await _get_or_create_session(agent_id)
-    await ensure_worker_headless(agent_id, session_id)
+    await ensure_worker_headless(agent_id)
 
     message_id = str(uuid.uuid4())
 
@@ -277,7 +276,7 @@ async def _dispatch_to_agent(
     }
 
     await store_slack_message(
-        session_id, message_id, content, channel_id, thread_ts,
+        agent_id, message_id, content, channel_id, thread_ts,
     )
 
 

@@ -45,7 +45,6 @@ class AgentResponse(BaseModel):
     status: str
     created_at: str
     container_status: str | None = None
-    active_session_count: int = 0
     slack_enabled: bool = False
     github_enabled: bool = False
 
@@ -85,7 +84,6 @@ class ContainerResponse(BaseModel):
     id: str
     agent_id: str
     agent_name: str | None = None
-    session_id: str | None = None
     container_type: str
     status: str
     started_at: str

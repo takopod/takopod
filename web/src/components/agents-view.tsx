@@ -656,21 +656,6 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                   </Card>
                 </Link>
 
-                <Link to={`/agents/${agentId}/files?dir=sessions`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <FolderOpen className="size-4 text-muted-foreground" />
-                        Sessions
-                      </CardTitle>
-                      <CardDescription>Conversation session logs</CardDescription>
-                      <CardAction>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </CardAction>
-                    </CardHeader>
-                  </Card>
-                </Link>
-
                 <Link to={`/agents/${agentId}/files`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>

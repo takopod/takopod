@@ -15,14 +15,13 @@ WS_CLOSE_ADMIN_KILL = 4002
 class WebSocketManager:
     """Manages a single WebSocket connection with serialized sends."""
 
-    def __init__(self, session_id: str):
-        self.session_id = session_id
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
         self._ws: WebSocket | None = None
         self._ws_lock = asyncio.Lock()
 
-    def attach(self, ws: WebSocket, session_id: str) -> None:
+    def attach(self, ws: WebSocket) -> None:
         self._ws = ws
-        self.session_id = session_id
 
     @property
     def connected(self) -> bool:
@@ -40,8 +39,8 @@ class WebSocketManager:
                 await ws.send_text(text)
             except (ConnectionError, RuntimeError):
                 logger.warning(
-                    "WebSocket send failed for session %s, detaching",
-                    self.session_id,
+                    "WebSocket send failed for agent %s, detaching",
+                    self.agent_id,
                 )
                 self._ws = None
 
@@ -55,7 +54,7 @@ class WebSocketManager:
                 await ws.close(code=code, reason=reason)
             except (ConnectionError, RuntimeError):
                 logger.warning(
-                    "WebSocket close failed for session %s (client already gone)",
-                    self.session_id,
+                    "WebSocket close failed for agent %s (client already gone)",
+                    self.agent_id,
                 )
             self._ws = None

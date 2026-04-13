@@ -130,7 +130,6 @@ class WorkerState:
     container_record_id: str
     process: asyncio.subprocess.Process
     host_dir: Path
-    session_id: str
     ws_manager: WebSocketManager
     polling_task: asyncio.Task | None = None
     monitor_task: asyncio.Task | None = None
@@ -279,10 +278,6 @@ async def list_agents() -> list[AgentResponse]:
         "SELECT a.id, a.name, a.icon, a.agent_type, a.status, a.created_at, "
         "  (SELECT c.status FROM agent_containers c "
         "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
-        "  (SELECT COUNT(*) FROM sessions s "
-        "   JOIN agent_containers ac ON ac.session_id = s.id "
-        "   WHERE ac.agent_id = a.id AND ac.status IN ('running', 'idle', 'starting')) "
-        "   AS active_session_count, "
         "  a.slack_enabled, "
         "  a.github_enabled "
         "FROM agents a WHERE a.status = 'active' ORDER BY a.created_at"
@@ -291,8 +286,8 @@ async def list_agents() -> list[AgentResponse]:
     return [
         AgentResponse(
             id=r[0], name=r[1], icon=r[2] or "", agent_type=r[3], status=r[4],
-            created_at=r[5], container_status=r[6], active_session_count=r[7] or 0,
-            slack_enabled=bool(r[8]), github_enabled=bool(r[9]),
+            created_at=r[5], container_status=r[6],
+            slack_enabled=bool(r[7]), github_enabled=bool(r[8]),
         )
         for r in rows
     ]
@@ -1148,7 +1143,7 @@ async def delete_system_mcp_server(server_name: str):
 async def list_containers() -> list[ContainerResponse]:
     db = await get_db()
     async with db.execute(
-        "SELECT c.id, c.agent_id, a.name, c.session_id, c.container_type, "
+        "SELECT c.id, c.agent_id, a.name, c.container_type, "
         "c.status, c.started_at, c.stopped_at, c.last_activity, c.pid "
         "FROM agent_containers c "
         "LEFT JOIN agents a ON a.id = c.agent_id "
@@ -1157,9 +1152,9 @@ async def list_containers() -> list[ContainerResponse]:
         rows = await cur.fetchall()
     return [
         ContainerResponse(
-            id=r[0], agent_id=r[1], agent_name=r[2], session_id=r[3],
-            container_type=r[4], status=r[5], started_at=r[6],
-            stopped_at=r[7], last_activity=r[8], pid=r[9],
+            id=r[0], agent_id=r[1], agent_name=r[2],
+            container_type=r[3], status=r[4], started_at=r[5],
+            stopped_at=r[6], last_activity=r[7], pid=r[8],
         )
         for r in rows
     ]
@@ -1364,23 +1359,20 @@ async def delete_schedule(task_id: str):
     return {"status": "ok", "task_id": task_id}
 
 
-# --- Sessions API ---
-
-
-@router.post("/sessions/{session_id}/kill")
-async def kill_session(session_id: str):
-    """Force-terminate a session: graceful shutdown with 10s timeout, then kill."""
+@router.post("/agents/{agent_id}/kill")
+async def kill_agent(agent_id: str):
+    """Force-terminate an agent's container: graceful shutdown with 30s timeout, then kill."""
     db = await get_db()
     async with db.execute(
-        "SELECT c.id, c.agent_id FROM agent_containers c "
-        "WHERE c.session_id = ? AND c.status IN ('running', 'idle', 'starting', 'stopping')",
-        (session_id,),
+        "SELECT c.id FROM agent_containers c "
+        "WHERE c.agent_id = ? AND c.status IN ('running', 'idle', 'starting', 'stopping')",
+        (agent_id,),
     ) as cur:
         row = await cur.fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="No active container for session")
+        raise HTTPException(status_code=404, detail="No active container for agent")
 
-    record_id, agent_id = row
+    record_id = row[0]
     container_name = f"rhclaw-{agent_id[:8]}"
     graceful = False
 
@@ -1390,7 +1382,6 @@ async def kill_session(session_id: str):
             worker.shutting_down = True
 
     if worker:
-        # Try graceful shutdown (outside lock — involves long wait)
         try:
             input_path = worker.host_dir / "input.json"
             shutdown_payload = json.dumps(
@@ -1402,12 +1393,11 @@ async def kill_session(session_id: str):
         except (asyncio.TimeoutError, Exception):
             await kill_container(container_name)
 
-        # Notify connected client
         if worker.ws_manager.connected:
             try:
                 await worker.ws_manager.send(
                     SystemErrorFrame(
-                        error="Session terminated by admin", fatal=True,
+                        error="Agent terminated by admin", fatal=True,
                     ).model_dump_json()
                 )
             except Exception:
@@ -1420,11 +1410,6 @@ async def kill_session(session_id: str):
     await db.execute(
         "UPDATE agent_containers SET status = 'stopped', stopped_at = ? WHERE id = ?",
         (now, record_id),
-    )
-    await db.execute(
-        "UPDATE sessions SET status = 'terminated', ended_at = ? "
-        "WHERE id = ? AND ended_at IS NULL",
-        (now, session_id),
     )
     await db.commit()
 
@@ -1442,87 +1427,7 @@ async def kill_session(session_id: str):
         if w.mcp_manager:
             await w.mcp_manager.stop()
 
-    return {"status": "ok", "session_id": session_id, "graceful": graceful}
-
-
-@router.get("/sessions")
-async def list_sessions(status: str | None = None, limit: int = 50):
-    """List sessions, optionally filtered by status."""
-    db = await get_db()
-    query = (
-        "SELECT s.id, s.agent_id, a.name, s.status, s.created_at, s.ended_at "
-        "FROM sessions s LEFT JOIN agents a ON a.id = s.agent_id "
-    )
-    params: list = []
-    if status:
-        query += "WHERE s.status = ? "
-        params.append(status)
-    query += "ORDER BY s.created_at DESC LIMIT ?"
-    params.append(limit)
-
-    async with db.execute(query, params) as cur:
-        rows = await cur.fetchall()
-
-    return [
-        {
-            "id": r[0], "agent_id": r[1], "agent_name": r[2],
-            "status": r[3], "created_at": r[4], "ended_at": r[5],
-        }
-        for r in rows
-    ]
-
-
-@router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
-    """Detailed session state: metadata, container info, message queue breakdown."""
-    db = await get_db()
-    async with db.execute(
-        "SELECT s.id, s.agent_id, a.name, s.status, s.created_at, s.ended_at "
-        "FROM sessions s LEFT JOIN agents a ON a.id = s.agent_id "
-        "WHERE s.id = ?",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    session = {
-        "id": row[0], "agent_id": row[1], "agent_name": row[2],
-        "status": row[3], "created_at": row[4], "ended_at": row[5],
-    }
-
-    # Message queue breakdown
-    async with db.execute(
-        "SELECT status, COUNT(*) FROM message_queue "
-        "WHERE session_id = ? GROUP BY status",
-        (session_id,),
-    ) as cur:
-        queue_rows = await cur.fetchall()
-    session["queue"] = {r[0]: r[1] for r in queue_rows}
-
-    # Container info
-    async with db.execute(
-        "SELECT id, status, started_at, stopped_at, last_activity, error_message "
-        "FROM agent_containers WHERE session_id = ? "
-        "ORDER BY started_at DESC LIMIT 1",
-        (session_id,),
-    ) as cur:
-        c_row = await cur.fetchone()
-    if c_row:
-        session["container"] = {
-            "id": c_row[0], "status": c_row[1], "started_at": c_row[2],
-            "stopped_at": c_row[3], "last_activity": c_row[4],
-            "error_message": c_row[5],
-        }
-
-    # Message count
-    async with db.execute(
-        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
-        (session_id,),
-    ) as cur:
-        session["message_count"] = (await cur.fetchone())[0]
-
-    return session
+    return {"status": "ok", "agent_id": agent_id, "graceful": graceful}
 
 
 # --- Settings API ---
@@ -1548,13 +1453,12 @@ async def update_setting(key: str, request: Request):
 
 @router.get("/agents/{agent_id}/messages")
 async def get_agent_messages(agent_id: str, limit: int = 100):
-    """Return recent messages for an agent across all its sessions."""
+    """Return recent messages for an agent."""
     db = await get_db()
     async with db.execute(
         "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
         "FROM messages m "
-        "JOIN sessions s ON s.id = m.session_id "
-        "WHERE s.agent_id = ? AND m.visibility = 'visible' "
+        "WHERE m.agent_id = ? AND m.visibility = 'visible' "
         "ORDER BY m.created_at DESC LIMIT ?",
         (agent_id, limit),
     ) as cur:
@@ -1576,8 +1480,7 @@ async def hide_agent_messages(agent_id: str):
     db = await get_db()
     await db.execute(
         "UPDATE messages SET visibility = 'hidden' "
-        "WHERE visibility = 'visible' AND session_id IN "
-        "(SELECT id FROM sessions WHERE agent_id = ?)",
+        "WHERE visibility = 'visible' AND agent_id = ?",
         (agent_id,),
     )
     await db.commit()
@@ -1585,71 +1488,51 @@ async def hide_agent_messages(agent_id: str):
 
 
 @router.get("/agents/{agent_id}/messages/older")
-async def get_older_session_messages(agent_id: str, before: str | None = None):
-    """Return all messages from the next older session with hidden messages.
-
-    Paginated by session: each call returns one full session's worth of messages.
-    Pass ``before`` (ISO timestamp of the oldest currently-loaded message) to
-    page backwards through history.
-    """
+async def get_older_messages(agent_id: str, before: str | None = None, limit: int = 50):
+    """Return older hidden messages for an agent, paginated by timestamp."""
     db = await get_db()
 
     if before:
-        # Find the most recent session with hidden messages older than the cursor
         async with db.execute(
-            "SELECT DISTINCT s.id, s.created_at FROM sessions s "
-            "JOIN messages m ON m.session_id = s.id "
-            "WHERE s.agent_id = ? AND s.created_at < ? AND m.visibility = 'hidden' "
-            "ORDER BY s.created_at DESC LIMIT 1",
-            (agent_id, before),
+            "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
+            "FROM messages m "
+            "WHERE m.agent_id = ? AND m.visibility = 'hidden' AND m.created_at < ? "
+            "ORDER BY m.created_at DESC LIMIT ?",
+            (agent_id, before, limit),
         ) as cur:
-            session_row = await cur.fetchone()
+            rows = await cur.fetchall()
     else:
-        # No cursor — find the most recent session with hidden messages
         async with db.execute(
-            "SELECT DISTINCT s.id, s.created_at FROM sessions s "
-            "JOIN messages m ON m.session_id = s.id "
-            "WHERE s.agent_id = ? AND m.visibility = 'hidden' "
-            "ORDER BY s.created_at DESC LIMIT 1",
-            (agent_id,),
+            "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
+            "FROM messages m "
+            "WHERE m.agent_id = ? AND m.visibility = 'hidden' "
+            "ORDER BY m.created_at DESC LIMIT ?",
+            (agent_id, limit),
         ) as cur:
-            session_row = await cur.fetchone()
+            rows = await cur.fetchall()
 
-    if not session_row:
-        return {"messages": [], "session_id": None, "has_more": False}
-
-    target_session_id = session_row[0]
-    target_created_at = session_row[1]
-
-    # Fetch all hidden messages from this session
-    async with db.execute(
-        "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
-        "FROM messages m "
-        "WHERE m.session_id = ? AND m.visibility = 'hidden' "
-        "ORDER BY m.created_at",
-        (target_session_id,),
-    ) as cur:
-        rows = await cur.fetchall()
-
+    # Return in chronological order
     messages = [
         {
             "id": r[0], "role": r[1], "content": r[2],
             "created_at": r[3], "metadata": r[4], "status": r[5],
         }
-        for r in rows
+        for r in reversed(rows)
     ]
 
-    # Check if there are even older sessions with hidden messages
-    async with db.execute(
-        "SELECT 1 FROM sessions s "
-        "JOIN messages m ON m.session_id = s.id "
-        "WHERE s.agent_id = ? AND s.created_at < ? AND m.visibility = 'hidden' "
-        "LIMIT 1",
-        (agent_id, target_created_at),
-    ) as cur:
-        has_more = await cur.fetchone() is not None
+    # Check if there are even older hidden messages
+    oldest_ts = messages[0]["created_at"] if messages else before
+    has_more = False
+    if oldest_ts:
+        async with db.execute(
+            "SELECT 1 FROM messages "
+            "WHERE agent_id = ? AND visibility = 'hidden' AND created_at < ? "
+            "LIMIT 1",
+            (agent_id, oldest_ts),
+        ) as cur:
+            has_more = await cur.fetchone() is not None
 
-    return {"messages": messages, "session_id": target_session_id, "has_more": has_more}
+    return {"messages": messages, "has_more": has_more}
 
 
 @router.get("/agents/{agent_id}/messages/{message_id}")
@@ -1659,8 +1542,7 @@ async def get_agent_message(agent_id: str, message_id: str):
     async with db.execute(
         "SELECT m.id, m.role, m.content, m.created_at, m.metadata, m.status "
         "FROM messages m "
-        "JOIN sessions s ON s.id = m.session_id "
-        "WHERE m.id = ? AND s.agent_id = ?",
+        "WHERE m.id = ? AND m.agent_id = ?",
         (message_id, agent_id),
     ) as cur:
         row = await cur.fetchone()
@@ -1675,9 +1557,9 @@ async def get_agent_message(agent_id: str, message_id: str):
 # --- WebSocket ---
 
 
-def _check_rate_limit(session_id: str) -> float | None:
+def _check_rate_limit(agent_id: str) -> float | None:
     now = time.monotonic()
-    dq = _rate_limits[session_id]
+    dq = _rate_limits[agent_id]
 
     while dq and (now - dq[0]) > RATE_LIMIT_WINDOW:
         dq.popleft()
@@ -1690,44 +1572,18 @@ def _check_rate_limit(session_id: str) -> float | None:
     return None
 
 
-async def _get_or_create_session(agent_id: str) -> str:
-    """Reuse the most recent session for this agent, or create one."""
-    db = await get_db()
-    async with db.execute(
-        "SELECT id FROM sessions WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1",
-        (agent_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if row:
-        session_id = row[0]
-        # Re-activate if it was marked disconnected
-        await db.execute(
-            "UPDATE sessions SET status = 'active', ended_at = NULL WHERE id = ?",
-            (session_id,),
-        )
-        await db.commit()
-        return session_id
-    session_id = str(uuid.uuid4())
-    await db.execute(
-        "INSERT INTO sessions (id, agent_id) VALUES (?, ?)",
-        (session_id, agent_id),
-    )
-    await db.commit()
-    return session_id
-
-
-async def _store_message(session_id: str, frame: UserMessageFrame) -> None:
+async def _store_message(agent_id: str, frame: UserMessageFrame) -> None:
     db = await get_db()
     await db.execute(
-        "INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)",
-        (frame.message_id, session_id, "user", frame.content),
+        "INSERT INTO messages (id, agent_id, role, content) VALUES (?, ?, ?, ?)",
+        (frame.message_id, agent_id, "user", frame.content),
     )
     await db.commit()
-    await queue_message(session_id, frame.message_id, frame.content)
+    await queue_message(agent_id, frame.message_id, frame.content)
 
 
-async def _send_queue_status(ws: WebSocket, session_id: str, agent_id: str) -> None:
-    counts = await get_queue_counts(session_id)
+async def _send_queue_status(ws: WebSocket, agent_id: str) -> None:
+    counts = await get_queue_counts(agent_id)
     status = QueueStatusFrame(**counts)
     async with _workers_lock:
         worker = _active_workers.get(agent_id)
@@ -1737,9 +1593,7 @@ async def _send_queue_status(ws: WebSocket, session_id: str, agent_id: str) -> N
         await ws.send_text(status.model_dump_json())
 
 
-async def _ensure_worker(
-    agent_id: str, session_id: str, ws: WebSocket
-) -> None:
+async def _ensure_worker(agent_id: str, ws: WebSocket) -> None:
     # Phase 1: Grab old tasks under lock, detach them from worker
     old_polling = None
     old_monitor = None
@@ -1763,14 +1617,11 @@ async def _ensure_worker(
         async with _workers_lock:
             worker = _active_workers.get(agent_id)
             if not worker:
-                # Worker was cleaned up while we released the lock — fall through
-                # to spawn path below
                 reattach = False
             else:
-                worker.session_id = session_id
-                worker.ws_manager.attach(ws, session_id)
+                worker.ws_manager.attach(ws)
                 worker.polling_task = start_polling_loop(
-                    session_id, worker.host_dir, worker.ws_manager,
+                    agent_id, worker.host_dir, worker.ws_manager,
                     worker.mcp_manager,
                 )
                 worker.monitor_task = asyncio.create_task(
@@ -1781,9 +1632,8 @@ async def _ensure_worker(
             # Mark as running again (was idle)
             db = await get_db()
             await db.execute(
-                "UPDATE agent_containers SET status = 'running', session_id = ? "
-                "WHERE id = ?",
-                (session_id, worker.container_record_id),
+                "UPDATE agent_containers SET status = 'running' WHERE id = ?",
+                (worker.container_record_id,),
             )
             await db.commit()
             return
@@ -1796,20 +1646,19 @@ async def _ensure_worker(
         await sync_agent_skills(agent_id, Path(agent_row[0]))
 
     # Spawn new container (no lock needed during spawn — it's a long operation)
-    record_id, process, host_dir = await spawn_container(agent_id, session_id)
+    record_id, process, host_dir = await spawn_container(agent_id)
     mcp_mgr = await _start_mcp_manager(host_dir, agent_id)
-    ws_mgr = WebSocketManager(session_id)
-    ws_mgr.attach(ws, session_id)
+    ws_mgr = WebSocketManager(agent_id)
+    ws_mgr.attach(ws)
 
     async with _workers_lock:
         worker = WorkerState(
             container_record_id=record_id,
             process=process,
             host_dir=host_dir,
-            session_id=session_id,
             ws_manager=ws_mgr,
             mcp_manager=mcp_mgr,
-            polling_task=start_polling_loop(session_id, host_dir, ws_mgr, mcp_mgr),
+            polling_task=start_polling_loop(agent_id, host_dir, ws_mgr, mcp_mgr),
         )
         _active_workers[agent_id] = worker
         worker.monitor_task = asyncio.create_task(
@@ -1817,7 +1666,7 @@ async def _ensure_worker(
         )
 
 
-async def _cleanup_session(agent_id: str, session_id: str) -> None:
+async def _cleanup_agent(agent_id: str) -> None:
     """Detach WebSocket resources on disconnect. Container keeps running."""
     old_polling = None
     old_monitor = None
@@ -1825,7 +1674,7 @@ async def _cleanup_session(agent_id: str, session_id: str) -> None:
 
     async with _workers_lock:
         worker = _active_workers.get(agent_id)
-        if worker and worker.session_id == session_id:
+        if worker:
             old_polling = worker.polling_task
             old_monitor = worker.monitor_task
             worker.polling_task = None
@@ -1846,10 +1695,10 @@ async def _cleanup_session(agent_id: str, session_id: str) -> None:
         )
         await db.commit()
 
-    _rate_limits.pop(session_id, None)
+    _rate_limits.pop(agent_id, None)
 
 
-async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
+async def ensure_worker_headless(agent_id: str) -> None:
     """Ensure a worker container is running for an agent, without a WebSocket.
 
     Used by the scheduler to guarantee the polling loop is active before
@@ -1860,7 +1709,7 @@ async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
         if worker:
             if worker.polling_task is None or worker.polling_task.done():
                 worker.polling_task = start_polling_loop(
-                    session_id, worker.host_dir, worker.ws_manager,
+                    agent_id, worker.host_dir, worker.ws_manager,
                 )
             return
 
@@ -1871,19 +1720,18 @@ async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
     if agent_row:
         await sync_agent_skills(agent_id, Path(agent_row[0]))
 
-    record_id, process, host_dir = await spawn_container(agent_id, session_id)
+    record_id, process, host_dir = await spawn_container(agent_id)
     mcp_mgr = await _start_mcp_manager(host_dir, agent_id)
-    ws_mgr = WebSocketManager(session_id)
+    ws_mgr = WebSocketManager(agent_id)
 
     async with _workers_lock:
         worker = WorkerState(
             container_record_id=record_id,
             process=process,
             host_dir=host_dir,
-            session_id=session_id,
             ws_manager=ws_mgr,
             mcp_manager=mcp_mgr,
-            polling_task=start_polling_loop(session_id, host_dir, ws_mgr, mcp_mgr),
+            polling_task=start_polling_loop(agent_id, host_dir, ws_mgr, mcp_mgr),
         )
         _active_workers[agent_id] = worker
         worker.monitor_task = asyncio.create_task(
@@ -1914,9 +1762,7 @@ async def _respawn_worker(agent_id: str) -> None:
         if worker.host_dir:
             await sync_agent_skills(agent_id, worker.host_dir)
 
-        record_id, process, host_dir = await spawn_container(
-            agent_id, worker.session_id,
-        )
+        record_id, process, host_dir = await spawn_container(agent_id)
         # Restart MCP servers on the host
         if worker.mcp_manager:
             await worker.mcp_manager.stop()
@@ -1926,8 +1772,8 @@ async def _respawn_worker(agent_id: str) -> None:
         db = await get_db()
         await db.execute(
             "UPDATE message_queue SET status = 'QUEUED', flushed_at = NULL "
-            "WHERE session_id = ? AND status = 'IN-FLIGHT'",
-            (worker.session_id,),
+            "WHERE agent_id = ? AND status = 'IN-FLIGHT'",
+            (agent_id,),
         )
         await db.commit()
 
@@ -1945,7 +1791,7 @@ async def _respawn_worker(agent_id: str) -> None:
             worker.host_dir = host_dir
             worker.mcp_manager = mcp_mgr
             worker.polling_task = start_polling_loop(
-                worker.session_id, host_dir, worker.ws_manager, mcp_mgr,
+                agent_id, host_dir, worker.ws_manager, mcp_mgr,
             )
             worker.monitor_task = asyncio.create_task(
                 _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
@@ -1974,7 +1820,7 @@ async def _monitor_worker(agent_id: str) -> None:
     returncode = await worker.process.wait()
 
     # All post-wait logic under lock to prevent races with _ensure_worker,
-    # _cleanup_session, kill_session, etc.
+    # _cleanup_agent, kill_agent, etc.
     async with _workers_lock:
         # Process exited — check if we still own this agent
         current = _active_workers.get(agent_id)
@@ -2168,8 +2014,6 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.close()
             return
 
-    session_id = await _get_or_create_session(agent_id)
-
     try:
         while True:
             raw = await ws.receive_text()
@@ -2184,9 +2028,9 @@ async def websocket_endpoint(ws: WebSocket):
             if data.get("type") == "system_command":
                 try:
                     cmd_frame = SystemCommandFrame.model_validate(data)
-                    await queue_system_command(session_id, cmd_frame.command)
-                    await _send_queue_status(ws, session_id, agent_id)
-                    await _ensure_worker(agent_id, session_id, ws)
+                    await queue_system_command(agent_id, cmd_frame.command)
+                    await _send_queue_status(ws, agent_id)
+                    await _ensure_worker(agent_id, ws)
                 except ValidationError:
                     error = ErrorFrame(code="QUEUE_FULL")
                     await ws.send_text(error.model_dump_json())
@@ -2199,7 +2043,7 @@ async def websocket_endpoint(ws: WebSocket):
                 await ws.send_text(error.model_dump_json())
                 continue
 
-            retry_after = _check_rate_limit(session_id)
+            retry_after = _check_rate_limit(agent_id)
             if retry_after is not None:
                 error = ErrorFrame(
                     code="RATE_LIMITED",
@@ -2208,13 +2052,13 @@ async def websocket_endpoint(ws: WebSocket):
                 await ws.send_text(error.model_dump_json())
                 continue
 
-            counts = await get_queue_counts(session_id)
+            counts = await get_queue_counts(agent_id)
             if counts["queued"] >= QUEUE_DEPTH_MAX:
                 error = ErrorFrame(code="QUEUE_FULL")
                 await ws.send_text(error.model_dump_json())
                 continue
 
-            await _store_message(session_id, frame)
+            await _store_message(agent_id, frame)
 
             # Reset idle timer on every user message
             async with _workers_lock:
@@ -2229,8 +2073,8 @@ async def websocket_endpoint(ws: WebSocket):
                 )
                 await db.commit()
 
-            await _send_queue_status(ws, session_id, agent_id)
-            await _ensure_worker(agent_id, session_id, ws)
+            await _send_queue_status(ws, agent_id)
+            await _ensure_worker(agent_id, ws)
 
     except WebSocketDisconnect:
-        await _cleanup_session(agent_id, session_id)
+        await _cleanup_agent(agent_id)

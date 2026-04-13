@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -16,6 +17,14 @@ IMAGE = "rhclaw-worker"
 AGENTS_DIR = Path("data/agents")
 MCP_CONFIGS_DIR = Path("data/mcp-configs")
 TEMPLATES_DIR = Path("agent_templates")
+
+
+def slugify(name: str) -> str:
+    """Convert a display name to a filesystem-safe slug."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "agent"
 
 
 async def _run(cmd: list[str], check: bool = True) -> asyncio.subprocess.Process:
@@ -62,9 +71,9 @@ def create_agent_workspace(
     memory_md: str | None = None,
     mcp_config: dict | None = None,
 ) -> Path:
-    host_dir = (AGENTS_DIR / agent_id).resolve()
+    slug = slugify(agent_name) if agent_name else agent_id
+    host_dir = (AGENTS_DIR / slug).resolve()
     host_dir.mkdir(parents=True, exist_ok=True)
-    (host_dir / "sessions").mkdir(exist_ok=True)
     (host_dir / "memory").mkdir(exist_ok=True)
     (host_dir / "config").mkdir(exist_ok=True)
 
@@ -269,7 +278,7 @@ async def write_agents_json(agent_id: str, host_dir: Path) -> None:
 
 
 async def spawn_container(
-    agent_id: str, session_id: str
+    agent_id: str,
 ) -> tuple[str, asyncio.subprocess.Process, Path]:
     db = await get_db()
     async with db.execute(
@@ -297,9 +306,9 @@ async def spawn_container(
     record_id = str(uuid.uuid4())
     await db.execute(
         "INSERT INTO agent_containers "
-        "(id, agent_id, session_id, container_type, status) "
-        "VALUES (?, ?, ?, 'session', 'starting')",
-        (record_id, agent_id, session_id),
+        "(id, agent_id, container_type, status) "
+        "VALUES (?, ?, 'session', 'starting')",
+        (record_id, agent_id),
     )
     await db.commit()
 
@@ -315,7 +324,6 @@ async def spawn_container(
         "--network", NETWORK,
         "--label", "rhclaw.managed=true",
         "--label", f"rhclaw.agent_id={agent_id}",
-        "--label", f"rhclaw.session_id={session_id}",
         "--memory", container_memory,
         "--cpus", container_cpus,
         "--pids-limit", "256",
@@ -342,8 +350,8 @@ async def spawn_container(
     )
     await db.commit()
     logger.info(
-        "Spawned container %s for agent %s session %s (pid=%d)",
-        container_name, agent_id, session_id, process.pid,
+        "Spawned container %s for agent %s (pid=%d)",
+        container_name, agent_id, process.pid,
     )
 
     return record_id, process, host_dir
@@ -355,8 +363,8 @@ async def spawn_scheduled_container(
     """Spawn an ephemeral container for a scheduled task (e.g., memory compaction).
 
     Similar to spawn_container() but with container_type='scheduled_task',
-    no session_id, Ollama disabled, and a distinct container name to avoid
-    collision with session containers.
+    Ollama disabled, and a distinct container name to avoid collision with
+    session containers.
     """
     db = await get_db()
     async with db.execute(
@@ -376,8 +384,8 @@ async def spawn_scheduled_container(
     record_id = str(uuid.uuid4())
     await db.execute(
         "INSERT INTO agent_containers "
-        "(id, agent_id, session_id, container_type, status) "
-        "VALUES (?, ?, NULL, 'scheduled_task', 'starting')",
+        "(id, agent_id, container_type, status) "
+        "VALUES (?, ?, 'scheduled_task', 'starting')",
         (record_id, agent_id),
     )
     await db.commit()

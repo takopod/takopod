@@ -285,16 +285,15 @@ async def _execute_agentic_task(
 ) -> None:
     """Queue a scheduled task prompt through the normal message path."""
     from orchestrator.ipc import store_scheduled_message
-    from orchestrator.routes import _get_or_create_session, ensure_worker_headless
+    from orchestrator.routes import ensure_worker_headless
 
     db = await get_db()
     message_id = str(uuid.uuid4())
 
     try:
-        session_id = await _get_or_create_session(agent_id)
-        await ensure_worker_headless(agent_id, session_id)
+        await ensure_worker_headless(agent_id)
         await store_scheduled_message(
-            session_id, message_id, prompt, task_id, allowed_tools,
+            agent_id, message_id, prompt, task_id, allowed_tools,
         )
 
         last_result = await _wait_for_completion(message_id, timeout_seconds=300)
@@ -452,13 +451,13 @@ async def _reap_idle_workers() -> None:
         time.gmtime(time.time() - IDLE_TIMEOUT_SECONDS),
     )
     async with db.execute(
-        "SELECT id, agent_id, session_id FROM agent_containers "
+        "SELECT id, agent_id FROM agent_containers "
         "WHERE status = 'idle' AND last_activity < ?",
         (cutoff,),
     ) as cur:
         rows = await cur.fetchall()
 
-    for record_id, agent_id, session_id in rows:
+    for record_id, agent_id in rows:
         container_name = f"rhclaw-{agent_id[:8]}"
         reason = "Session ended due to inactivity"
         old_polling = None
@@ -518,11 +517,6 @@ async def _reap_idle_workers() -> None:
             "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
             "WHERE id = ?",
             (now, record_id),
-        )
-        await db.execute(
-            "UPDATE sessions SET status = 'idle_timeout', ended_at = ? "
-            "WHERE id = ? AND ended_at IS NULL",
-            (now, session_id),
         )
         await db.commit()
 
