@@ -187,7 +187,7 @@ async def add_polling_channel(req: SlackPollingChannelRequest):
 
     db = await get_db()
     row_id = str(uuid.uuid4())
-    now_ts = str(time.time())
+    now_ts = f"{time.time():.6f}"
     try:
         await db.execute(
             "INSERT INTO slack_polling_channels "

@@ -54,16 +54,26 @@ export function McpStatusPanel({ agentId }: { agentId: string }) {
     (status?.servers ?? []).map((s) => [s.name, s]),
   )
 
+  // Merge config servers with any running servers not in config
+  // (e.g. builtin MCP servers injected at runtime from DB flags)
+  const configNames = new Set(servers.map((s) => s.name))
+  const merged: McpServer[] = [
+    ...servers,
+    ...(status?.servers ?? [])
+      .filter((s) => !configNames.has(s.name))
+      .map((s) => ({ name: s.name, enabled: true })),
+  ]
+
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
       <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
         MCP Servers
       </span>
-      {servers.length === 0 ? (
+      {merged.length === 0 ? (
         <span className="text-[11px] text-muted-foreground/60 italic">
           Empty
         </span>
-      ) : servers.map((srv) => {
+      ) : merged.map((srv) => {
         const live = statusMap.get(srv.name)
         const running = !!live?.connected
         return (
