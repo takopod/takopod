@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ChevronRight, RefreshCw } from "lucide-react"
 
@@ -66,7 +67,7 @@ export function SettingsView() {
 
   const ollamaValue = settings["ollama_enabled"]
   const filteredSettings = Object.entries(settings).filter(
-    ([key]) => key !== "ollama_enabled" && !key.startsWith("slack_polling_"),
+    ([key]) => key !== "ollama_enabled" && !key.startsWith("slack_polling_") && !key.startsWith("default_container_"),
   )
 
   return (
@@ -113,6 +114,32 @@ export function SettingsView() {
           {filteredSettings.length === 0 && !ollamaValue && !loading && (
             <p className="text-center text-sm text-muted-foreground">No settings found.</p>
           )}
+
+          {/* Container Defaults */}
+          <div className="pt-4">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Container Defaults</div>
+            <p className="text-xs text-muted-foreground pb-3">
+              Default CPU and memory limits for new agent containers. Existing agents are not affected.
+            </p>
+            <div className="space-y-3">
+              <ContainerDefaultInput
+                label="Memory"
+                settingKey="default_container_memory"
+                placeholder="2g"
+                helpText="e.g. 512m, 1g, 4g"
+                value={settings["default_container_memory"] ?? ""}
+                onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_memory: v }))}
+              />
+              <ContainerDefaultInput
+                label="CPUs"
+                settingKey="default_container_cpus"
+                placeholder="2"
+                helpText="e.g. 1, 2, 4"
+                value={settings["default_container_cpus"] ?? ""}
+                onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_cpus: v }))}
+              />
+            </div>
+          </div>
 
           {/* Search */}
           <div className="pt-4">
@@ -199,6 +226,77 @@ export function SettingsView() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ContainerDefaultInput({
+  label,
+  settingKey,
+  placeholder,
+  helpText,
+  value,
+  onSaved,
+}: {
+  label: string
+  settingKey: string
+  placeholder: string
+  helpText: string
+  value: string
+  onSaved: (v: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+  const dirty = draft !== (value || "")
+
+  useEffect(() => {
+    setDraft(value || "")
+  }, [value])
+
+  const handleSave = async () => {
+    if (!draft.trim()) return
+    setSaving(true)
+    setError("")
+    try {
+      const res = await fetch(`/api/settings/${settingKey}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: draft.trim() }),
+      })
+      if (res.ok) {
+        onSaved(draft.trim())
+      } else {
+        setError("Failed to save")
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="rounded-md border px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex-1">
+          <div className="text-sm font-medium">{label}</div>
+          <div className="text-xs text-muted-foreground">{helpText}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Input
+            value={draft}
+            onChange={(e) => { setDraft(e.target.value); setError("") }}
+            onKeyDown={(e) => { if (e.key === "Enter" && dirty) handleSave() }}
+            placeholder={placeholder}
+            className="h-8 w-24 text-sm"
+          />
+          {dirty && (
+            <Button size="sm" onClick={handleSave} disabled={saving}>
+              {saving ? "..." : "Save"}
+            </Button>
+          )}
+        </div>
+      </div>
+      {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
     </div>
   )
 }

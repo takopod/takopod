@@ -27,8 +27,11 @@ import type { Agent } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import {
   ArrowLeft,
+  Check,
   ChevronRight,
+  Cpu,
   FolderOpen,
+  HardDrive,
   MessageSquare,
   MoreHorizontal,
   Pencil,
@@ -315,6 +318,105 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
   )
 }
 
+function ContainerResourcesPanel({
+  agentId,
+  detail,
+  onUpdate,
+}: {
+  agentId: string
+  detail: AgentDetail
+  onUpdate: (d: AgentDetail) => void
+}) {
+  const [memory, setMemory] = useState(detail.container_memory ?? "2g")
+  const [cpus, setCpus] = useState(detail.container_cpus ?? "2")
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    setMemory(detail.container_memory ?? "2g")
+    setCpus(detail.container_cpus ?? "2")
+  }, [detail.container_memory, detail.container_cpus])
+
+  const dirty = memory !== (detail.container_memory ?? "2g") || cpus !== (detail.container_cpus ?? "2")
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError("")
+    setSaved(false)
+    try {
+      const res = await fetch(`/api/agents/${agentId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ container_memory: memory, container_cpus: cpus }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        onUpdate(data)
+        setSaved(true)
+        setTimeout(() => setSaved(false), 2000)
+      } else {
+        const data = await res.json().catch(() => null)
+        setError(data?.detail ?? "Failed to save")
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Container Resources
+      </h3>
+      <div className="rounded-md border px-4 py-4">
+        <p className="text-xs text-muted-foreground mb-4">
+          CPU and memory limits for this agent's container. Changes take effect on next container start.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+              <HardDrive className="size-3.5 text-muted-foreground" />
+              Memory
+            </label>
+            <Input
+              value={memory}
+              onChange={(e) => { setMemory(e.target.value); setError(""); setSaved(false) }}
+              placeholder="2g"
+              className="h-8 text-sm"
+            />
+            <span className="text-[11px] text-muted-foreground">e.g. 512m, 1g, 4g</span>
+          </div>
+          <div>
+            <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+              <Cpu className="size-3.5 text-muted-foreground" />
+              CPUs
+            </label>
+            <Input
+              value={cpus}
+              onChange={(e) => { setCpus(e.target.value); setError(""); setSaved(false) }}
+              placeholder="2"
+              className="h-8 text-sm"
+            />
+            <span className="text-[11px] text-muted-foreground">e.g. 1, 2, 4</span>
+          </div>
+        </div>
+        {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+        <div className="mt-3 flex items-center gap-2">
+          <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
+            {saving ? "Saving..." : "Save"}
+          </Button>
+          {saved && (
+            <span className="flex items-center gap-1 text-xs text-green-600">
+              <Check className="size-3" /> Saved
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface AgentsViewProps {
   agents: Agent[]
   onSelectAgent: (id: string) => void
@@ -502,6 +604,9 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                 </Link>
               </div>
             </div>
+
+            {/* Container Resources */}
+            <ContainerResourcesPanel agentId={agentId} detail={detail} onUpdate={setDetail} />
 
             {/* Files */}
             <div>

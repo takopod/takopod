@@ -1,6 +1,27 @@
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def _validate_memory(v: str) -> str:
+    """Validate Podman memory format: number followed by b/k/m/g (e.g. '512m', '2g')."""
+    if not re.fullmatch(r"\d+[bkmg]", v, re.IGNORECASE):
+        raise ValueError("Memory must be a number followed by b/k/m/g (e.g. '512m', '2g')")
+    return v.lower()
+
+
+def _validate_cpus(v: str) -> str:
+    """Validate Podman CPU value: positive number (e.g. '2', '1.5', '0.5')."""
+    try:
+        val = float(v)
+    except ValueError:
+        raise ValueError("CPUs must be a positive number (e.g. '2', '1.5')")
+    if val <= 0:
+        raise ValueError("CPUs must be greater than 0")
+    # Normalize: drop trailing .0 for whole numbers
+    return str(int(val)) if val == int(val) else str(val)
+
 
 
 class UserMessageFrame(BaseModel):
@@ -47,6 +68,8 @@ class AgentResponse(BaseModel):
     container_status: str | None = None
     slack_enabled: bool = False
     github_enabled: bool = False
+    container_memory: str = "2g"
+    container_cpus: str = "2"
 
 
 class AgentDetailResponse(AgentResponse):
@@ -54,7 +77,18 @@ class AgentDetailResponse(AgentResponse):
 
 
 class UpdateAgentRequest(BaseModel):
-    pass
+    container_memory: str | None = None
+    container_cpus: str | None = None
+
+    @field_validator("container_memory")
+    @classmethod
+    def validate_memory(cls, v: str | None) -> str | None:
+        return _validate_memory(v) if v is not None else None
+
+    @field_validator("container_cpus")
+    @classmethod
+    def validate_cpus(cls, v: str | None) -> str | None:
+        return _validate_cpus(v) if v is not None else None
 
 
 class SystemErrorFrame(BaseModel):

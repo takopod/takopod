@@ -240,11 +240,16 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     icon = await _next_agent_icon(db)
     host_dir = create_agent_workspace(agent_id, req.agent_type, agent_name=req.name)
 
+    container_memory = await get_setting("default_container_memory", "2g")
+    container_cpus = await get_setting("default_container_cpus", "2")
+
     await db.execute(
-        "INSERT INTO agents (id, name, icon, agent_type, host_dir, slack_enabled, github_enabled) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agents (id, name, icon, agent_type, host_dir, slack_enabled, github_enabled, "
+        "container_memory, container_cpus) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (agent_id, req.name, icon, req.agent_type, str(host_dir),
-         1 if req.slack_enabled else 0, 1 if req.github_enabled else 0),
+         1 if req.slack_enabled else 0, 1 if req.github_enabled else 0,
+         container_memory, container_cpus),
     )
     await db.commit()
 
@@ -262,7 +267,8 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
         _write_agent_mcp_servers(agent_id, initial_mcp)
 
     async with db.execute(
-        "SELECT id, name, icon, agent_type, status, created_at, slack_enabled, github_enabled "
+        "SELECT id, name, icon, agent_type, status, created_at, slack_enabled, github_enabled, "
+        "container_memory, container_cpus "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
@@ -271,6 +277,7 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     return AgentResponse(
         id=row[0], name=row[1], icon=row[2], agent_type=row[3], status=row[4],
         created_at=row[5], slack_enabled=bool(row[6]), github_enabled=bool(row[7]),
+        container_memory=row[8], container_cpus=row[9],
     )
 
 
@@ -282,7 +289,9 @@ async def list_agents() -> list[AgentResponse]:
         "  (SELECT c.status FROM agent_containers c "
         "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
         "  a.slack_enabled, "
-        "  a.github_enabled "
+        "  a.github_enabled, "
+        "  a.container_memory, "
+        "  a.container_cpus "
         "FROM agents a WHERE a.status = 'active' ORDER BY a.created_at"
     ) as cur:
         rows = await cur.fetchall()
@@ -291,6 +300,7 @@ async def list_agents() -> list[AgentResponse]:
             id=r[0], name=r[1], icon=r[2] or "", agent_type=r[3], status=r[4],
             created_at=r[5], container_status=r[6],
             slack_enabled=bool(r[7]), github_enabled=bool(r[8]),
+            container_memory=r[9], container_cpus=r[10],
         )
         for r in rows
     ]
@@ -300,7 +310,8 @@ async def list_agents() -> list[AgentResponse]:
 async def get_agent(agent_id: str) -> AgentDetailResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, icon, agent_type, status, created_at, host_dir, slack_enabled, github_enabled "
+        "SELECT id, name, icon, agent_type, status, created_at, host_dir, slack_enabled, github_enabled, "
+        "container_memory, container_cpus "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
@@ -311,11 +322,22 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
     return AgentDetailResponse(
         id=row[0], name=row[1], icon=row[2] or "", agent_type=row[3], status=row[4],
         created_at=row[5], slack_enabled=bool(row[7]), github_enabled=bool(row[8]),
+        container_memory=row[9], container_cpus=row[10],
     )
 
 
 @router.put("/agents/{agent_id}")
 async def update_agent(agent_id: str, req: UpdateAgentRequest) -> AgentDetailResponse:
+    updates = req.model_dump(exclude_none=True)
+    if updates:
+        db = await get_db()
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [agent_id]
+        await db.execute(
+            f"UPDATE agents SET {set_clause} WHERE id = ? AND status = 'active'",
+            values,
+        )
+        await db.commit()
     return await get_agent(agent_id)
 
 
