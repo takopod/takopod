@@ -170,16 +170,12 @@ def _copy_system_skill(skill_id: str, dest_skills: Path) -> None:
 
 
 async def seed_agent_skills(agent_id: str) -> None:
-    """Insert agent_skills rows for all system skills (called on agent creation)."""
-    db = await get_db()
-    skill_ids = _list_registry_skill_ids()
-    for skill_id in skill_ids:
-        await db.execute(
-            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id, enabled) "
-            "VALUES (?, ?, 1)",
-            (agent_id, skill_id),
-        )
-    await db.commit()
+    """Placeholder for agent creation — no skills are auto-added.
+
+    Builtin skills are always synced by sync_agent_skills() regardless of DB
+    rows, so new agents start with only builtins.  Users add non-builtin skills
+    explicitly via the registry-skills API.
+    """
 
 
 async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:

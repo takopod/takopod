@@ -14,6 +14,7 @@ import { SearchIndexView } from "@/components/search-index-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { McpStatusPanel } from "@/components/mcp-status-panel"
+import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { Button } from "@/components/ui/button"
 import {
@@ -130,6 +131,7 @@ export function App() {
       setAgents((prev) => [agent, ...prev])
       setSelectedAgentId(agent.id)
       setShowCreateDialog(false)
+      navigate("/")
     }
   }
 
@@ -290,7 +292,12 @@ export function App() {
       </SidebarInset>
 
       <aside className="w-52 shrink-0 border-l sticky top-0 h-svh overflow-y-auto">
-        {selectedAgentId && <McpStatusPanel agentId={selectedAgentId} />}
+        {selectedAgentId && (
+          <>
+            <McpStatusPanel agentId={selectedAgentId} />
+            <SkillsStatusPanel agentId={selectedAgentId} />
+          </>
+        )}
       </aside>
 
       {showCreateDialog && (

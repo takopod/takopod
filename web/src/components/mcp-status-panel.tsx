@@ -54,14 +54,16 @@ export function McpStatusPanel({ agentId }: { agentId: string }) {
     (status?.servers ?? []).map((s) => [s.name, s]),
   )
 
-  if (servers.length === 0) return null
-
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
       <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
         MCP Servers
       </span>
-      {servers.map((srv) => {
+      {servers.length === 0 ? (
+        <span className="text-[11px] text-muted-foreground/60 italic">
+          Empty
+        </span>
+      ) : servers.map((srv) => {
         const live = statusMap.get(srv.name)
         const running = !!live?.connected
         return (
@@ -89,3 +91,4 @@ export function McpStatusPanel({ agentId }: { agentId: string }) {
     </div>
   )
 }
+
