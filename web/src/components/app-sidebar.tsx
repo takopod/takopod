@@ -101,7 +101,7 @@ export function AppSidebar({
             onValueChange={onAgentChange}
           >
             <SelectTrigger className="w-full bg-primary text-primary-foreground hover:bg-primary/90 border-0 text-xs font-medium [&_svg]:text-primary-foreground">
-              <SelectValue placeholder="Create Agent" />
+              <SelectValue placeholder="" />
             </SelectTrigger>
             <SelectContent>
               {agents.map((agent) => (
@@ -110,7 +110,7 @@ export function AppSidebar({
                   {agent.name}
                 </SelectItem>
               ))}
-              {agents.length > 0 && <SelectSeparator />}
+              <SelectSeparator />
               <SelectItem value="__create__">+ Add Agent</SelectItem>
             </SelectContent>
           </Select>

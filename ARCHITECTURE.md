@@ -303,26 +303,6 @@ CREATE INDEX idx_message_queue_flush ON message_queue(session_id, status, create
 ### Worker SQLite Schema (worker_db.sqlite per agent)
 
 ```sql
--- FTS5 table for BM25 keyword search
-CREATE VIRTUAL TABLE message_fts USING fts5(
-    content,
-    role,
-    session_id UNINDEXED,
-    timestamp UNINDEXED,
-    tokenize='porter unicode61'
-);
-
--- Vector embeddings table (sqlite-vec)
--- Stores embeddings for semantic similarity search
-CREATE VIRTUAL TABLE message_vec USING vec0(
-    embedding float[1024],  -- must match Ollama embedding model output dimension;
-                            -- changing the Ollama model requires rebuilding this table
-    +content TEXT,
-    +role TEXT,
-    +session_id TEXT,
-    +timestamp TEXT
-);
-
 -- Deduplication for at-least-once delivery (boot recovery)
 CREATE TABLE processed_messages (
     message_id  TEXT PRIMARY KEY      -- tracks which message_ids have been processed
@@ -521,7 +501,6 @@ Session history is managed by the Claude Agent SDK's native session persistence.
    - Session = `resume: sessionId` (SDK-native session continuity)
 10. Stream the response as JSONL to stdout.
 11. After response completes:
-    - Store user message + assistant response in `message_fts` and `message_vec` (embedding generated via Ollama).
     - Insert processed `message_id`s into `processed_messages` table.
     - Update `last_activity` timestamp.
 
@@ -617,7 +596,6 @@ When a session ends (UI disconnect or "Clear Context"):
 ## 8. Future Improvements
 
 - **Session file retention policy**: SDK session JSONL files in `sessions/` will accumulate over time. Daily memory files capture the distilled signal, so session files older than a configurable threshold (e.g., 30 days) could be pruned. The daily memory files in `memory/` are the durable record.
-- **Embedding vector pruning**: Vectors for individual messages older than a configurable threshold could be pruned from `message_vec`, since daily memory summaries retain the semantic signal at a higher level.
 - **Ollama health check mechanism**: Boot recovery step 10 requires waiting for the Ollama HTTP API to become ready, but no concrete mechanism is specified. Implement a polling check against `GET http://ollama:11434/` with exponential backoff and a maximum retry count, or use Podman's `--health-cmd` flag to let the container runtime manage readiness.
 - **Delegation circuit breaker**: Container crashes have a circuit breaker (3 crashes in 10 minutes), but delegation has no equivalent. A worker could repeatedly delegate to a failing agent type, spawning and killing containers in a loop. Add a per-agent-type failure threshold that temporarily blocks delegation to that target after N consecutive failures.
 - **Delegation concurrency cap**: There is no limit on concurrent delegation containers. A runaway or compromised worker could emit `delegate` events in a tight loop, exhausting host resources. Add a per-session and/or global cap on active delegations, rejecting new requests with an error payload when the limit is reached.

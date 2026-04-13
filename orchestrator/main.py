@@ -76,4 +76,8 @@ if WEB_DIST.is_dir():
 
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
+        # Serve static files from dist root if they exist
+        static_file = WEB_DIST / path
+        if path and static_file.is_file():
+            return FileResponse(static_file)
         return FileResponse(WEB_DIST / "index.html")
