@@ -34,6 +34,7 @@ import {
   Settings,
   X,
 } from "lucide-react"
+import { AgentIcon } from "@/components/agent-icon"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -177,8 +178,8 @@ export function App() {
                     <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
                       <SidebarTrigger className="-ml-1" />
                       <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-                      <span className="text-sm font-medium truncate">
-                        {agents.find((a) => a.id === selectedAgentId)?.icon}{" "}
+                      <span className="text-sm font-medium truncate flex items-center gap-1.5">
+                        <AgentIcon name={agents.find((a) => a.id === selectedAgentId)?.icon ?? ""} className="size-4" />
                         {agents.find((a) => a.id === selectedAgentId)?.name}
                       </span>
                       <DropdownMenu>
@@ -285,6 +286,8 @@ export function App() {
             <Route path="/settings/search-index" element={<SearchIndexView />} />
           </Routes>
       </SidebarInset>
+
+      <aside className="w-52 shrink-0 border-l" />
 
       {showCreateDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">

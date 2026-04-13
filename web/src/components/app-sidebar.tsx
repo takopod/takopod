@@ -29,6 +29,7 @@ import {
   SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
+import { AgentIcon } from "@/components/agent-icon"
 import type { Agent } from "@/lib/types"
 import {
   Bot,
@@ -105,7 +106,7 @@ export function AppSidebar({
             <SelectContent>
               {agents.map((agent) => (
                 <SelectItem key={agent.id} value={agent.id}>
-                  {agent.icon && <span className="mr-1.5">{agent.icon}</span>}
+                  {agent.icon && <AgentIcon name={agent.icon} className="mr-1.5 inline size-3.5" />}
                   {agent.name}
                 </SelectItem>
               ))}

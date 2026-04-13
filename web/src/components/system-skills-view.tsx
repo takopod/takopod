@@ -197,8 +197,8 @@ export function SystemSkillsView() {
           <div className="mb-4 flex items-start gap-2.5 rounded-md border border-primary/20 bg-primary/5 px-4 py-3">
             <Info className="mt-0.5 size-4 shrink-0 text-primary" />
             <p className="text-xs text-muted-foreground">
-              These are system-level default skills. They are copied to each new
-              agent at creation time. Changes here do not affect existing agents.
+              They are copied to each new agent at creation time. Changes here
+              do not affect existing agents.
             </p>
           </div>
 

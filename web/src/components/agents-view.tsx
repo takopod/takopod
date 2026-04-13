@@ -36,6 +36,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
+import { AgentIcon } from "@/components/agent-icon"
 
 interface AgentDetail extends Agent {
   claude_md: string
@@ -515,7 +516,10 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
           <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-            <span className="text-sm font-medium truncate">{detail.icon} {detail.name}</span>
+            <span className="text-sm font-medium truncate flex items-center gap-1.5">
+              <AgentIcon name={detail.icon} className="size-4" />
+              {detail.name}
+            </span>
             <Badge variant="secondary">{detail.agent_type}</Badge>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

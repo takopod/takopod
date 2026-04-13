@@ -3,7 +3,6 @@ import dataclasses
 import json
 import logging
 import os
-import random
 import re
 import shutil
 import sys
@@ -79,11 +78,28 @@ router.include_router(github_router)
 router.include_router(search_router)
 
 AGENT_ICONS = [
-    "🤖", "🧠", "⚡", "🔮", "🎯", "🦊", "🐙", "🦾", "🔬", "🧬",
-    "🚀", "💎", "🌟", "🎨", "🛡️", "🔥", "🌀", "🎭", "🧩", "🦉",
-    "🐺", "🦅", "🐋", "🦈", "🐉", "🦇", "🕷️", "🦎", "🐍", "🦁",
-    "🌊", "⭐", "🌙", "☀️", "🌈", "💫", "🔷", "🟣", "🟢", "🔴",
+    "Bot", "BrainCircuit", "Cpu", "Radar", "Orbit",
+    "Zap", "Shield", "Microscope", "Compass", "Anchor",
+    "Flame", "Gem", "Hexagon", "Aperture", "Atom",
+    "Fingerprint", "Podcast", "Satellite", "Swords", "TreePine",
 ]
+
+async def _next_agent_icon(db) -> str:
+    """Pick the least-used icon. Ties broken by AGENT_ICONS order."""
+    async with db.execute(
+        "SELECT icon, COUNT(*) as cnt FROM agents "
+        "WHERE status = 'active' AND icon IN ({}) "
+        "GROUP BY icon".format(",".join("?" for _ in AGENT_ICONS)),
+        AGENT_ICONS,
+    ) as cur:
+        rows = await cur.fetchall()
+    used: dict[str, int] = {row[0]: row[1] for row in rows}
+    min_count = min((used.get(i, 0) for i in AGENT_ICONS), default=0)
+    for icon in AGENT_ICONS:
+        if used.get(icon, 0) == min_count:
+            return icon
+    return AGENT_ICONS[0]
+
 
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 10
@@ -228,7 +244,7 @@ async def list_templates():
 async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     db = await get_db()
     agent_id = str(uuid.uuid4())
-    icon = random.choice(AGENT_ICONS)
+    icon = await _next_agent_icon(db)
     host_dir = create_agent_workspace(agent_id, req.agent_type, agent_name=req.name)
 
     await db.execute(
