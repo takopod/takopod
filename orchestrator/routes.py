@@ -357,16 +357,18 @@ async def update_agent(agent_id: str, req: UpdateAgentRequest) -> AgentDetailRes
 
 
 @router.delete("/agents/{agent_id}")
-async def delete_agent(agent_id: str):
+async def delete_agent(agent_id: str, delete_work_dir: bool = False):
     """Archive an agent and kill its running container if any."""
     db = await get_db()
     async with db.execute(
-        "SELECT id FROM agents WHERE id = ? AND status = 'active'",
+        "SELECT id, host_dir FROM agents WHERE id = ? AND status = 'active'",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    host_dir = Path(row[1]) if row[1] else None
 
     # Kill running container
     async with _workers_lock:
@@ -397,6 +399,11 @@ async def delete_agent(agent_id: str):
         "UPDATE agents SET status = 'archived' WHERE id = ?", (agent_id,),
     )
     await db.commit()
+
+    # Delete workspace directory if requested
+    if delete_work_dir and host_dir and host_dir.is_dir():
+        shutil.rmtree(host_dir, ignore_errors=True)
+
     return {"status": "ok", "agent_id": agent_id}
 
 

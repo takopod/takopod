@@ -137,8 +137,9 @@ export function App() {
     navigate("/")
   }
 
-  const handleDeleteAgent = async (id: string) => {
-    const res = await fetch(`/api/agents/${id}`, { method: "DELETE" })
+  const handleDeleteAgent = async (id: string, deleteWorkDir?: boolean) => {
+    const url = deleteWorkDir ? `/api/agents/${id}?delete_work_dir=true` : `/api/agents/${id}`
+    const res = await fetch(url, { method: "DELETE" })
     if (res.ok) {
       setAgents((prev) => prev.filter((a) => a.id !== id))
       if (selectedAgentId === id) {

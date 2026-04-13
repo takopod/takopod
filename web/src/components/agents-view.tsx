@@ -8,8 +8,6 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { SidebarTrigger } from "@/components/ui/sidebar"
@@ -441,7 +439,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
 interface AgentsViewProps {
   agents: Agent[]
   onSelectAgent: (id: string) => void
-  onDeleteAgent: (id: string) => void
+  onDeleteAgent: (id: string, deleteWorkDir?: boolean) => void
 }
 
 export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
@@ -451,6 +449,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
   const [content, setContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
 
   const showFileBrowser = file === "files"
   const showMcpConfig = file === "mcp"
@@ -536,18 +535,6 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                   <Settings className="mr-2 size-3.5" />
                   Agent Settings
                 </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive"
-                  onClick={() => {
-                    if (confirm(`Delete agent "${detail.name}"?`)) {
-                      onDeleteAgent(detail.id)
-                    }
-                  }}
-                >
-                  <Trash2 className="mr-2 size-3.5" />
-                  Delete Agent
-                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -700,8 +687,83 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                 </Link>
               </div>
             </div>
+            {/* Danger Zone */}
+            <Separator />
+            <div>
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-destructive">
+                Danger Zone
+              </h3>
+              <div className="flex items-center justify-between rounded-md border border-destructive/30 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Delete this agent</p>
+                  <p className="text-xs text-muted-foreground">
+                    Once deleted, this agent cannot be recovered.
+                  </p>
+                </div>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setShowDeleteModal(true)}
+                >
+                  <Trash2 className="mr-1.5 size-3.5" />
+                  Delete Agent
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
+
+        {showDeleteModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="w-96 rounded-lg border bg-background p-6 shadow-lg">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-medium">Delete "{detail.name}"?</h2>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setShowDeleteModal(false)}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground mb-5">
+                This will archive the agent, stop any running containers, and remove it from the sidebar. Choose whether to keep or delete the agent's workspace files.
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setShowDeleteModal(false)
+                    onDeleteAgent(detail.id, false)
+                  }}
+                >
+                  <FolderOpen className="mr-2 size-4" />
+                  Keep Agent Workspace
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setShowDeleteModal(false)
+                    onDeleteAgent(detail.id, true)
+                  }}
+                >
+                  <Trash2 className="mr-2 size-4" />
+                  Delete Everything
+                </Button>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-3 w-full"
+                onClick={() => setShowDeleteModal(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
         </>
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">
