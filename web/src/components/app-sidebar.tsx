@@ -36,7 +36,7 @@ import {
   Calendar,
   ChevronRight,
   GitBranch,
-  Hash,
+  Slack,
   MessageSquare,
   Moon,
   Server,
@@ -207,7 +207,7 @@ export function AppSidebar({
                         isActive={currentPath === "/settings/slack"}
                       >
                         <Link to="/settings/slack">
-                          <Hash className="size-3.5" />
+                          <Slack className="size-3.5" />
                           <span>Slack</span>
                         </Link>
                       </SidebarMenuSubButton>
