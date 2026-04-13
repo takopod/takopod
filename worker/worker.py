@@ -43,6 +43,27 @@ _session_transcript: list[tuple[str, str]] = []
 _conn = None
 
 
+def _cleanup_attachments(attachments: list[str]) -> None:
+    """Delete uploaded attachment files and their parent upload directory."""
+    dirs_to_remove: set[Path] = set()
+    for rel_path in attachments:
+        full_path = WORKSPACE / rel_path
+        try:
+            full_path.unlink(missing_ok=True)
+            dirs_to_remove.add(full_path.parent)
+        except OSError:
+            pass
+    # Remove empty upload-id directories (e.g. uploads/abc12345/)
+    for d in dirs_to_remove:
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass
+    sys.stderr.write(f"worker: cleaned up {len(attachments)} attachment(s)\n")
+    sys.stderr.flush()
+
+
 def atomic_write(path: Path, data: bytes) -> None:
     """Write data to path atomically via temp file + rename."""
     temp_path = path.parent / f"{path.name}.tmp.{os.getpid()}"
@@ -323,6 +344,10 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             "fatal": False,
             "message_id": message_id,
         })
+
+    # Clean up uploaded attachment files — the SDK has already read them
+    if attachments:
+        _cleanup_attachments(attachments)
 
     # Accumulate transcript for summarization at session end / split
     _session_transcript.append(("user", content))
