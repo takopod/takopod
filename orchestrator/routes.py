@@ -776,8 +776,8 @@ async def delete_skill_file(agent_id: str, skill_id: str, file_path: str):
 
 
 @router.get("/agents/{agent_id}/registry-skills")
-async def list_registry_skills(agent_id: str) -> list[RegistrySkillSummary]:
-    """List all system skills with per-agent enabled/disabled status."""
+async def list_registry_skills(agent_id: str):
+    """Return agent's added skills and available system skills not yet added."""
     await _resolve_agent_path(agent_id)
     db = await get_db()
 
@@ -789,19 +789,24 @@ async def list_registry_skills(agent_id: str) -> list[RegistrySkillSummary]:
         rows = await cur.fetchall()
     agent_state = {row[0]: bool(row[1]) for row in rows}
 
-    result: list[RegistrySkillSummary] = []
+    added: list[dict] = []
+    available: list[dict] = []
     for skill_id, skill_path, _ in _list_system_skills():
         content = skill_path.read_text()
         name, desc = _parse_skill_frontmatter(content)
         builtin = _is_builtin_skill(skill_id)
-        result.append(RegistrySkillSummary(
+        summary = RegistrySkillSummary(
             id=skill_id,
             name=name or skill_id,
             description=desc,
             builtin=builtin,
             enabled=True if builtin else agent_state.get(skill_id, False),
-        ))
-    return result
+        )
+        if skill_id in agent_state or builtin:
+            added.append(summary.model_dump())
+        else:
+            available.append(summary.model_dump())
+    return {"skills": added, "available": available}
 
 
 @router.put("/agents/{agent_id}/registry-skills/{skill_id}")
@@ -829,6 +834,67 @@ async def toggle_registry_skill(
     await sync_agent_skills(agent_id, host_dir)
 
     return {"status": "ok", "skill_id": skill_id, "enabled": req.enabled}
+
+
+@router.post("/agents/{agent_id}/registry-skills/{skill_id}")
+async def add_registry_skill(agent_id: str, skill_id: str):
+    """Add a system skill to this agent (disabled by default)."""
+    host_dir, _ = await _resolve_agent_path(agent_id)
+
+    # Verify skill exists in the system registry
+    system_ids = {sid for sid, _, _ in _list_system_skills()}
+    if skill_id not in system_ids:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+    db = await get_db()
+    # Check if already added
+    async with db.execute(
+        "SELECT 1 FROM agent_skills WHERE agent_id = ? AND skill_id = ?",
+        (agent_id, skill_id),
+    ) as cur:
+        if await cur.fetchone():
+            raise HTTPException(
+                status_code=409, detail=f"Skill '{skill_id}' already added"
+            )
+
+    await db.execute(
+        "INSERT INTO agent_skills (agent_id, skill_id, enabled) VALUES (?, ?, 0)",
+        (agent_id, skill_id),
+    )
+    await db.commit()
+    await sync_agent_skills(agent_id, host_dir)
+    return {"skill_id": skill_id, "enabled": False}
+
+
+@router.delete("/agents/{agent_id}/registry-skills/{skill_id}")
+async def remove_registry_skill(agent_id: str, skill_id: str):
+    """Remove a skill from this agent."""
+    if _is_builtin_skill(skill_id):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Builtin skill '{skill_id}' cannot be removed.",
+        )
+
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT 1 FROM agent_skills WHERE agent_id = ? AND skill_id = ?",
+        (agent_id, skill_id),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Skill '{skill_id}' not added to this agent",
+            )
+
+    await db.execute(
+        "DELETE FROM agent_skills WHERE agent_id = ? AND skill_id = ?",
+        (agent_id, skill_id),
+    )
+    await db.commit()
+    await sync_agent_skills(agent_id, host_dir)
+    return {"status": "ok", "removed": skill_id}
 
 
 # --- System-Level Skills API ---
