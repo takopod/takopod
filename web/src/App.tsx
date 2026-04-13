@@ -3,6 +3,7 @@ import { Route, Routes, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatInput } from "@/components/chat-input"
+import { ContainerLogsView } from "@/components/container-logs-view"
 import { ContainersView } from "@/components/containers-view"
 import { SchedulesView } from "@/components/schedules-view"
 import { SystemSkillsView } from "@/components/system-skills-view"
@@ -198,7 +199,7 @@ export function App() {
                             <MessageSquare className="mr-2 size-3.5" />
                             Chat
                           </DropdownMenuCheckboxItem>
-                          <DropdownMenuCheckboxItem checked={false} onClick={() => navigate(`/agents/${selectedAgentId}`)} className="whitespace-nowrap">
+                          <DropdownMenuCheckboxItem checked={false} onClick={() => navigate(`/agents/${agents.find((a) => a.id === selectedAgentId)?.name ?? selectedAgentId}`)} className="whitespace-nowrap">
                             <Settings className="mr-2 size-3.5" />
                             Agent Settings
                           </DropdownMenuCheckboxItem>
@@ -251,7 +252,7 @@ export function App() {
               }
             />
             <Route
-              path="/agents/:agentId"
+              path="/agents/:agentName"
               element={
                 <AgentsView
                   agents={agents}
@@ -261,7 +262,7 @@ export function App() {
               }
             />
             <Route
-              path="/agents/:agentId/:file"
+              path="/agents/:agentName/:file"
               element={
                 <AgentsView
                   agents={agents}
@@ -281,6 +282,10 @@ export function App() {
               element={<ContainersView />}
             />
             <Route
+              path="/settings/containers/:containerName/logs"
+              element={<ContainerLogsView />}
+            />
+            <Route
               path="/settings/queue"
               element={
                 <QueueStatusPanel status={queueStatus} connected={connected} />
@@ -298,11 +303,7 @@ export function App() {
           <>
             <SkillsStatusPanel agentId={selectedAgentId} />
             <McpStatusPanel agentId={selectedAgentId} />
-            <ContainerStatusPanel
-              agentId={selectedAgentId}
-              status={agents.find((a) => a.id === selectedAgentId)?.container_status}
-              onKilled={fetchAgents}
-            />
+            <ContainerStatusPanel agentId={selectedAgentId} />
           </>
         )}
       </aside>

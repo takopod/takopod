@@ -1298,6 +1298,23 @@ async def get_container_logs(container_id: str, tail: int = 100):
     return PlainTextResponse(logs)
 
 
+@router.get("/containers/name/{container_name}/logs")
+async def get_container_logs_by_name(container_name: str, tail: int = 100):
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "/opt/podman/bin/podman", "logs", "--tail", str(tail), container_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        logs = stdout.decode() + stderr.decode()
+    except Exception as e:
+        logs = f"Error fetching logs: {e}"
+
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(logs)
+
+
 @router.delete("/containers/{container_id}")
 async def delete_container(container_id: str):
     db = await get_db()

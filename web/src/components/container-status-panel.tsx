@@ -1,4 +1,6 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
+import { Trash2 } from "lucide-react"
 
 const ACTIVE_STATUSES = new Set(["running", "starting", "idle"])
 
@@ -8,25 +10,53 @@ const STATUS_COLOR: Record<string, string> = {
   idle: "bg-yellow-500",
 }
 
+interface ContainerInfo {
+  id: string
+  status: string
+}
+
 export function ContainerStatusPanel({
   agentId,
-  status,
-  onKilled,
 }: {
   agentId: string
-  status: string | null | undefined
-  onKilled?: () => void
 }) {
   const [killing, setKilling] = useState(false)
+  const [container, setContainer] = useState<ContainerInfo | null>(null)
 
-  const active = !!status && ACTIVE_STATUSES.has(status)
+  const containerName = `rhclaw-${agentId.slice(0, 8)}`
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function fetchContainer() {
+      try {
+        const res = await fetch("/api/containers")
+        if (cancelled || !res.ok) return
+        const containers: { id: string; agent_id: string; status: string }[] =
+          await res.json()
+        const match = containers.find(
+          (c) => c.agent_id === agentId && ACTIVE_STATUSES.has(c.status),
+        )
+        setContainer(match ? { id: match.id, status: match.status } : null)
+      } catch {
+        // ignore
+      }
+    }
+
+    fetchContainer()
+    const interval = setInterval(fetchContainer, 5000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [agentId])
 
   const handleKill = async () => {
     if (!confirm("Kill this container?")) return
     setKilling(true)
     try {
       const res = await fetch(`/api/agents/${agentId}/kill`, { method: "POST" })
-      if (res.ok) onKilled?.()
+      if (res.ok) setContainer(null)
     } finally {
       setKilling(false)
     }
@@ -37,24 +67,35 @@ export function ContainerStatusPanel({
       <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
         Container
       </span>
-      {active ? (
-        <div className="flex items-center justify-between py-0.5">
-          <div className="flex items-center gap-2">
+      {container ? (
+        <>
+          <div className="flex items-center gap-2 py-0.5">
             <span
               className={`inline-block size-1.5 shrink-0 rounded-full ${
-                STATUS_COLOR[status!] ?? "bg-muted-foreground/40"
+                STATUS_COLOR[container.status] ?? "bg-muted-foreground/40"
               }`}
             />
-            <span className="text-xs text-muted-foreground">{status}</span>
+            <span className="text-xs text-muted-foreground truncate">
+              {containerName}
+            </span>
           </div>
-          <button
-            onClick={handleKill}
-            disabled={killing}
-            className="text-[10px] text-destructive hover:underline disabled:opacity-50"
-          >
-            {killing ? "killing..." : "kill"}
-          </button>
-        </div>
+          <div className="flex items-center gap-2 pl-3.5 py-0.5">
+            <Link
+              to={`/settings/containers/${containerName}/logs`}
+              className="text-[11px] text-muted-foreground hover:underline"
+            >
+              Logs
+            </Link>
+            <button
+              onClick={handleKill}
+              disabled={killing}
+              className="text-muted-foreground/60 hover:text-destructive disabled:opacity-50"
+              title="Kill container"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </div>
+        </>
       ) : (
         <span className="text-[11px] text-muted-foreground/60 italic py-0.5">
           Not running

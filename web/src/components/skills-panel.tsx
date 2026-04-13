@@ -23,7 +23,7 @@ interface SkillDetail {
   builtin: boolean
 }
 
-export function SkillsPanel({ agentId }: { agentId: string }) {
+export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName?: string }) {
   const navigate = useNavigate()
   const [skills, setSkills] = useState<RegistrySkill[]>([])
   const [available, setAvailable] = useState<RegistrySkill[]>([])
@@ -169,7 +169,7 @@ export function SkillsPanel({ agentId }: { agentId: string }) {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => navigate(`/agents/${agentId}`)}
+          onClick={() => navigate(`/agents/${agentName ?? agentId}`)}
         >
           <ArrowLeft className="size-4" />
         </Button>

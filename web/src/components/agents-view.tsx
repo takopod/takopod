@@ -76,7 +76,7 @@ function McpServerLabel({ srv }: { srv: McpServer }) {
   )
 }
 
-function McpConfigPanel({ agentId }: { agentId: string }) {
+function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: string }) {
   const navigate = useNavigate()
   const [servers, setServers] = useState<McpServer[]>([])
   const [available, setAvailable] = useState<McpServer[]>([])
@@ -179,7 +179,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => navigate(`/agents/${agentId}`)}
+          onClick={() => navigate(`/agents/${agentName}`)}
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -321,8 +321,11 @@ interface AgentsViewProps {
   onDeleteAgent: (id: string, deleteWorkDir?: boolean) => void
 }
 
-export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
-  const { agentId, file } = useParams<{ agentId?: string; file?: string }>()
+export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewProps) {
+  const { agentName, file } = useParams<{ agentName?: string; file?: string }>()
+  const agentId = agentName
+    ? agents.find((a) => a.name === agentName)?.id
+    : undefined
   const navigate = useNavigate()
   const [detail, setDetail] = useState<AgentDetail | null>(null)
   const [content, setContent] = useState("")
@@ -385,11 +388,11 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
           Select an agent to view and edit its files.
         </div>
       ) : showMcpConfig ? (
-        <McpConfigPanel agentId={agentId} />
+        <McpConfigPanel agentId={agentId} agentName={agentName} />
       ) : showSkills ? (
-        <SkillsPanel agentId={agentId} />
+        <SkillsPanel agentId={agentId} agentName={agentName} />
       ) : showFileBrowser ? (
-        <FileBrowser agentId={agentId} />
+        <FileBrowser agentId={agentId} agentName={agentName} />
       ) : !openFile ? (
         <>
           <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
@@ -448,7 +451,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => navigate(`/agents/${agentId}/${f}`)}>
+                              <DropdownMenuItem onClick={() => navigate(`/agents/${agentName}/${f}`)}>
                                 <Pencil className="mr-2 size-3.5" />
                                 Edit
                               </DropdownMenuItem>
@@ -468,7 +471,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                 Tools & Extensions
               </h3>
               <div className="grid grid-cols-2 gap-4">
-                <Link to={`/agents/${agentId}/mcp`} className="block">
+                <Link to={`/agents/${agentName}/mcp`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -483,7 +486,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                   </Card>
                 </Link>
 
-                <Link to={`/agents/${agentId}/skills`} className="block">
+                <Link to={`/agents/${agentName}/skills`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -506,7 +509,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                 Files
               </h3>
               <div className="grid grid-cols-2 gap-4">
-                <Link to={`/agents/${agentId}/files?dir=memory`} className="block">
+                <Link to={`/agents/${agentName}/files?dir=memory`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -521,7 +524,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                   </Card>
                 </Link>
 
-                <Link to={`/agents/${agentId}/files`} className="block">
+                <Link to={`/agents/${agentName}/files`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -621,7 +624,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => navigate(`/agents/${agentId}`)}
+              onClick={() => navigate(`/agents/${agentName}`)}
             >
               <ArrowLeft className="size-4" />
             </Button>

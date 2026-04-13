@@ -7,9 +7,10 @@ import { ArrowLeft, File, Folder, Save, Trash2 } from "lucide-react"
 
 interface FileBrowserProps {
   agentId: string
+  agentName?: string
 }
 
-export function FileBrowser({ agentId }: FileBrowserProps) {
+export function FileBrowser({ agentId, agentName }: FileBrowserProps) {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [entries, setEntries] = useState<FileEntry[]>([])
@@ -180,7 +181,7 @@ export function FileBrowser({ agentId }: FileBrowserProps) {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={currentPath ? goUp : () => navigate(`/agents/${agentId}`)}
+          onClick={currentPath ? goUp : () => navigate(`/agents/${agentName ?? agentId}`)}
         >
           <ArrowLeft className="size-4" />
         </Button>
