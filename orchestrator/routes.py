@@ -305,49 +305,14 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    host_dir = Path(row[6])
-    claude_md = (host_dir / "CLAUDE.md").read_text() if (host_dir / "CLAUDE.md").is_file() else ""
-    soul_md = (host_dir / "SOUL.md").read_text() if (host_dir / "SOUL.md").is_file() else ""
-    memory_md = (host_dir / "MEMORY.md").read_text() if (host_dir / "MEMORY.md").is_file() else ""
-
     return AgentDetailResponse(
         id=row[0], name=row[1], icon=row[2] or "", agent_type=row[3], status=row[4],
-        created_at=row[5], claude_md=claude_md, soul_md=soul_md, memory_md=memory_md,
-        slack_enabled=bool(row[7]), github_enabled=bool(row[8]),
+        created_at=row[5], slack_enabled=bool(row[7]), github_enabled=bool(row[8]),
     )
 
 
 @router.put("/agents/{agent_id}")
 async def update_agent(agent_id: str, req: UpdateAgentRequest) -> AgentDetailResponse:
-    db = await get_db()
-    async with db.execute(
-        "SELECT host_dir FROM agents WHERE id = ?", (agent_id,)
-    ) as cur:
-        row = await cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    host_dir = Path(row[0])
-    updates: list[tuple[str, str]] = []
-    if req.claude_md is not None:
-        (host_dir / "CLAUDE.md").write_text(req.claude_md)
-        updates.append(("claude_md", req.claude_md))
-    if req.soul_md is not None:
-        (host_dir / "SOUL.md").write_text(req.soul_md)
-        updates.append(("soul_md", req.soul_md))
-    if req.memory_md is not None:
-        (host_dir / "MEMORY.md").write_text(req.memory_md)
-        updates.append(("memory_md", req.memory_md))
-
-    if updates:
-        set_clause = ", ".join(f"{col} = ?" for col, _ in updates)
-        values = [v for _, v in updates]
-        await db.execute(
-            f"UPDATE agents SET {set_clause} WHERE id = ?",
-            (*values, agent_id),
-        )
-        await db.commit()
-
     return await get_agent(agent_id)
 
 
@@ -405,11 +370,6 @@ async def delete_agent(agent_id: str, delete_work_dir: bool = False):
 # --- Agent Files API ---
 
 IDENTITY_FILES = {"CLAUDE.md", "SOUL.md", "MEMORY.md"}
-IDENTITY_TO_COLUMN = {
-    "CLAUDE.md": "claude_md",
-    "SOUL.md": "soul_md",
-    "MEMORY.md": "memory_md",
-}
 
 
 async def _resolve_agent_path(
@@ -474,17 +434,6 @@ async def write_agent_file(agent_id: str, file_path: str, request: Request):
 
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(content)
-
-    # Sync identity files to the agents table
-    filename = resolved.name
-    if filename in IDENTITY_TO_COLUMN:
-        column = IDENTITY_TO_COLUMN[filename]
-        db = await get_db()
-        await db.execute(
-            f"UPDATE agents SET {column} = ? WHERE id = ?",
-            (content, agent_id),
-        )
-        await db.commit()
 
     # Re-index memory search if a memory file was edited
     if file_path.startswith("memory/") and file_path.endswith(".md"):

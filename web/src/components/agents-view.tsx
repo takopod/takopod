@@ -1,15 +1,24 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent } from "@/components/ui/card"
+import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -21,7 +30,6 @@ import type { Agent } from "@/lib/types"
 import {
   ArrowLeft,
   ChevronRight,
-  FileText,
   FolderOpen,
   MessageSquare,
   MoreHorizontal,
@@ -37,18 +45,13 @@ import {
 import { AgentIcon } from "@/components/agent-icon"
 
 interface AgentDetail extends Agent {
-  claude_md: string
-  soul_md: string
-  memory_md: string
   slack_enabled?: boolean
 }
 
-type FileKey = "claude_md" | "soul_md" | "memory_md"
-
-const FILE_MAP: { key: FileKey; label: string }[] = [
-  { key: "claude_md", label: "CLAUDE.md" },
-  { key: "soul_md", label: "SOUL.md" },
-  { key: "memory_md", label: "MEMORY.md" },
+const IDENTITY_FILES = [
+  { file: "CLAUDE.md", description: "System prompt & instructions" },
+  { file: "SOUL.md", description: "Personality & behavior" },
+  { file: "MEMORY.md", description: "Persistent memory store" },
 ]
 
 interface McpServerConfig {
@@ -454,10 +457,9 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
   const showFileBrowser = file === "files"
   const showMcpConfig = file === "mcp"
   const showSkills = file === "skills"
-  const openFile =
-    !showFileBrowser && !showMcpConfig && !showSkills && FILE_MAP.find((f) => f.key === file)
-      ? (file as FileKey)
-      : null
+  const openFile = !showFileBrowser && !showMcpConfig && !showSkills
+    ? IDENTITY_FILES.find((f) => f.file === file)
+    : null
 
   const fetchDetail = useCallback(async (id: string) => {
     const res = await fetch(`/api/agents/${id}`)
@@ -474,25 +476,27 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
       setDetail(null)
       return
     }
-    fetchDetail(agentId).then((data) => {
-      if (data && openFile) {
-        setContent(data[openFile])
+    fetchDetail(agentId)
+  }, [agentId, fetchDetail])
+
+  useEffect(() => {
+    if (!agentId || !openFile) return
+    fetch(`/api/agents/${agentId}/files/${openFile.file}`)
+      .then((res) => (res.ok ? res.text() : ""))
+      .then((text) => {
+        setContent(text)
         setDirty(false)
-      }
-    })
-  }, [agentId, openFile, fetchDetail])
+      })
+  }, [agentId, openFile])
 
   const handleSave = async () => {
     if (!agentId || !openFile) return
     setSaving(true)
-    const res = await fetch(`/api/agents/${agentId}`, {
+    const res = await fetch(`/api/agents/${agentId}/files/${openFile.file}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [openFile]: content }),
+      body: content,
     })
     if (res.ok) {
-      const data: AgentDetail = await res.json()
-      setDetail(data)
       setDirty(false)
     }
     setSaving(false)
@@ -545,40 +549,40 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
               <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Configuration
               </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <Link to={`/agents/${agentId}/claude_md`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <FileText className="size-4 text-muted-foreground" />
-                        CLAUDE.md
-                      </CardTitle>
-                      <CardDescription>System prompt & instructions</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <pre className="line-clamp-3 whitespace-pre-wrap font-mono text-xs text-muted-foreground">
-                        {detail.claude_md?.slice(0, 200) || "Empty"}
-                      </pre>
-                    </CardContent>
-                  </Card>
-                </Link>
-
-                <Link to={`/agents/${agentId}/soul_md`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <FileText className="size-4 text-muted-foreground" />
-                        SOUL.md
-                      </CardTitle>
-                      <CardDescription>Personality & behavior</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <pre className="line-clamp-3 whitespace-pre-wrap font-mono text-xs text-muted-foreground">
-                        {detail.soul_md?.slice(0, 200) || "Empty"}
-                      </pre>
-                    </CardContent>
-                  </Card>
-                </Link>
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>File</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead className="w-10" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {IDENTITY_FILES.map(({ file: f, description }) => (
+                      <TableRow key={f}>
+                        <TableCell className="font-medium">{f}</TableCell>
+                        <TableCell className="text-muted-foreground">{description}</TableCell>
+                        <TableCell className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="size-8">
+                                <MoreHorizontal className="size-4" />
+                                <span className="sr-only">Open menu</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => navigate(`/agents/${agentId}/${f}`)}>
+                                <Pencil className="mr-2 size-3.5" />
+                                Edit
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             </div>
 
@@ -626,21 +630,6 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
                 Files
               </h3>
               <div className="grid grid-cols-2 gap-4">
-                <Link to={`/agents/${agentId}/memory_md`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <FileText className="size-4 text-muted-foreground" />
-                        MEMORY.md
-                      </CardTitle>
-                      <CardDescription>Persistent memory store</CardDescription>
-                      <CardAction>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </CardAction>
-                    </CardHeader>
-                  </Card>
-                </Link>
-
                 <Link to={`/agents/${agentId}/files?dir=memory`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
@@ -761,7 +750,7 @@ export function AgentsView({ onSelectAgent, onDeleteAgent }: AgentsViewProps) {
               <ArrowLeft className="size-4" />
             </Button>
             <span className="text-sm font-medium">
-              {FILE_MAP.find((f) => f.key === openFile)?.label}
+              {openFile?.file}
             </span>
             <div className="ml-auto">
               <Button

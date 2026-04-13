@@ -206,9 +206,6 @@ CREATE TABLE agents (
     name        TEXT NOT NULL UNIQUE,  -- user-facing name (e.g., "coder", "researcher", "bob")
     agent_type  TEXT NOT NULL DEFAULT 'default',  -- references agent_templates/ for seed files
     host_dir    TEXT NOT NULL,     -- absolute path to persistent workspace (e.g., data/agents/<id>/)
-    claude_md   TEXT,             -- user-customized CLAUDE.md content (NULL = use agent_type default)
-    soul_md     TEXT,             -- user-customized SOUL.md content (NULL = use agent_type default)
-    memory_md   TEXT,             -- user-customized MEMORY.md content (NULL = use agent_type default)
     container_memory TEXT NOT NULL DEFAULT '2g',  -- podman --memory flag
     container_cpus   TEXT NOT NULL DEFAULT '2',   -- podman --cpus flag
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),

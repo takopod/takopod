@@ -66,9 +66,6 @@ def create_agent_workspace(
     agent_id: str,
     agent_type: str,
     agent_name: str | None = None,
-    claude_md: str | None = None,
-    soul_md: str | None = None,
-    memory_md: str | None = None,
     mcp_config: dict | None = None,
 ) -> Path:
     slug = slugify(agent_name) if agent_name else agent_id
@@ -83,15 +80,8 @@ def create_agent_workspace(
 
     for filename in ("CLAUDE.md", "SOUL.md", "MEMORY.md"):
         content = None
-        if filename == "CLAUDE.md" and claude_md:
-            content = claude_md
-        elif filename == "SOUL.md" and soul_md:
-            content = soul_md
-        elif filename == "MEMORY.md" and memory_md:
-            content = memory_md
-
         target = host_dir / filename
-        if not content and (template_dir / filename).is_file():
+        if (template_dir / filename).is_file():
             content = (template_dir / filename).read_text()
 
         # Prepend agent identity to MEMORY.md

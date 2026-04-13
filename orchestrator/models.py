@@ -50,15 +50,11 @@ class AgentResponse(BaseModel):
 
 
 class AgentDetailResponse(AgentResponse):
-    claude_md: str
-    soul_md: str
-    memory_md: str
+    pass
 
 
 class UpdateAgentRequest(BaseModel):
-    claude_md: str | None = None
-    soul_md: str | None = None
-    memory_md: str | None = None
+    pass
 
 
 class SystemErrorFrame(BaseModel):
