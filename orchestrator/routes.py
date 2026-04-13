@@ -30,7 +30,9 @@ from orchestrator.container_manager import (
     MCP_CONFIGS_DIR,
     create_agent_workspace,
     kill_container,
+    seed_agent_skills,
     spawn_container,
+    sync_agent_skills,
 )
 from orchestrator.mcp_manager import McpServerManager
 from orchestrator.db import get_db
@@ -51,6 +53,8 @@ from orchestrator.models import (
     FileEntry,
     McpConfigRequest,
     QueueStatusFrame,
+    RegistrySkillSummary,
+    RegistrySkillToggle,
     ScheduleResponse,
     SkillDetail,
     SkillSummary,
@@ -234,6 +238,10 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
          1 if req.slack_enabled else 0, 1 if req.github_enabled else 0),
     )
     await db.commit()
+
+    # Seed all registry skills as enabled, then sync to workspace
+    await seed_agent_skills(agent_id)
+    await sync_agent_skills(agent_id, host_dir)
 
     async with db.execute(
         "SELECT id, name, icon, agent_type, status, created_at, slack_enabled, github_enabled "
@@ -744,23 +752,75 @@ async def delete_skill_file(agent_id: str, skill_id: str, file_path: str):
     return {"status": "ok", "deleted": file_path}
 
 
+# --- Registry Skills (per-agent enable/disable) ---
+
+
+@router.get("/agents/{agent_id}/registry-skills")
+async def list_registry_skills(agent_id: str) -> list[RegistrySkillSummary]:
+    """List all system skills with per-agent enabled/disabled status."""
+    await _resolve_agent_path(agent_id)
+    db = await get_db()
+
+    # Get agent's enabled/disabled state for each skill
+    async with db.execute(
+        "SELECT skill_id, enabled FROM agent_skills WHERE agent_id = ?",
+        (agent_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    agent_state = {row[0]: bool(row[1]) for row in rows}
+
+    result: list[RegistrySkillSummary] = []
+    for skill_id, skill_path, _ in _list_system_skills():
+        content = skill_path.read_text()
+        name, desc = _parse_skill_frontmatter(content)
+        builtin = _is_builtin_skill(skill_id)
+        result.append(RegistrySkillSummary(
+            id=skill_id,
+            name=name or skill_id,
+            description=desc,
+            builtin=builtin,
+            enabled=True if builtin else agent_state.get(skill_id, False),
+        ))
+    return result
+
+
+@router.put("/agents/{agent_id}/registry-skills/{skill_id}")
+async def toggle_registry_skill(
+    agent_id: str, skill_id: str, req: RegistrySkillToggle,
+):
+    """Enable or disable a registry skill for an agent."""
+    if not req.enabled and _is_builtin_skill(skill_id):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Builtin skill '{skill_id}' cannot be disabled.",
+        )
+
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    db = await get_db()
+
+    await db.execute(
+        "INSERT INTO agent_skills (agent_id, skill_id, enabled) VALUES (?, ?, ?) "
+        "ON CONFLICT(agent_id, skill_id) DO UPDATE SET enabled = excluded.enabled",
+        (agent_id, skill_id, 1 if req.enabled else 0),
+    )
+    await db.commit()
+
+    # Sync workspace immediately
+    await sync_agent_skills(agent_id, host_dir)
+
+    return {"status": "ok", "skill_id": skill_id, "enabled": req.enabled}
+
+
 # --- System-Level Skills API ---
 
-SYSTEM_SKILLS_DIR = Path("skills")
+BUILTIN_SKILLS_DIR = Path("skills")
+USER_SKILLS_DIR = Path("data/skills")
 
 
-def _system_skills_dir() -> Path:
-    """Return the system-level skills directory, creating it if needed."""
-    SYSTEM_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    return SYSTEM_SKILLS_DIR
-
-
-def _list_system_skills() -> list[tuple[str, Path, str]]:
-    """Scan system skills dir for both flat .md files and subdirectories with SKILL.md.
-
-    Returns list of (skill_id, skill_md_path, format) tuples.
-    """
-    sdir = _system_skills_dir()
+def _scan_skills_in_dir(sdir: Path) -> list[tuple[str, Path, str]]:
+    """Scan a single skills directory for flat .md files and subdirectories with SKILL.md."""
+    if not sdir.is_dir():
+        return []
     results: list[tuple[str, Path, str]] = []
     for item in sorted(sdir.iterdir()):
         if item.is_file() and item.suffix == ".md":
@@ -770,19 +830,44 @@ def _list_system_skills() -> list[tuple[str, Path, str]]:
     return results
 
 
+def _list_system_skills() -> list[tuple[str, Path, str]]:
+    """Scan both user and builtin skills directories.
+
+    Returns list of (skill_id, skill_md_path, format) tuples.
+    User overrides (data/skills/) take precedence over builtins (skills/).
+    """
+    seen: set[str] = set()
+    results: list[tuple[str, Path, str]] = []
+    for entry in _scan_skills_in_dir(USER_SKILLS_DIR) + _scan_skills_in_dir(BUILTIN_SKILLS_DIR):
+        if entry[0] not in seen:
+            seen.add(entry[0])
+            results.append(entry)
+    return results
+
+
+def _find_system_skill(skill_id: str) -> tuple[Path, Path, str] | None:
+    """Find a system skill by ID across both directories.
+
+    User overrides (data/skills/) checked first, then builtins (skills/).
+    Returns (skill_dir_or_parent, skill_md_path, format) or None.
+    """
+    for sdir in (USER_SKILLS_DIR, BUILTIN_SKILLS_DIR):
+        dir_path = sdir / skill_id
+        flat_path = sdir / f"{skill_id}.md"
+        if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
+            return (dir_path, dir_path / "SKILL.md", "dir")
+        if flat_path.is_file():
+            return (sdir, flat_path, "flat")
+    return None
+
+
 def _is_builtin_skill(skill_id: str) -> bool:
-    """Check if a skill is git-tracked (builtin) by querying git."""
-    import subprocess
-    for git_path in (f"skills/{skill_id}.md", f"skills/{skill_id}/SKILL.md"):
-        try:
-            subprocess.run(
-                ["git", "cat-file", "-e", f"HEAD:{git_path}"],
-                capture_output=True, check=True,
-            )
-            return True
-        except subprocess.CalledProcessError:
-            continue
-    return False
+    """Check if a skill lives in the builtin (git-tracked) skills directory."""
+    dir_path = BUILTIN_SKILLS_DIR / skill_id
+    flat_path = BUILTIN_SKILLS_DIR / f"{skill_id}.md"
+    return (dir_path.is_dir() and (dir_path / "SKILL.md").is_file()) or flat_path.is_file()
+
+
 
 
 @router.get("/skills")
@@ -802,21 +887,13 @@ async def list_system_skills() -> list[SkillSummary]:
 
 @router.get("/skills/{skill_id}")
 async def get_system_skill(skill_id: str) -> SkillDetail:
-    sdir = _system_skills_dir()
-    # Check directory-based first, then flat
-    dir_path = sdir / skill_id
-    flat_path = sdir / f"{skill_id}.md"
-
-    if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
-        skill_path = dir_path / "SKILL.md"
-        files = _collect_supporting_files(dir_path)
-    elif flat_path.is_file():
-        skill_path = flat_path
-        files = []
-    else:
+    found = _find_system_skill(skill_id)
+    if not found:
         raise HTTPException(status_code=404, detail="Skill not found")
 
+    skill_dir_or_parent, skill_path, fmt = found
     content = skill_path.read_text()
+    files = _collect_supporting_files(skill_dir_or_parent) if fmt == "dir" else []
     name, desc = _parse_skill_frontmatter(content)
     return SkillDetail(
         id=skill_id,
@@ -828,13 +905,47 @@ async def get_system_skill(skill_id: str) -> SkillDetail:
     )
 
 
+async def _propagate_skill_to_agents(skill_id: str) -> None:
+    """Re-sync a registry skill to all agents that have it enabled."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT a.id, a.host_dir FROM agents a "
+        "JOIN agent_skills s ON s.agent_id = a.id "
+        "WHERE s.skill_id = ? AND s.enabled = 1 AND a.status = 'active'",
+        (skill_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    for agent_id, host_dir in rows:
+        await sync_agent_skills(agent_id, Path(host_dir))
+
+
+async def _remove_skill_from_all_agents(skill_id: str) -> None:
+    """Remove a registry skill from all agent workspaces and DB rows."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT a.id, a.host_dir FROM agents a "
+        "JOIN agent_skills s ON s.agent_id = a.id "
+        "WHERE s.skill_id = ? AND a.status = 'active'",
+        (skill_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    for _, host_dir in rows:
+        skill_dir = Path(host_dir) / ".claude" / "skills" / skill_id
+        if skill_dir.is_dir():
+            shutil.rmtree(skill_dir)
+    await db.execute("DELETE FROM agent_skills WHERE skill_id = ?", (skill_id,))
+    await db.commit()
+
+
 @router.post("/skills")
 async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
-    sdir = _system_skills_dir()
-    skill_dir = sdir / req.name
-    flat_path = sdir / f"{req.name}.md"
-    if skill_dir.exists() or flat_path.exists():
+    # Check for conflicts in both directories
+    if _find_system_skill(req.name):
         raise HTTPException(status_code=409, detail=f"Skill '{req.name}' already exists")
+
+    # User-created skills go to data/skills/
+    USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    skill_dir = USER_SKILLS_DIR / req.name
     skill_dir.mkdir(parents=True)
 
     content = req.content
@@ -845,6 +956,24 @@ async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
             f"---\n\n# {req.name}\n\nTODO: Add skill instructions here.\n"
         )
     (skill_dir / "SKILL.md").write_text(content)
+
+    # Enable for all existing agents by default
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, host_dir FROM agents WHERE status = 'active'"
+    ) as cur:
+        agents = await cur.fetchall()
+    for agent_id, host_dir in agents:
+        await db.execute(
+            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id, enabled) "
+            "VALUES (?, ?, 1)",
+            (agent_id, req.name),
+        )
+    await db.commit()
+
+    # Sync to all agents
+    for agent_id, host_dir in agents:
+        await sync_agent_skills(agent_id, Path(host_dir))
 
     name, desc = _parse_skill_frontmatter(content)
     return SkillDetail(
@@ -858,21 +987,21 @@ async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
 
 @router.put("/skills/{skill_id}")
 async def update_system_skill(skill_id: str, req: UpdateSkillRequest) -> SkillDetail:
-    sdir = _system_skills_dir()
-    # Check directory-based first, then flat
-    dir_path = sdir / skill_id
-    flat_path = sdir / f"{skill_id}.md"
-
-    if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
-        skill_path = dir_path / "SKILL.md"
-        files = _collect_supporting_files(dir_path)
-    elif flat_path.is_file():
-        skill_path = flat_path
-        files = []
-    else:
+    found = _find_system_skill(skill_id)
+    if not found:
         raise HTTPException(status_code=404, detail="Skill not found")
 
+    # Always write updates to data/skills/ (creates an override for builtins)
+    USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    override_dir = USER_SKILLS_DIR / skill_id
+    override_dir.mkdir(parents=True, exist_ok=True)
+    skill_path = override_dir / "SKILL.md"
     skill_path.write_text(req.content)
+    files = _collect_supporting_files(override_dir)
+
+    # Propagate update to agents that have this skill enabled
+    await _propagate_skill_to_agents(skill_id)
+
     name, desc = _parse_skill_frontmatter(req.content)
     return SkillDetail(
         id=skill_id,
@@ -891,9 +1020,9 @@ async def delete_system_skill(skill_id: str):
             detail=f"Cannot delete builtin skill '{skill_id}'. Use reset to restore defaults.",
         )
 
-    sdir = _system_skills_dir()
-    dir_path = sdir / skill_id
-    flat_path = sdir / f"{skill_id}.md"
+    # Only user-created skills can be deleted (they live in data/skills/)
+    dir_path = USER_SKILLS_DIR / skill_id
+    flat_path = USER_SKILLS_DIR / f"{skill_id}.md"
 
     if dir_path.is_dir():
         shutil.rmtree(dir_path)
@@ -901,47 +1030,47 @@ async def delete_system_skill(skill_id: str):
         flat_path.unlink()
     else:
         raise HTTPException(status_code=404, detail="Skill not found")
+
+    # Remove from all agents
+    await _remove_skill_from_all_agents(skill_id)
+
     return {"status": "ok", "skill_id": skill_id}
 
 
 @router.post("/skills/{skill_id}/reset")
 async def reset_system_skill(skill_id: str) -> SkillDetail:
-    """Reset a system skill to its git-committed default content."""
-    sdir = _system_skills_dir()
-    dir_path = sdir / skill_id
-    flat_path = sdir / f"{skill_id}.md"
+    """Reset a builtin skill by removing the user override from data/skills/.
 
-    # Determine the file's repo-relative path to query git
-    if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
-        skill_path = dir_path / "SKILL.md"
-        git_path = f"skills/{skill_id}/SKILL.md"
-    elif flat_path.is_file():
-        skill_path = flat_path
-        git_path = f"skills/{skill_id}.md"
-    else:
+    The original builtin version from skills/ will then take effect.
+    """
+    if not _is_builtin_skill(skill_id):
+        raise HTTPException(status_code=400, detail="Only builtin skills can be reset")
+
+    # Remove user override if it exists
+    override_dir = USER_SKILLS_DIR / skill_id
+    override_flat = USER_SKILLS_DIR / f"{skill_id}.md"
+    if override_dir.is_dir():
+        shutil.rmtree(override_dir)
+    elif override_flat.is_file():
+        override_flat.unlink()
+
+    # Read the builtin version (now the active one)
+    found = _find_system_skill(skill_id)
+    if not found:
         raise HTTPException(status_code=404, detail="Skill not found")
 
-    # Retrieve the committed version via git
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "show", f"HEAD:{git_path}"],
-            capture_output=True, text=True, check=True,
-        )
-        default_content = result.stdout
-    except subprocess.CalledProcessError:
-        raise HTTPException(
-            status_code=404,
-            detail="No default version found in git history for this skill",
-        )
+    _, skill_path, fmt = found
+    content = skill_path.read_text()
 
-    skill_path.write_text(default_content)
-    name, desc = _parse_skill_frontmatter(default_content)
+    # Propagate reset content to agents
+    await _propagate_skill_to_agents(skill_id)
+
+    name, desc = _parse_skill_frontmatter(content)
     return SkillDetail(
         id=skill_id,
         name=name or skill_id,
         description=desc,
-        content=default_content,
+        content=content,
         files=[],
     )
 
@@ -1636,6 +1765,13 @@ async def _ensure_worker(
             await db.commit()
             return
 
+    # Sync registry skills before spawning container
+    db = await get_db()
+    async with db.execute("SELECT host_dir FROM agents WHERE id = ?", (agent_id,)) as cur:
+        agent_row = await cur.fetchone()
+    if agent_row:
+        await sync_agent_skills(agent_id, Path(agent_row[0]))
+
     # Spawn new container (no lock needed during spawn — it's a long operation)
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
     mcp_mgr = await _start_mcp_manager(host_dir, agent_id)
@@ -1705,6 +1841,13 @@ async def ensure_worker_headless(agent_id: str, session_id: str) -> None:
                 )
             return
 
+    # Sync registry skills before spawning container
+    db = await get_db()
+    async with db.execute("SELECT host_dir FROM agents WHERE id = ?", (agent_id,)) as cur:
+        agent_row = await cur.fetchone()
+    if agent_row:
+        await sync_agent_skills(agent_id, Path(agent_row[0]))
+
     record_id, process, host_dir = await spawn_container(agent_id, session_id)
     mcp_mgr = await _start_mcp_manager(host_dir, agent_id)
     ws_mgr = WebSocketManager(session_id)
@@ -1744,6 +1887,10 @@ async def _respawn_worker(agent_id: str) -> None:
         pass
 
     try:
+        # Sync registry skills before respawning
+        if worker.host_dir:
+            await sync_agent_skills(agent_id, worker.host_dir)
+
         record_id, process, host_dir = await spawn_container(
             agent_id, worker.session_id,
         )

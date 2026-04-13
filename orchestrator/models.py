@@ -132,6 +132,18 @@ class SkillDetail(SkillSummary):
     files: list[str] = []
 
 
+class RegistrySkillSummary(BaseModel):
+    id: str
+    name: str
+    description: str
+    builtin: bool = False
+    enabled: bool = True
+
+
+class RegistrySkillToggle(BaseModel):
+    enabled: bool
+
+
 class ScheduleResponse(BaseModel):
     id: str
     agent_id: str

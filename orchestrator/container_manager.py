@@ -95,12 +95,9 @@ def create_agent_workspace(
         if content:
             target.write_text(content)
 
-    # Copy skills: common first, then template-specific (can override)
+    # Skills are synced separately via sync_agent_skills() after DB rows are created.
+    # Template-specific skills are still copied here as overrides.
     dest_skills = host_dir / ".claude" / "skills"
-    common_skills = Path("skills")
-    if common_skills.is_dir():
-        dest_skills.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(common_skills, dest_skills, dirs_exist_ok=True)
     template_skills = template_dir / ".claude" / "skills"
     if template_skills.is_dir():
         dest_skills.mkdir(parents=True, exist_ok=True)
@@ -133,6 +130,129 @@ def create_agent_workspace(
             pass
 
     return host_dir
+
+
+BUILTIN_SKILLS_DIR = Path("skills")
+USER_SKILLS_DIR = Path("data/skills")
+REGISTRY_MANIFEST = ".registry.json"
+
+
+def _scan_skills_dir(sdir: Path) -> list[str]:
+    """Scan a skills directory and return skill IDs found."""
+    if not sdir.is_dir():
+        return []
+    ids: list[str] = []
+    for item in sorted(sdir.iterdir()):
+        if item.is_file() and item.suffix == ".md":
+            ids.append(item.stem)
+        elif item.is_dir() and (item / "SKILL.md").is_file():
+            ids.append(item.name)
+    return ids
+
+
+def _list_registry_skill_ids() -> list[str]:
+    """Scan both user and builtin skill directories and return all skill IDs.
+
+    User skills (data/skills/) take precedence over builtin skills (skills/).
+    """
+    seen: set[str] = set()
+    ids: list[str] = []
+    for skill_id in _scan_skills_dir(USER_SKILLS_DIR) + _scan_skills_dir(BUILTIN_SKILLS_DIR):
+        if skill_id not in seen:
+            seen.add(skill_id)
+            ids.append(skill_id)
+    return ids
+
+
+def _find_skill_source(skill_id: str) -> Path | None:
+    """Find which directory a skill lives in (user override first, then builtin)."""
+    for sdir in (USER_SKILLS_DIR, BUILTIN_SKILLS_DIR):
+        dir_path = sdir / skill_id
+        flat_path = sdir / f"{skill_id}.md"
+        if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
+            return sdir
+        if flat_path.is_file():
+            return sdir
+    return None
+
+
+def _copy_system_skill(skill_id: str, dest_skills: Path) -> None:
+    """Copy a single system skill into an agent's .claude/skills/ directory."""
+    sdir = _find_skill_source(skill_id)
+    if not sdir:
+        return
+
+    flat_path = sdir / f"{skill_id}.md"
+    dir_path = sdir / skill_id
+
+    target = dest_skills / skill_id
+    target.mkdir(parents=True, exist_ok=True)
+
+    if dir_path.is_dir() and (dir_path / "SKILL.md").is_file():
+        shutil.copytree(dir_path, target, dirs_exist_ok=True)
+    elif flat_path.is_file():
+        shutil.copy2(flat_path, target / "SKILL.md")
+
+
+async def seed_agent_skills(agent_id: str) -> None:
+    """Insert agent_skills rows for all system skills (called on agent creation)."""
+    db = await get_db()
+    skill_ids = _list_registry_skill_ids()
+    for skill_id in skill_ids:
+        await db.execute(
+            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id, enabled) "
+            "VALUES (?, ?, 1)",
+            (agent_id, skill_id),
+        )
+    await db.commit()
+
+
+async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:
+    """Sync registry skills into an agent's workspace based on enabled flags.
+
+    - Reads enabled skill IDs from agent_skills table
+    - Removes registry skills that are disabled or no longer in the registry
+    - Copies enabled registry skills from skills/ into .claude/skills/
+    - Preserves custom (non-registry) agent skills
+    """
+    db = await get_db()
+    dest_skills = host_dir / ".claude" / "skills"
+    dest_skills.mkdir(parents=True, exist_ok=True)
+
+    # Get enabled skill IDs from DB
+    async with db.execute(
+        "SELECT skill_id FROM agent_skills WHERE agent_id = ? AND enabled = 1",
+        (agent_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    enabled_ids = {row[0] for row in rows}
+
+    # Builtin skills are always enabled regardless of DB state
+    enabled_ids.update(_scan_skills_dir(BUILTIN_SKILLS_DIR))
+
+    # Read current registry manifest (tracks which skills in workspace came from registry)
+    manifest_path = dest_skills / REGISTRY_MANIFEST
+    previous_registry: set[str] = set()
+    if manifest_path.is_file():
+        try:
+            previous_registry = set(json.loads(manifest_path.read_text()))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Remove registry skills that are no longer enabled
+    for skill_id in previous_registry - enabled_ids:
+        skill_dir = dest_skills / skill_id
+        if skill_dir.is_dir():
+            shutil.rmtree(skill_dir)
+            logger.debug("Removed disabled registry skill %s for agent %s", skill_id, agent_id)
+
+    # Copy/update enabled registry skills
+    for skill_id in enabled_ids:
+        _copy_system_skill(skill_id, dest_skills)
+
+    # Write updated manifest
+    manifest_path.write_text(json.dumps(sorted(enabled_ids)))
+    logger.debug("Synced %d registry skills for agent %s", len(enabled_ids), agent_id)
 
 
 async def write_agents_json(agent_id: str, host_dir: Path) -> None:
