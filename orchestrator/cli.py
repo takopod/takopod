@@ -151,6 +151,15 @@ def stop(port: int = 8000) -> None:
         sys.exit(1)
 
     PID_FILE.unlink(missing_ok=True)
+
+    # Kill any orphaned worker still bound to the port
+    orphan = _find_pid_by_port(port)
+    if orphan and orphan != pid:
+        try:
+            _kill_and_wait(orphan)
+        except OSError:
+            pass
+
     print("rhclaw stopped")
 
 
