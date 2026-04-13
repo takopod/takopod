@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { Route, Routes, useNavigate } from "react-router-dom"
+import { Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatInput } from "@/components/chat-input"
@@ -54,6 +54,8 @@ interface Template {
 
 export function App() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const isAgentRoute = location.pathname === "/" || location.pathname.startsWith("/agents")
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
     () => localStorage.getItem("rhclaw:selectedAgentId"),
@@ -299,7 +301,7 @@ export function App() {
       </SidebarInset>
 
       <aside className="w-52 shrink-0 border-l sticky top-0 h-svh overflow-y-auto">
-        {selectedAgentId && (
+        {selectedAgentId && isAgentRoute && (
           <>
             <SkillsStatusPanel agentId={selectedAgentId} />
             <McpStatusPanel agentId={selectedAgentId} />
