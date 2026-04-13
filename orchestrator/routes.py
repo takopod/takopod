@@ -252,6 +252,15 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     await seed_agent_skills(agent_id)
     await sync_agent_skills(agent_id, host_dir)
 
+    # Seed builtin MCP servers based on integration flags
+    initial_mcp: dict[str, bool] = {}
+    if req.slack_enabled:
+        initial_mcp["slack"] = True
+    if req.github_enabled:
+        initial_mcp["github"] = True
+    if initial_mcp:
+        _write_agent_mcp_servers(agent_id, initial_mcp)
+
     async with db.execute(
         "SELECT id, name, icon, agent_type, status, created_at, slack_enabled, github_enabled "
         "FROM agents WHERE id = ?",
@@ -483,7 +492,7 @@ def _write_agent_mcp_servers(agent_id: str, servers: dict[str, bool]) -> None:
 async def get_mcp_config(agent_id: str):
     """Return agent's added servers and available global servers."""
     await _resolve_agent_path(agent_id)
-    global_config = _read_system_mcp_config()
+    global_config = _get_global_mcp_config_with_builtins()
     global_servers = global_config.get("mcpServers", {})
     agent_servers = _read_agent_mcp_servers(agent_id)
 
@@ -505,7 +514,7 @@ async def get_mcp_config(agent_id: str):
 async def add_mcp_server_to_agent(agent_id: str, server_name: str):
     """Add a global MCP server to this agent (disabled by default)."""
     await _resolve_agent_path(agent_id)
-    global_config = _read_system_mcp_config()
+    global_config = _get_global_mcp_config_with_builtins()
     if server_name not in global_config.get("mcpServers", {}):
         raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
     agent_servers = _read_agent_mcp_servers(agent_id)
@@ -1186,12 +1195,11 @@ def _write_system_mcp_config(config: dict) -> None:
     SYSTEM_MCP_CONFIG_PATH.write_text(json.dumps(config, indent=2))
 
 
-@router.get("/mcp")
-async def get_system_mcp_config():
+def _get_global_mcp_config_with_builtins() -> dict:
+    """Read system MCP config and inject builtin servers when integrations are configured."""
     config = _read_system_mcp_config()
     servers = config.get("mcpServers", {})
 
-    # Inject builtin MCP servers when their integrations are configured
     slack_config = _read_slack_config()
     if slack_config and "slack" not in servers:
         servers["slack"] = {"builtin": True}
@@ -1206,6 +1214,11 @@ async def get_system_mcp_config():
 
     config["mcpServers"] = servers
     return config
+
+
+@router.get("/mcp")
+async def get_system_mcp_config():
+    return _get_global_mcp_config_with_builtins()
 
 
 @router.put("/mcp")

@@ -55,6 +55,7 @@ const IDENTITY_FILES = [
 interface McpServer {
   name: string
   enabled?: boolean
+  builtin?: boolean
   transport?: "stdio" | "http"
   command?: string
   args?: string[]
@@ -90,7 +91,9 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
     const res = await fetch(`/api/agents/${agentId}/mcp`)
     if (res.ok) {
       const data = await res.json()
-      const srvList: McpServer[] = data.servers || []
+      const srvList: McpServer[] = (data.servers || []).sort(
+        (a: McpServer, b: McpServer) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0),
+      )
       setServers(srvList)
       const statuses: Record<string, boolean> = {}
       await Promise.all(
@@ -167,6 +170,7 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
 
   const filtered = available
     .filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0))
     .slice(0, 5)
 
   return (
@@ -224,6 +228,11 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
                         <div className="flex flex-1 flex-col gap-0.5">
                           <McpServerLabel srv={srv} />
                         </div>
+                        {srv.builtin && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            BUILTIN
+                          </span>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -278,13 +287,19 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
                         </span>
                       )}
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => handleRemove(srv.name)}
-                    >
-                      <X className="size-3.5" />
-                    </Button>
+                    {srv.builtin ? (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        BUILTIN
+                      </span>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => handleRemove(srv.name)}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>
