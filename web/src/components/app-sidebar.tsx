@@ -4,14 +4,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { useTheme } from "@/components/theme-provider"
 import {
@@ -34,11 +26,13 @@ import type { Agent } from "@/lib/types"
 import {
   Bot,
   Calendar,
+  Check,
   ChevronRight,
   GitBranch,
   Hash,
   MessageSquare,
   Moon,
+  Plus,
   Server,
   Settings,
   Sparkles,
@@ -95,26 +89,35 @@ export function AppSidebar({
         </SidebarMenu>
 
         <SidebarGroupLabel className="uppercase tracking-wider">Agents</SidebarGroupLabel>
-        <div className="px-1 group-data-[collapsible=icon]:hidden">
-          <Select
-            value={selectedAgentId ?? undefined}
-            onValueChange={onAgentChange}
-          >
-            <SelectTrigger className="w-full bg-primary text-primary-foreground hover:bg-primary/90 border-0 text-xs font-medium [&_svg]:text-primary-foreground">
-              <SelectValue placeholder="" />
-            </SelectTrigger>
-            <SelectContent>
-              {agents.map((agent) => (
-                <SelectItem key={agent.id} value={agent.id}>
-                  {agent.icon && <AgentIcon name={agent.icon} className="mr-1.5 inline size-3.5" />}
-                  {agent.name}
-                </SelectItem>
-              ))}
-              <SelectSeparator />
-              <SelectItem value="__create__">+ Add Agent</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <SidebarMenu>
+          {agents.map((agent) => (
+            <SidebarMenuItem key={agent.id}>
+              <SidebarMenuButton
+                onClick={() => onAgentChange(agent.id)}
+                tooltip={agent.name}
+              >
+                {agent.icon ? (
+                  <AgentIcon name={agent.icon} className="size-4" />
+                ) : (
+                  <Bot className="size-4" />
+                )}
+                <span>{agent.name}</span>
+                {selectedAgentId === agent.id && (
+                  <Check className="ml-auto size-3.5" />
+                )}
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={() => onAgentChange("__create__")}
+              tooltip="Add Agent"
+            >
+              <Plus className="size-4" />
+              <span>Add Agent</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarHeader>
 
       <SidebarContent>
