@@ -243,11 +243,24 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         return
 
     content = msg.get("content", "")
+    attachments: list[str] = msg.get("attachments", [])
     session_id_from_msg = msg.get("session_id", "")
     _orch_session_id = session_id_from_msg or _orch_session_id
     sys.stderr.write(f"worker: query message_id={message_id} content={content!r}\n")
+    if attachments:
+        sys.stderr.write(f"worker: attachments={attachments}\n")
     sys.stderr.flush()
     emit({"type": "status", "status": "thinking", "message_id": message_id})
+
+    # Prepend attachment references so the SDK's Read tool can access them
+    if attachments:
+        file_lines = "\n".join(
+            f"- /workspace/{path}" for path in attachments
+        )
+        content = (
+            f"The user attached the following files. Use the Read tool to view them:\n"
+            f"{file_lines}\n\n{content}"
+        )
 
     # Retrieve relevant past context via hybrid search (memory summaries)
     retrieved_context = None

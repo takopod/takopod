@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { ChatMessage, ToolCallInfo } from "@/lib/types"
-import { ChevronDown, ChevronRight, Clock, Terminal } from "lucide-react"
+import { ChevronDown, ChevronRight, Clock, FileIcon, ImageIcon, Terminal } from "lucide-react"
 
 function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   const [open, setOpen] = useState(false)
@@ -55,6 +55,33 @@ function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function isImageFile(path: string) {
+  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path)
+}
+
+function AttachmentChips({ paths }: { paths: string[] }) {
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {paths.map((p) => {
+        const name = p.split("/").pop() ?? p
+        return (
+          <span
+            key={p}
+            className="inline-flex items-center gap-1 rounded border bg-primary-foreground/10 px-1.5 py-0.5 text-[11px] text-primary-foreground/80"
+          >
+            {isImageFile(name) ? (
+              <ImageIcon className="size-3" />
+            ) : (
+              <FileIcon className="size-3" />
+            )}
+            <span className="max-w-[100px] truncate">{name}</span>
+          </span>
+        )
+      })}
     </div>
   )
 }
@@ -142,6 +169,9 @@ export function ChatMessageList({
                 </div>
               ) : (
                 <span className="whitespace-pre-wrap">{msg.content}</span>
+              )}
+              {msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
+                <AttachmentChips paths={msg.attachments} />
               )}
               </div>
             </div>

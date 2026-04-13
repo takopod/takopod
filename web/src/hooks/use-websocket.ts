@@ -44,6 +44,9 @@ function parseMessage(m: ApiMessage): ChatMessage {
       if (meta.source === "scheduled_task") {
         msg.source = "scheduled_task"
       }
+      if (Array.isArray(meta.attachments) && meta.attachments.length > 0) {
+        msg.attachments = meta.attachments
+      }
     } catch {
       // metadata is not valid JSON — ignore
     }
@@ -203,7 +206,7 @@ export function useWebSocket(agentId: string | null) {
     }
   }, [agentId, connect])
 
-  const sendMessage = useCallback((content: string) => {
+  const sendMessage = useCallback((content: string, attachments?: string[]) => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
 
@@ -217,10 +220,13 @@ export function useWebSocket(agentId: string | null) {
       content,
       message_id: messageId,
     }
+    if (attachments?.length) {
+      frame.attachments = attachments
+    }
 
     setMessages((prev) => [
       ...prev,
-      { id: messageId, role: "user", content, timestamp: Date.now() },
+      { id: messageId, role: "user", content, timestamp: Date.now(), attachments },
     ])
 
     ws.send(JSON.stringify(frame))

@@ -396,6 +396,55 @@ async def delete_agent(agent_id: str, delete_work_dir: bool = False):
 
 IDENTITY_FILES = {"CLAUDE.md", "SOUL.md", "MEMORY.md"}
 
+# Max upload size: 20 MB per file, 10 files per message
+UPLOAD_MAX_FILE_SIZE = 20 * 1024 * 1024
+UPLOAD_MAX_FILES = 10
+
+
+@router.post("/agents/{agent_id}/uploads")
+async def upload_attachments(agent_id: str, files: list[UploadFile]):
+    """Upload files to agent workspace for use as message attachments.
+
+    Returns list of relative paths within the workspace.
+    """
+    host_dir, _ = await _resolve_agent_path(agent_id)
+
+    if len(files) > UPLOAD_MAX_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many files (max {UPLOAD_MAX_FILES})",
+        )
+
+    # Group uploads under a unique directory to avoid collisions
+    upload_id = str(uuid.uuid4())[:8]
+    upload_dir = host_dir / "uploads" / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    uploaded: list[str] = []
+    for f in files:
+        if not f.filename:
+            continue
+        # Sanitize filename: take only the basename, reject traversal
+        safe_name = Path(f.filename).name
+        if not safe_name or safe_name in (".", ".."):
+            continue
+
+        data = await f.read()
+        if len(data) > UPLOAD_MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{safe_name}' exceeds {UPLOAD_MAX_FILE_SIZE // (1024*1024)}MB limit",
+            )
+
+        dest = upload_dir / safe_name
+        dest.write_bytes(data)
+
+        # Return path relative to workspace root (= /workspace inside container)
+        rel_path = str(dest.relative_to(host_dir))
+        uploaded.append(rel_path)
+
+    return {"upload_id": upload_id, "paths": uploaded}
+
 
 async def _resolve_agent_path(
     agent_id: str, rel_path: str = "",
@@ -1722,12 +1771,13 @@ def _check_rate_limit(agent_id: str) -> float | None:
 
 async def _store_message(agent_id: str, frame: UserMessageFrame) -> None:
     db = await get_db()
+    metadata = json.dumps({"attachments": frame.attachments}) if frame.attachments else None
     await db.execute(
-        "INSERT INTO messages (id, agent_id, role, content) VALUES (?, ?, ?, ?)",
-        (frame.message_id, agent_id, "user", frame.content),
+        "INSERT INTO messages (id, agent_id, role, content, metadata) VALUES (?, ?, ?, ?, ?)",
+        (frame.message_id, agent_id, "user", frame.content, metadata),
     )
     await db.commit()
-    await queue_message(agent_id, frame.message_id, frame.content)
+    await queue_message(agent_id, frame.message_id, frame.content, attachments=frame.attachments)
 
 
 async def _send_queue_status(ws: WebSocket, agent_id: str) -> None:

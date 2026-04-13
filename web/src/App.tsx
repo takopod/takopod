@@ -238,7 +238,7 @@ export function App() {
                         {agents.find((a) => a.id === selectedAgentId)?.name ?? "Agent"} is typing...
                       </div>
                     )}
-                    <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} />
+                    <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} />
                   </>
                 )
               }

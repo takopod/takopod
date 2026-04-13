@@ -2,6 +2,7 @@ export interface UserMessageFrame {
   type: "user_message"
   content: string
   message_id: string
+  attachments?: string[]  // relative workspace paths from upload endpoint
 }
 
 export interface QueueStatusFrame {
@@ -61,6 +62,7 @@ export interface ChatMessage {
   toolCalls?: ToolCallInfo[]
   blocks?: ContentBlock[]
   source?: "user" | "scheduled_task"
+  attachments?: string[]
 }
 
 export interface FileEntry {
