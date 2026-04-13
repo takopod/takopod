@@ -20,13 +20,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { FileBrowser } from "@/components/file-browser"
 import { FileEditor } from "@/components/file-editor"
 import { SkillsPanel } from "@/components/skills-panel"
 import type { Agent } from "@/lib/types"
+import { Input } from "@/components/ui/input"
 import {
   ArrowLeft,
   ChevronRight,
@@ -35,10 +33,10 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Search,
   Server,
   Settings,
   Sparkles,
-  Square,
   Trash2,
   X,
 } from "lucide-react"
@@ -54,99 +52,106 @@ const IDENTITY_FILES = [
   { file: "MEMORY.md", description: "Persistent memory store" },
 ]
 
-interface McpServerConfig {
-  command: string
-  args: string[]
-  env?: Record<string, string>
+interface McpServer {
+  name: string
+  enabled?: boolean
+  transport?: "stdio" | "http"
+  command?: string
+  args?: string[]
+  url?: string
+  auth?: "none" | "basic" | "oauth"
 }
 
-interface McpConfig {
-  mcpServers: Record<string, McpServerConfig>
+function McpServerLabel({ srv }: { srv: McpServer }) {
+  return (
+    <>
+      <span className="text-sm font-medium">{srv.name}</span>
+      <code className="text-xs text-muted-foreground">
+        {srv.transport === "http"
+          ? `HTTP: ${srv.url}`
+          : `${srv.command || ""} ${(srv.args || []).join(" ")}`}
+      </code>
+    </>
+  )
 }
 
 function McpConfigPanel({ agentId }: { agentId: string }) {
   const navigate = useNavigate()
-  const [config, setConfig] = useState<McpConfig>({ mcpServers: {} })
+  const [servers, setServers] = useState<McpServer[]>([])
+  const [available, setAvailable] = useState<McpServer[]>([])
+  const [availableLoaded, setAvailableLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [showAdd, setShowAdd] = useState(false)
-  const [newName, setNewName] = useState("")
-  const [newCommand, setNewCommand] = useState("")
-  const [newArgs, setNewArgs] = useState("")
-  const [newEnvVars, setNewEnvVars] = useState("")
-  const [saving, setSaving] = useState(false)
-  const [stopping, setStopping] = useState(false)
-  const [editing, setEditing] = useState<string | null>(null)
-  const [editCommand, setEditCommand] = useState("")
-  const [editArgs, setEditArgs] = useState("")
-  const [editEnvVars, setEditEnvVars] = useState("")
+  const [toggling, setToggling] = useState<string | null>(null)
+  const [search, setSearch] = useState("")
+  const [searchFocused, setSearchFocused] = useState(false)
+  const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
 
-  const handleStop = async () => {
-    setStopping(true)
-    try {
-      const res = await fetch("/api/containers")
-      if (res.ok) {
-        const containers = await res.json()
-        const active = containers.find(
-          (c: { agent_id: string; status: string }) =>
-            c.agent_id === agentId &&
-            ["running", "idle", "starting"].includes(c.status),
-        )
-        if (active) {
-          await fetch(`/api/containers/${active.id}`, { method: "DELETE" })
-        }
-      }
-    } finally {
-      setStopping(false)
-    }
-  }
-
-  const fetchConfig = useCallback(async () => {
+  const fetchServers = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/mcp`)
     if (res.ok) {
-      setConfig(await res.json())
+      const data = await res.json()
+      const srvList: McpServer[] = data.servers || []
+      setServers(srvList)
+      const statuses: Record<string, boolean> = {}
+      await Promise.all(
+        srvList
+          .filter((s) => s.auth === "oauth")
+          .map(async (s) => {
+            try {
+              const r = await fetch(`/oauth/status/${s.name}`)
+              if (r.ok) {
+                const st = await r.json()
+                statuses[s.name] = st.authorized
+              }
+            } catch {
+              // ignore
+            }
+          }),
+      )
+      setOauthStatus(statuses)
     }
     setLoading(false)
   }, [agentId])
 
-  useEffect(() => {
-    fetchConfig()
-  }, [fetchConfig])
+  const fetchAvailable = useCallback(async () => {
+    if (availableLoaded) return
+    const res = await fetch(`/api/agents/${agentId}/mcp`)
+    if (res.ok) {
+      const data = await res.json()
+      setAvailable(data.available || [])
+    }
+    setAvailableLoaded(true)
+  }, [agentId, availableLoaded])
 
-  const handleAdd = async () => {
-    if (!newName.trim() || !newCommand.trim()) return
-    setSaving(true)
-    const args = newArgs.trim()
-      ? newArgs.split("\n").map((a) => a.trim()).filter(Boolean)
-      : []
-    const env: Record<string, string> = {}
-    for (const line of newEnvVars.split("\n")) {
-      const eq = line.indexOf("=")
-      if (eq > 0) {
-        env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
-      }
-    }
-    const server: McpServerConfig = { command: newCommand.trim(), args }
-    if (Object.keys(env).length > 0) server.env = env
-    const updated: McpConfig = {
-      mcpServers: {
-        ...config.mcpServers,
-        [newName.trim()]: server,
-      },
-    }
-    const res = await fetch(`/api/agents/${agentId}/mcp`, {
+  useEffect(() => {
+    fetchServers()
+  }, [fetchServers])
+
+  const handleToggle = async (name: string, enabled: boolean) => {
+    setToggling(name)
+    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${name}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updated),
+      body: JSON.stringify({ enabled }),
     })
     if (res.ok) {
-      setConfig(await res.json())
-      setShowAdd(false)
-      setNewName("")
-      setNewCommand("")
-      setNewArgs("")
-      setNewEnvVars("")
+      setServers((prev) =>
+        prev.map((s) => (s.name === name ? { ...s, enabled } : s)),
+      )
     }
-    setSaving(false)
+    setToggling(null)
+  }
+
+  const handleAdd = async (name: string) => {
+    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${name}`, {
+      method: "POST",
+    })
+    if (res.ok) {
+      setSearch("")
+      setAvailableLoaded(false)
+      setAvailable([])
+      await fetchServers()
+    }
   }
 
   const handleRemove = async (name: string) => {
@@ -154,60 +159,15 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
       method: "DELETE",
     })
     if (res.ok) {
-      setConfig((prev) => {
-        const { [name]: _, ...rest } = prev.mcpServers
-        return { mcpServers: rest }
-      })
+      setAvailableLoaded(false)
+      setAvailable([])
+      await fetchServers()
     }
   }
 
-  const startEdit = (name: string, srv: McpServerConfig) => {
-    setEditing(name)
-    setEditCommand(srv.command)
-    setEditArgs(srv.args.join("\n"))
-    setEditEnvVars(
-      srv.env
-        ? Object.entries(srv.env)
-            .map(([k, v]) => `${k}=${v}`)
-            .join("\n")
-        : "",
-    )
-  }
-
-  const handleSaveEdit = async () => {
-    if (!editing || !editCommand.trim()) return
-    setSaving(true)
-    const args = editArgs.trim()
-      ? editArgs.split("\n").map((a) => a.trim()).filter(Boolean)
-      : []
-    const env: Record<string, string> = {}
-    for (const line of editEnvVars.split("\n")) {
-      const eq = line.indexOf("=")
-      if (eq > 0) {
-        env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
-      }
-    }
-    const server: McpServerConfig = { command: editCommand.trim(), args }
-    if (Object.keys(env).length > 0) server.env = env
-    const updated: McpConfig = {
-      mcpServers: {
-        ...config.mcpServers,
-        [editing]: server,
-      },
-    }
-    const res = await fetch(`/api/agents/${agentId}/mcp`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updated),
-    })
-    if (res.ok) {
-      setConfig(await res.json())
-      setEditing(null)
-    }
-    setSaving(false)
-  }
-
-  const servers = Object.entries(config.mcpServers)
+  const filtered = available
+    .filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
+    .slice(0, 5)
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -220,218 +180,119 @@ function McpConfigPanel({ agentId }: { agentId: string }) {
           <ArrowLeft className="size-4" />
         </Button>
         <span className="text-sm font-medium">MCP Servers</span>
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleStop}
-            disabled={stopping}
-          >
-            <Square className="mr-1.5 size-3 fill-current" />
-            {stopping ? "Stopping..." : "Stop Worker"}
-          </Button>
-          <Button size="sm" onClick={() => setShowAdd(true)} disabled={showAdd}>
-            <Plus className="mr-1.5 size-3.5" />
-            Add Server
-          </Button>
-        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : (
-          <div className="flex flex-col gap-3">
-            {servers.length === 0 && !showAdd && (
+          <div className="flex flex-col gap-4">
+            {/* Search & add section */}
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onFocus={() => {
+                  setSearchFocused(true)
+                  fetchAvailable()
+                }}
+                onBlur={() => {
+                  setTimeout(() => setSearchFocused(false), 150)
+                }}
+                placeholder="Search available MCP servers..."
+                className="pl-8"
+              />
+              {searchFocused && availableLoaded && (
+                <div className="absolute left-0 right-0 top-full z-50 mt-1 flex flex-col rounded-md border bg-popover shadow-md">
+                  {filtered.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">
+                      {available.length === 0
+                        ? <>No servers available. Configure them in the global{" "}
+                            <Link to="/mcp" className="underline">MCP Servers</Link>{" "}
+                            settings.</>
+                        : "No matching servers."}
+                    </p>
+                  ) : (
+                    filtered.map((srv, i) => (
+                      <div
+                        key={srv.name}
+                        className={`flex items-center gap-3 px-3 py-2 ${
+                          i > 0 ? "border-t" : ""
+                        }`}
+                      >
+                        <div className="flex flex-1 flex-col gap-0.5">
+                          <McpServerLabel srv={srv} />
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => handleAdd(srv.name)}
+                        >
+                          <Plus className="size-3.5" />
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Added servers */}
+            {servers.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No MCP servers configured. Add one to extend this agent's capabilities.
+                No MCP servers added to this agent yet.
               </p>
-            )}
-
-            {servers.map(([name, srv]) =>
-              editing === name ? (
-                <div key={name} className="rounded-md border p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="text-sm font-medium">{name}</span>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => setEditing(null)}
-                    >
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="flex flex-col gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">Command</Label>
-                      <Input
-                        value={editCommand}
-                        onChange={(e) => setEditCommand(e.target.value)}
-                        autoFocus
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">Arguments (one per line)</Label>
-                      <Textarea
-                        value={editArgs}
-                        onChange={(e) => setEditArgs(e.target.value)}
-                        className="min-h-20 resize-none font-mono text-xs"
-                        spellCheck={false}
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">
-                        Environment Variables (KEY=VALUE, one per line)
-                      </Label>
-                      <Textarea
-                        value={editEnvVars}
-                        onChange={(e) => setEditEnvVars(e.target.value)}
-                        placeholder={"GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."}
-                        className="min-h-16 resize-none font-mono text-xs"
-                        spellCheck={false}
-                      />
-                    </div>
-                    <div className="flex justify-end gap-2 pt-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setEditing(null)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={handleSaveEdit}
-                        disabled={!editCommand.trim() || saving}
-                      >
-                        {saving ? "Saving..." : "Save"}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div
-                  key={name}
-                  className="flex items-start justify-between rounded-md border px-4 py-3"
-                >
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm font-medium">{name}</span>
-                    <code className="text-xs text-muted-foreground">
-                      {srv.command} {srv.args.join(" ")}
-                    </code>
-                    {srv.env && Object.keys(srv.env).length > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        env: {Object.keys(srv.env).join(", ")}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => startEdit(name, srv)}
-                    >
-                      <Pencil className="size-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => handleRemove(name)}
-                    >
-                      <Trash2 className="size-3.5 text-destructive" />
-                    </Button>
-                  </div>
-                </div>
-              ),
-            )}
-
-            {showAdd && (
-              <div className="rounded-md border p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <span className="text-sm font-medium">Add MCP Server</span>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => setShowAdd(false)}
+            ) : (
+              <div className="flex flex-col gap-3">
+                {servers.map((srv) => (
+                  <div
+                    key={srv.name}
+                    className="flex items-center gap-3 rounded-md border px-4 py-2.5"
                   >
-                    <X className="size-4" />
-                  </Button>
-                </div>
-                <div className="flex flex-col gap-3">
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="mcp-name" className="text-xs">
-                      Server Name
-                    </Label>
-                    <Input
-                      id="mcp-name"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                      placeholder="e.g. github"
-                      autoFocus
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="mcp-command" className="text-xs">
-                      Command
-                    </Label>
-                    <Input
-                      id="mcp-command"
-                      value={newCommand}
-                      onChange={(e) => setNewCommand(e.target.value)}
-                      placeholder="e.g. npx or uvx"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="mcp-args" className="text-xs">
-                      Arguments (one per line)
-                    </Label>
-                    <Textarea
-                      id="mcp-args"
-                      value={newArgs}
-                      onChange={(e) => setNewArgs(e.target.value)}
-                      placeholder={"-y\n@modelcontextprotocol/server-github"}
-                      className="min-h-20 resize-none font-mono text-xs"
-                      spellCheck={false}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="mcp-env" className="text-xs">
-                      Environment Variables (KEY=VALUE, one per line)
-                    </Label>
-                    <Textarea
-                      id="mcp-env"
-                      value={newEnvVars}
-                      onChange={(e) => setNewEnvVars(e.target.value)}
-                      placeholder={"GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."}
-                      className="min-h-16 resize-none font-mono text-xs"
-                      spellCheck={false}
-                    />
-                  </div>
-                  <div className="flex justify-end gap-2 pt-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowAdd(false)}
+                    <button
+                      type="button"
+                      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        srv.enabled ? "bg-primary" : "bg-input"
+                      } ${toggling === srv.name ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                      disabled={toggling === srv.name}
+                      onClick={() => handleToggle(srv.name, !srv.enabled)}
                     >
-                      Cancel
-                    </Button>
+                      <span
+                        className={`pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
+                          srv.enabled ? "translate-x-4" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                    <div className="flex flex-1 flex-col gap-0.5">
+                      <McpServerLabel srv={srv} />
+                      {srv.auth === "oauth" && (
+                        <span
+                          className={`text-xs ${oauthStatus[srv.name] ? "text-green-500" : "text-yellow-500"}`}
+                        >
+                          {oauthStatus[srv.name]
+                            ? "Authorized"
+                            : "Not authorized"}
+                        </span>
+                      )}
+                    </div>
                     <Button
-                      size="sm"
-                      onClick={handleAdd}
-                      disabled={!newName.trim() || !newCommand.trim() || saving}
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleRemove(srv.name)}
                     >
-                      {saving ? "Adding..." : "Add"}
+                      <X className="size-3.5" />
                     </Button>
                   </div>
-                </div>
+                ))}
               </div>
             )}
 
-            {servers.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Changes take effect after stopping and restarting the worker.
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground">
+              Changes take effect after stopping and restarting the worker.
+            </p>
           </div>
         )}
       </div>

@@ -17,6 +17,7 @@ from orchestrator.boot_recovery import boot_recovery
 from orchestrator.container_manager import build_image, ensure_network
 from orchestrator.db import connect, disconnect, run_migrations
 from orchestrator.ollama import check_ollama_status
+from orchestrator.oauth_routes import router as oauth_router
 from orchestrator.routes import router
 from orchestrator.scheduler import run_scheduler
 from orchestrator.settings import get_setting
@@ -61,6 +62,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="rhclaw", lifespan=lifespan)
 app.include_router(router)
+app.include_router(oauth_router)
 
 @app.get("/api/health")
 async def health():

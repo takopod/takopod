@@ -9,15 +9,42 @@ receives tool schemas and routes calls through file-based IPC.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import os
 from typing import Any
 
+import httpx
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamable_http_client
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TOOL_TIMEOUT = 30.0  # seconds
+
+
+def _build_http_headers(config: dict[str, Any]) -> dict[str, str]:
+    """Build HTTP headers from MCP server config, including auth."""
+    headers: dict[str, str] = {}
+    auth = config.get("auth", "none")
+    env = config.get("env", {})
+
+    if auth == "basic":
+        username = env.get("MCP_USERNAME", "")
+        token = env.get("MCP_API_TOKEN", "")
+        if username and token:
+            credentials = base64.b64encode(
+                f"{username}:{token}".encode(),
+            ).decode()
+            headers["Authorization"] = f"Basic {credentials}"
+        else:
+            logger.warning(
+                "Basic auth configured but MCP_USERNAME or MCP_API_TOKEN "
+                "missing from env",
+            )
+
+    return headers
 
 
 class _ServerConnection:
@@ -52,15 +79,32 @@ class _ServerConnection:
         if self._start_error is not None:
             raise self._start_error
 
+    async def start_http(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._task = asyncio.create_task(
+            self._run_http(url, headers, http_client),
+            name=f"mcp-server-{self.name}",
+        )
+        await self._ready_event.wait()
+        if self._start_error is not None:
+            raise self._start_error
+
     async def _run(
         self,
         command: str,
         args: list[str],
         env: dict[str, str] | None,
     ) -> None:
-        """Background task that owns the MCP context managers."""
+        """Background task that owns the stdio MCP context managers."""
+        # Merge user-provided env with parent environment so the
+        # subprocess retains PATH, HOME, etc. needed to run commands.
+        merged_env = {**os.environ, **(env or {})}
         params = StdioServerParameters(
-            command=command, args=args, env=env,
+            command=command, args=args, env=merged_env,
         )
         try:
             async with stdio_client(params) as (read_stream, write_stream):
@@ -73,6 +117,40 @@ class _ServerConnection:
                     )
                     self._ready_event.set()
                     await self._shutdown_event.wait()
+        except Exception as exc:
+            self._start_error = exc
+            self._ready_event.set()
+        finally:
+            self.session = None
+
+    async def _run_http(
+        self,
+        url: str,
+        headers: dict[str, str] | None,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        """Background task that owns the HTTP MCP context managers."""
+        if http_client is None:
+            http_client = httpx.AsyncClient(
+                headers=headers or {},
+                timeout=httpx.Timeout(30.0, read=300.0),
+            )
+        try:
+            async with http_client:
+                async with streamable_http_client(
+                    url, http_client=http_client,
+                ) as (read_stream, write_stream, _get_session_id):
+                    async with ClientSession(
+                        read_stream, write_stream,
+                    ) as session:
+                        await session.initialize()
+                        self.session = session
+                        logger.info(
+                            "MCP server '%s' initialized (url=%s)",
+                            self.name, url,
+                        )
+                        self._ready_event.set()
+                        await self._shutdown_event.wait()
         except Exception as exc:
             self._start_error = exc
             self._ready_event.set()
@@ -116,18 +194,40 @@ class McpServerManager:
         """
         servers = mcp_config.get("mcpServers", {})
         for name, config in servers.items():
-            command = config.get("command", "")
-            if not command:
-                logger.warning("MCP server '%s' has no command, skipping", name)
-                continue
-
-            args = config.get("args", [])
-            env = config.get("env") or None
+            transport = config.get("transport", "stdio")
             timeout = float(config.get("timeout", DEFAULT_TOOL_TIMEOUT))
 
             conn = _ServerConnection(name, timeout=timeout)
             try:
-                await conn.start(command, args, env)
+                if transport == "http":
+                    url = config.get("url", "")
+                    if not url:
+                        logger.warning(
+                            "MCP server '%s' has no url, skipping", name,
+                        )
+                        continue
+                    auth = config.get("auth", "none")
+                    if auth == "oauth":
+                        from orchestrator.oauth import get_oauth_provider
+                        provider = get_oauth_provider(name, url)
+                        client = httpx.AsyncClient(
+                            auth=provider,
+                            timeout=httpx.Timeout(30.0, read=300.0),
+                        )
+                        await conn.start_http(url, http_client=client)
+                    else:
+                        headers = _build_http_headers(config)
+                        await conn.start_http(url, headers)
+                else:
+                    command = config.get("command", "")
+                    if not command:
+                        logger.warning(
+                            "MCP server '%s' has no command, skipping", name,
+                        )
+                        continue
+                    args = config.get("args", [])
+                    env = config.get("env") or None
+                    await conn.start(command, args, env)
             except Exception:
                 logger.exception("Failed to start MCP server '%s'", name)
                 await conn.close()

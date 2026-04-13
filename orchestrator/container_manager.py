@@ -66,7 +66,6 @@ def create_agent_workspace(
     agent_id: str,
     agent_type: str,
     agent_name: str | None = None,
-    mcp_config: dict | None = None,
 ) -> Path:
     slug = slugify(agent_name) if agent_name else agent_id
     host_dir = (AGENTS_DIR / slug).resolve()
@@ -102,31 +101,8 @@ def create_agent_workspace(
         dest_skills.mkdir(parents=True, exist_ok=True)
         shutil.copytree(template_skills, dest_skills, dirs_exist_ok=True)
 
-    # MCP server configuration (stored outside workspace so containers can't read secrets)
-    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
-    MCP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
-    if mcp_config:
-        mcp_path.write_text(json.dumps(mcp_config, indent=2))
-    elif (template_dir / ".mcp.json").is_file():
-        shutil.copy2(template_dir / ".mcp.json", mcp_path)
-
-    # Merge system-level MCP defaults into agent config
-    system_mcp_path = Path("data/mcp-defaults.json")
-    if system_mcp_path.is_file():
-        try:
-            system_defaults = json.loads(system_mcp_path.read_text())
-            system_servers = system_defaults.get("mcpServers", {})
-            if system_servers:
-                existing = {}
-                if mcp_path.is_file():
-                    existing = json.loads(mcp_path.read_text())
-                existing.setdefault("mcpServers", {})
-                # System defaults are applied first; template/explicit config overrides
-                merged = {**system_servers, **existing["mcpServers"]}
-                existing["mcpServers"] = merged
-                mcp_path.write_text(json.dumps(existing, indent=2))
-        except (json.JSONDecodeError, OSError):
-            pass
+    # MCP servers are now configured globally and toggled per-agent.
+    # No per-agent MCP config file is created at workspace setup.
 
     return host_dir
 

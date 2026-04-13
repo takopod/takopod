@@ -8,8 +8,11 @@ import { Separator } from "@/components/ui/separator"
 import { Info, Pencil, Plus, Trash2, X } from "lucide-react"
 
 interface McpServerConfig {
-  command: string
-  args: string[]
+  transport?: "stdio" | "http"
+  command?: string
+  args?: string[]
+  url?: string
+  auth?: "none" | "basic" | "oauth"
   env?: Record<string, string>
 }
 
@@ -22,19 +25,47 @@ export function SystemMcpView() {
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [newName, setNewName] = useState("")
+  const [newTransport, setNewTransport] = useState<"stdio" | "http">("stdio")
   const [newCommand, setNewCommand] = useState("")
   const [newArgs, setNewArgs] = useState("")
+  const [newUrl, setNewUrl] = useState("")
+  const [newAuth, setNewAuth] = useState<"none" | "basic" | "oauth">("none")
   const [newEnvVars, setNewEnvVars] = useState("")
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
+  const [editTransport, setEditTransport] = useState<"stdio" | "http">("stdio")
   const [editCommand, setEditCommand] = useState("")
   const [editArgs, setEditArgs] = useState("")
+  const [editUrl, setEditUrl] = useState("")
+  const [editAuth, setEditAuth] = useState<"none" | "basic" | "oauth">("none")
   const [editEnvVars, setEditEnvVars] = useState("")
+  const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
+  const [authorizing, setAuthorizing] = useState<string | null>(null)
 
   const fetchConfig = useCallback(async () => {
     const res = await fetch("/api/mcp")
     if (res.ok) {
-      setConfig(await res.json())
+      const data = await res.json()
+      setConfig(data)
+      // Fetch OAuth status for all oauth-configured servers
+      const oauthServers = Object.entries(
+        data.mcpServers as Record<string, McpServerConfig>,
+      ).filter(([, srv]) => srv.auth === "oauth")
+      const statuses: Record<string, boolean> = {}
+      await Promise.all(
+        oauthServers.map(async ([name]) => {
+          try {
+            const r = await fetch(`/oauth/status/${name}`)
+            if (r.ok) {
+              const s = await r.json()
+              statuses[name] = s.authorized
+            }
+          } catch {
+            // ignore
+          }
+        }),
+      )
+      setOauthStatus(statuses)
     }
     setLoading(false)
   }, [])
@@ -43,15 +74,37 @@ export function SystemMcpView() {
     fetchConfig()
   }, [fetchConfig])
 
+  const handleAuthorize = async (name: string) => {
+    setAuthorizing(name)
+    try {
+      const res = await fetch(`/oauth/start/${name}`)
+      if (res.ok) {
+        const data = await res.json()
+        window.open(data.authorize_url, "_blank")
+        // Poll for completion
+        for (let i = 0; i < 60; i++) {
+          await new Promise((r) => setTimeout(r, 2000))
+          const statusRes = await fetch(`/oauth/status/${name}`)
+          if (statusRes.ok) {
+            const status = await statusRes.json()
+            if (status.authorized) {
+              setOauthStatus((prev) => ({ ...prev, [name]: true }))
+              break
+            }
+          }
+        }
+      }
+    } finally {
+      setAuthorizing(null)
+    }
+  }
+
   const handleAdd = async () => {
-    if (!newName.trim() || !newCommand.trim()) return
+    if (!newName.trim()) return
+    if (newTransport === "stdio" && !newCommand.trim()) return
+    if (newTransport === "http" && !newUrl.trim()) return
+
     setSaving(true)
-    const args = newArgs.trim()
-      ? newArgs
-          .split("\n")
-          .map((a) => a.trim())
-          .filter(Boolean)
-      : []
     const env: Record<string, string> = {}
     for (const line of newEnvVars.split("\n")) {
       const eq = line.indexOf("=")
@@ -59,8 +112,18 @@ export function SystemMcpView() {
         env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
       }
     }
-    const server: McpServerConfig = { command: newCommand.trim(), args }
+
+    let server: McpServerConfig
+    if (newTransport === "http") {
+      server = { transport: "http", url: newUrl.trim(), auth: newAuth }
+    } else {
+      const args = newArgs.trim()
+        ? newArgs.split("\n").map((a) => a.trim()).filter(Boolean)
+        : []
+      server = { transport: "stdio", command: newCommand.trim(), args }
+    }
     if (Object.keys(env).length > 0) server.env = env
+
     const updated: McpConfig = {
       mcpServers: {
         ...config.mcpServers,
@@ -76,8 +139,11 @@ export function SystemMcpView() {
       setConfig(await res.json())
       setShowAdd(false)
       setNewName("")
+      setNewTransport("stdio")
       setNewCommand("")
       setNewArgs("")
+      setNewUrl("")
+      setNewAuth("none")
       setNewEnvVars("")
     }
     setSaving(false)
@@ -98,8 +164,11 @@ export function SystemMcpView() {
 
   const startEdit = (name: string, srv: McpServerConfig) => {
     setEditing(name)
-    setEditCommand(srv.command)
-    setEditArgs(srv.args.join("\n"))
+    setEditTransport(srv.transport || "stdio")
+    setEditCommand(srv.command || "")
+    setEditArgs((srv.args || []).join("\n"))
+    setEditUrl(srv.url || "")
+    setEditAuth(srv.auth || "none")
     setEditEnvVars(
       srv.env
         ? Object.entries(srv.env)
@@ -110,14 +179,11 @@ export function SystemMcpView() {
   }
 
   const handleSaveEdit = async () => {
-    if (!editing || !editCommand.trim()) return
+    if (!editing) return
+    if (editTransport === "stdio" && !editCommand.trim()) return
+    if (editTransport === "http" && !editUrl.trim()) return
+
     setSaving(true)
-    const args = editArgs.trim()
-      ? editArgs
-          .split("\n")
-          .map((a) => a.trim())
-          .filter(Boolean)
-      : []
     const env: Record<string, string> = {}
     for (const line of editEnvVars.split("\n")) {
       const eq = line.indexOf("=")
@@ -125,8 +191,18 @@ export function SystemMcpView() {
         env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
       }
     }
-    const server: McpServerConfig = { command: editCommand.trim(), args }
+
+    let server: McpServerConfig
+    if (editTransport === "http") {
+      server = { transport: "http", url: editUrl.trim(), auth: editAuth }
+    } else {
+      const args = editArgs.trim()
+        ? editArgs.split("\n").map((a) => a.trim()).filter(Boolean)
+        : []
+      server = { transport: "stdio", command: editCommand.trim(), args }
+    }
     if (Object.keys(env).length > 0) server.env = env
+
     const updated: McpConfig = {
       mcpServers: {
         ...config.mcpServers,
@@ -197,36 +273,93 @@ export function SystemMcpView() {
                     </div>
                     <div className="flex flex-col gap-3">
                       <div className="flex flex-col gap-1.5">
-                        <Label className="text-xs">Command</Label>
-                        <Input
-                          value={editCommand}
-                          onChange={(e) => setEditCommand(e.target.value)}
-                          autoFocus
-                        />
+                        <Label className="text-xs">Transport</Label>
+                        <select
+                          value={editTransport}
+                          onChange={(e) =>
+                            setEditTransport(
+                              e.target.value as "stdio" | "http",
+                            )
+                          }
+                          className="h-9 rounded-md border bg-background px-3 text-sm"
+                        >
+                          <option value="stdio">stdio (local command)</option>
+                          <option value="http">HTTP (remote server)</option>
+                        </select>
                       </div>
-                      <div className="flex flex-col gap-1.5">
-                        <Label className="text-xs">
-                          Arguments (one per line)
-                        </Label>
-                        <Textarea
-                          value={editArgs}
-                          onChange={(e) => setEditArgs(e.target.value)}
-                          className="min-h-20 resize-none font-mono text-xs"
-                          spellCheck={false}
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1.5">
-                        <Label className="text-xs">
-                          Environment Variables (KEY=VALUE, one per line)
-                        </Label>
-                        <Textarea
-                          value={editEnvVars}
-                          onChange={(e) => setEditEnvVars(e.target.value)}
-                          placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."
-                          className="min-h-16 resize-none font-mono text-xs"
-                          spellCheck={false}
-                        />
-                      </div>
+                      {editTransport === "stdio" ? (
+                        <>
+                          <div className="flex flex-col gap-1.5">
+                            <Label className="text-xs">Command</Label>
+                            <Input
+                              value={editCommand}
+                              onChange={(e) => setEditCommand(e.target.value)}
+                              autoFocus
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <Label className="text-xs">
+                              Arguments (one per line)
+                            </Label>
+                            <Textarea
+                              value={editArgs}
+                              onChange={(e) => setEditArgs(e.target.value)}
+                              className="min-h-20 resize-none font-mono text-xs"
+                              spellCheck={false}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex flex-col gap-1.5">
+                            <Label className="text-xs">Server URL</Label>
+                            <Input
+                              value={editUrl}
+                              onChange={(e) => setEditUrl(e.target.value)}
+                              placeholder="https://mcp.atlassian.com/v1/mcp"
+                              autoFocus
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <Label className="text-xs">Authentication</Label>
+                            <select
+                              value={editAuth}
+                              onChange={(e) =>
+                                setEditAuth(
+                                  e.target.value as "none" | "basic" | "oauth",
+                                )
+                              }
+                              className="h-9 rounded-md border bg-background px-3 text-sm"
+                            >
+                              <option value="none">None</option>
+                              <option value="basic">
+                                Basic (username + token)
+                              </option>
+                              <option value="oauth">OAuth</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                      {editAuth !== "oauth" && (
+                        <div className="flex flex-col gap-1.5">
+                          <Label className="text-xs">
+                            {editTransport === "http"
+                              ? "Credentials (KEY=VALUE, one per line)"
+                              : "Environment Variables (KEY=VALUE, one per line)"}
+                          </Label>
+                          <Textarea
+                            value={editEnvVars}
+                            onChange={(e) => setEditEnvVars(e.target.value)}
+                            placeholder={
+                              editTransport === "http" && editAuth === "basic"
+                                ? "MCP_USERNAME=user@example.com\nMCP_API_TOKEN=your-api-token"
+                                : "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."
+                            }
+                            className="min-h-16 resize-none font-mono text-xs"
+                            spellCheck={false}
+                          />
+                        </div>
+                      )}
                       <div className="flex justify-end gap-2 pt-1">
                         <Button
                           variant="outline"
@@ -238,7 +371,12 @@ export function SystemMcpView() {
                         <Button
                           size="sm"
                           onClick={handleSaveEdit}
-                          disabled={!editCommand.trim() || saving}
+                          disabled={
+                            (editTransport === "stdio" &&
+                              !editCommand.trim()) ||
+                            (editTransport === "http" && !editUrl.trim()) ||
+                            saving
+                          }
                         >
                           {saving ? "Saving..." : "Save"}
                         </Button>
@@ -253,15 +391,40 @@ export function SystemMcpView() {
                     <div className="flex flex-col gap-1">
                       <span className="text-sm font-medium">{name}</span>
                       <code className="text-xs text-muted-foreground">
-                        {srv.command} {srv.args.join(" ")}
+                        {srv.transport === "http"
+                          ? `HTTP: ${srv.url}`
+                          : `${srv.command || ""} ${(srv.args || []).join(" ")}`}
                       </code>
-                      {srv.env && Object.keys(srv.env).length > 0 && (
-                        <span className="text-xs text-muted-foreground">
-                          env: {Object.keys(srv.env).join(", ")}
+                      {srv.auth === "oauth" && (
+                        <span
+                          className={`text-xs ${oauthStatus[name] ? "text-green-500" : "text-yellow-500"}`}
+                        >
+                          {oauthStatus[name] ? "Authorized" : "Not authorized"}
                         </span>
                       )}
+                      {srv.auth !== "oauth" &&
+                        srv.env &&
+                        Object.keys(srv.env).length > 0 && (
+                          <span className="text-xs text-muted-foreground">
+                            env: {Object.keys(srv.env).join(", ")}
+                          </span>
+                        )}
                     </div>
                     <div className="flex items-center gap-1">
+                      {srv.auth === "oauth" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={authorizing === name}
+                          onClick={() => handleAuthorize(name)}
+                        >
+                          {authorizing === name
+                            ? "Authorizing..."
+                            : oauthStatus[name]
+                              ? "Re-authorize"
+                              : "Authorize"}
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -309,42 +472,103 @@ export function SystemMcpView() {
                       />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="mcp-command" className="text-xs">
-                        Command
-                      </Label>
-                      <Input
-                        id="mcp-command"
-                        value={newCommand}
-                        onChange={(e) => setNewCommand(e.target.value)}
-                        placeholder="e.g. npx or uvx"
-                      />
+                      <Label className="text-xs">Transport</Label>
+                      <select
+                        value={newTransport}
+                        onChange={(e) =>
+                          setNewTransport(
+                            e.target.value as "stdio" | "http",
+                          )
+                        }
+                        className="h-9 rounded-md border bg-background px-3 text-sm"
+                      >
+                        <option value="stdio">stdio (local command)</option>
+                        <option value="http">HTTP (remote server)</option>
+                      </select>
                     </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="mcp-args" className="text-xs">
-                        Arguments (one per line)
-                      </Label>
-                      <Textarea
-                        id="mcp-args"
-                        value={newArgs}
-                        onChange={(e) => setNewArgs(e.target.value)}
-                        placeholder={"-y\n@modelcontextprotocol/server-github"}
-                        className="min-h-20 resize-none font-mono text-xs"
-                        spellCheck={false}
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="mcp-env" className="text-xs">
-                        Environment Variables (KEY=VALUE, one per line)
-                      </Label>
-                      <Textarea
-                        id="mcp-env"
-                        value={newEnvVars}
-                        onChange={(e) => setNewEnvVars(e.target.value)}
-                        placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."
-                        className="min-h-16 resize-none font-mono text-xs"
-                        spellCheck={false}
-                      />
-                    </div>
+                    {newTransport === "stdio" ? (
+                      <>
+                        <div className="flex flex-col gap-1.5">
+                          <Label htmlFor="mcp-command" className="text-xs">
+                            Command
+                          </Label>
+                          <Input
+                            id="mcp-command"
+                            value={newCommand}
+                            onChange={(e) => setNewCommand(e.target.value)}
+                            placeholder="e.g. npx or uvx"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <Label htmlFor="mcp-args" className="text-xs">
+                            Arguments (one per line)
+                          </Label>
+                          <Textarea
+                            id="mcp-args"
+                            value={newArgs}
+                            onChange={(e) => setNewArgs(e.target.value)}
+                            placeholder={
+                              "-y\n@modelcontextprotocol/server-github"
+                            }
+                            className="min-h-20 resize-none font-mono text-xs"
+                            spellCheck={false}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex flex-col gap-1.5">
+                          <Label htmlFor="mcp-url" className="text-xs">
+                            Server URL
+                          </Label>
+                          <Input
+                            id="mcp-url"
+                            value={newUrl}
+                            onChange={(e) => setNewUrl(e.target.value)}
+                            placeholder="https://mcp.atlassian.com/v1/mcp"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <Label className="text-xs">Authentication</Label>
+                          <select
+                            value={newAuth}
+                            onChange={(e) =>
+                              setNewAuth(
+                                e.target.value as "none" | "basic" | "oauth",
+                              )
+                            }
+                            className="h-9 rounded-md border bg-background px-3 text-sm"
+                          >
+                            <option value="none">None</option>
+                            <option value="basic">
+                              Basic (username + token)
+                            </option>
+                            <option value="oauth">OAuth</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+                    {newAuth !== "oauth" && (
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="mcp-env" className="text-xs">
+                          {newTransport === "http"
+                            ? "Credentials (KEY=VALUE, one per line)"
+                            : "Environment Variables (KEY=VALUE, one per line)"}
+                        </Label>
+                        <Textarea
+                          id="mcp-env"
+                          value={newEnvVars}
+                          onChange={(e) => setNewEnvVars(e.target.value)}
+                          placeholder={
+                            newTransport === "http" && newAuth === "basic"
+                              ? "MCP_USERNAME=user@example.com\nMCP_API_TOKEN=your-api-token"
+                              : "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."
+                          }
+                          className="min-h-16 resize-none font-mono text-xs"
+                          spellCheck={false}
+                        />
+                      </div>
+                    )}
                     <div className="flex justify-end gap-2 pt-1">
                       <Button
                         variant="outline"
@@ -356,7 +580,13 @@ export function SystemMcpView() {
                       <Button
                         size="sm"
                         onClick={handleAdd}
-                        disabled={!newName.trim() || !newCommand.trim() || saving}
+                        disabled={
+                          !newName.trim() ||
+                          (newTransport === "stdio" &&
+                            !newCommand.trim()) ||
+                          (newTransport === "http" && !newUrl.trim()) ||
+                          saving
+                        }
                       >
                         {saving ? "Adding..." : "Add"}
                       </Button>

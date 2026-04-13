@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class UserMessageFrame(BaseModel):
@@ -89,14 +89,32 @@ class ContainerResponse(BaseModel):
 
 
 class McpServerConfig(BaseModel):
-    command: str
+    transport: Literal["stdio", "http"] = "stdio"
+    # stdio fields
+    command: str = ""
     args: list[str] = []
+    # http fields
+    url: str = ""
+    auth: Literal["none", "basic", "oauth"] = "none"
+    # common fields
     env: dict[str, str] = {}
     timeout: float = 30.0
+
+    @model_validator(mode="after")
+    def validate_transport_fields(self):
+        if self.transport == "stdio" and not self.command:
+            raise ValueError("'command' is required for stdio transport")
+        if self.transport == "http" and not self.url:
+            raise ValueError("'url' is required for http transport")
+        return self
 
 
 class McpConfigRequest(BaseModel):
     mcpServers: dict[str, McpServerConfig]
+
+
+class McpServerToggle(BaseModel):
+    enabled: bool
 
 
 class ToolConfigRequest(BaseModel):

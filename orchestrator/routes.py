@@ -51,6 +51,7 @@ from orchestrator.models import (
     ErrorFrame,
     FileEntry,
     McpConfigRequest,
+    McpServerToggle,
     QueueStatusFrame,
     RegistrySkillSummary,
     RegistrySkillToggle,
@@ -145,23 +146,16 @@ _workers_lock = asyncio.Lock()
 
 async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager | None:
     """Start host-side MCP servers if configured, write tool schemas to workspace."""
-    config_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
-    if not config_path.is_file():
-        # Fallback: check legacy locations
-        for legacy in (host_dir / "config" / ".mcp.json", host_dir / ".mcp.json"):
-            if legacy.is_file():
-                config_path = legacy
-                break
-        else:
-            config_path = None
-
-    mcp_config: dict = {"mcpServers": {}}
-    if config_path:
-        try:
-            mcp_config = json.loads(config_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    mcp_config.setdefault("mcpServers", {})
+    # Load global MCP config and filter to only agent's enabled servers
+    global_config = _read_system_mcp_config()
+    global_servers = global_config.get("mcpServers", {})
+    agent_servers = _read_agent_mcp_servers(agent_id)
+    enabled_servers = {
+        name: global_servers[name]
+        for name, enabled in agent_servers.items()
+        if enabled and name in global_servers
+    }
+    mcp_config: dict = {"mcpServers": enabled_servers}
 
     # Inject Slack MCP server if globally configured and enabled for this agent
     slack_config = _read_slack_config()
@@ -463,39 +457,86 @@ VALID_BUILTIN_TOOLS = {
 }
 
 
-@router.get("/agents/{agent_id}/mcp")
-async def get_mcp_config(agent_id: str):
-    await _resolve_agent_path(agent_id)  # validates agent exists
+def _read_agent_mcp_servers(agent_id: str) -> dict[str, bool]:
+    """Return dict of MCP server names added to this agent. Value = enabled."""
     mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
     if not mcp_path.is_file():
-        return {"mcpServers": {}}
-    return json.loads(mcp_path.read_text())
+        return {}
+    try:
+        data = json.loads(mcp_path.read_text())
+        # Migrate from old {"disabled": [...]} format
+        if "disabled" in data and "servers" not in data:
+            return {}
+        return data.get("servers", {})
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
-@router.put("/agents/{agent_id}/mcp")
-async def put_mcp_config(agent_id: str, req: McpConfigRequest):
-    await _resolve_agent_path(agent_id)  # validates agent exists
+def _write_agent_mcp_servers(agent_id: str, servers: dict[str, bool]) -> None:
+    """Persist the dict of MCP servers added to this agent."""
     MCP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
     mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
-    data = req.model_dump(exclude_defaults=True)
-    # Always include the top-level key
-    data.setdefault("mcpServers", {})
-    mcp_path.write_text(json.dumps(data, indent=2))
-    return data
+    mcp_path.write_text(json.dumps({"servers": servers}, indent=2))
+
+
+@router.get("/agents/{agent_id}/mcp")
+async def get_mcp_config(agent_id: str):
+    """Return agent's added servers and available global servers."""
+    await _resolve_agent_path(agent_id)
+    global_config = _read_system_mcp_config()
+    global_servers = global_config.get("mcpServers", {})
+    agent_servers = _read_agent_mcp_servers(agent_id)
+
+    added = []
+    for name, enabled in agent_servers.items():
+        if name in global_servers:
+            added.append({"name": name, "enabled": enabled, **global_servers[name]})
+
+    available = [
+        {"name": name, **srv}
+        for name, srv in global_servers.items()
+        if name not in agent_servers
+    ]
+
+    return {"servers": added, "available": available}
+
+
+@router.post("/agents/{agent_id}/mcp/servers/{server_name}")
+async def add_mcp_server_to_agent(agent_id: str, server_name: str):
+    """Add a global MCP server to this agent (disabled by default)."""
+    await _resolve_agent_path(agent_id)
+    global_config = _read_system_mcp_config()
+    if server_name not in global_config.get("mcpServers", {}):
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+    agent_servers = _read_agent_mcp_servers(agent_id)
+    if server_name in agent_servers:
+        raise HTTPException(status_code=409, detail=f"Server '{server_name}' already added")
+    agent_servers[server_name] = False
+    _write_agent_mcp_servers(agent_id, agent_servers)
+    return {"name": server_name, "enabled": False}
+
+
+@router.put("/agents/{agent_id}/mcp/servers/{server_name}")
+async def toggle_mcp_server(agent_id: str, server_name: str, req: McpServerToggle):
+    """Enable or disable an MCP server for this agent."""
+    await _resolve_agent_path(agent_id)
+    agent_servers = _read_agent_mcp_servers(agent_id)
+    if server_name not in agent_servers:
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not added to this agent")
+    agent_servers[server_name] = req.enabled
+    _write_agent_mcp_servers(agent_id, agent_servers)
+    return {"name": server_name, "enabled": req.enabled}
 
 
 @router.delete("/agents/{agent_id}/mcp/servers/{server_name}")
-async def delete_mcp_server(agent_id: str, server_name: str):
-    await _resolve_agent_path(agent_id)  # validates agent exists
-    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
-    if not mcp_path.is_file():
-        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
-    config = json.loads(mcp_path.read_text())
-    servers = config.get("mcpServers", {})
-    if server_name not in servers:
-        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
-    del servers[server_name]
-    mcp_path.write_text(json.dumps(config, indent=2))
+async def remove_mcp_server_from_agent(agent_id: str, server_name: str):
+    """Remove an MCP server from this agent."""
+    await _resolve_agent_path(agent_id)
+    agent_servers = _read_agent_mcp_servers(agent_id)
+    if server_name not in agent_servers:
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not added to this agent")
+    del agent_servers[server_name]
+    _write_agent_mcp_servers(agent_id, agent_servers)
     return {"status": "ok", "removed": server_name}
 
 
