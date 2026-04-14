@@ -62,6 +62,7 @@ export function SlackView() {
   const [addingChannel, setAddingChannel] = useState(false)
   const [manualChannelId, setManualChannelId] = useState("")
   const [manualInterval, setManualInterval] = useState(30)
+  const [threadTtlDays, setThreadTtlDays] = useState(7)
 
   const [token, setToken] = useState("")
   const [cookie, setCookie] = useState("")
@@ -120,14 +121,33 @@ export function SlackView() {
     )
   }, [])
 
+  const fetchThreadTtl = useCallback(async () => {
+    const res = await fetch("/api/settings")
+    if (res.ok) {
+      const data = await res.json()
+      if (data.slack_thread_ttl_days !== undefined) {
+        setThreadTtlDays(parseInt(data.slack_thread_ttl_days) || 7)
+      }
+    }
+  }, [])
+
+  const handleSaveThreadTtl = async (days: number) => {
+    setThreadTtlDays(days)
+    await fetch("/api/settings/slack_thread_ttl_days", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: String(days) }),
+    })
+  }
+
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      await Promise.all([fetchConfig(), fetchAgents(), fetchPolling()])
+      await Promise.all([fetchConfig(), fetchAgents(), fetchPolling(), fetchThreadTtl()])
     } finally {
       setLoading(false)
     }
-  }, [fetchConfig, fetchAgents, fetchPolling])
+  }, [fetchConfig, fetchAgents, fetchPolling, fetchThreadTtl])
 
   useEffect(() => {
     loadAll()
@@ -640,6 +660,31 @@ export function SlackView() {
               mentioning agents by name (e.g., @Agent-Name). The agent
               processes the message and replies in a Slack thread.
             </p>
+
+            {/* Thread expiry */}
+            <div className="mt-3 flex items-center justify-between pt-3 border-t">
+              <div>
+                <div className="text-xs font-medium">Thread expiry</div>
+                <div className="text-xs text-muted-foreground">
+                  Auto-remove monitored threads with no activity
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  max={90}
+                  value={threadTtlDays}
+                  onChange={(e) => {
+                    const val = Math.max(0, Math.min(90, parseInt(e.target.value) || 0))
+                    handleSaveThreadTtl(val)
+                  }}
+                  className="w-16 h-7 text-xs text-center"
+                  title="Thread TTL in days (0 = never expire)"
+                />
+                <span className="text-xs text-muted-foreground">days</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>

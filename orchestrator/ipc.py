@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from sqlite3 import IntegrityError
 import typing
 import uuid
 from datetime import datetime, timezone
@@ -366,19 +367,37 @@ async def _process_event(
             ch = source_metadata.get("channel_id", "")
             ts = source_metadata.get("thread_ts", "")
             if ch and ts:
+                # Look up agent name for the [bot:name] prefix
+                agent_name = ""
+                try:
+                    async with db.execute(
+                        "SELECT name FROM agents WHERE id = ?", (agent_id,),
+                    ) as cur:
+                        name_row = await cur.fetchone()
+                    if name_row:
+                        agent_name = name_row[0].lower()
+                except Exception:
+                    logger.exception("Failed to look up agent name for Slack reply")
+
+                reply_ts: str | None = None
                 try:
                     from orchestrator.slack_poller import post_slack_reply
-                    await post_slack_reply(ch, ts, event.get("content", ""))
+                    reply_ts = await post_slack_reply(
+                        ch, ts, event.get("content", ""),
+                        agent_name=agent_name,
+                    )
                 except Exception:
                     logger.exception("Failed to post Slack reply")
-                # Auto-register thread so follow-up replies are polled
+                # Auto-register thread so follow-up replies are polled.
+                # Use the reply's ts as last_ts so the next poll cycle
+                # doesn't re-fetch the entire thread history.
                 try:
                     thread_id = str(uuid.uuid4())
                     await db.execute(
                         "INSERT OR IGNORE INTO slack_active_threads "
                         "(id, channel_id, thread_ts, agent_id, last_ts) "
                         "VALUES (?, ?, ?, ?, ?)",
-                        (thread_id, ch, ts, agent_id, ts),
+                        (thread_id, ch, ts, agent_id, reply_ts or ts),
                     )
                     await db.commit()
                 except Exception:
@@ -558,7 +577,7 @@ async def _handle_tool_request(
                     (row_id, channel_id, thread_ts, agent_id, thread_ts),
                 )
                 await db.commit()
-            except Exception:
+            except IntegrityError:
                 # UNIQUE constraint — already monitoring
                 return {
                     "request_id": request_id,

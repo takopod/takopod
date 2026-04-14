@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -181,6 +182,12 @@ async def _poll_channel(channel_id: str, last_ts: str) -> None:
         if not text:
             continue
 
+        # Skip messages posted by agents (feedback loop guard).
+        # The bot_id check above is a no-op with xoxc user-session tokens,
+        # so this prefix check is the effective guard.
+        if text.startswith("[bot:"):
+            continue
+
         mentioned = _parse_agent_mentions(text, agent_map)
         slack_files = msg.get("files", [])
         slack_config = _read_slack_config() if slack_files else None
@@ -245,6 +252,17 @@ async def _poll_channel(channel_id: str, last_ts: str) -> None:
 async def _poll_active_threads() -> None:
     """Poll all active threads for new replies and dispatch to agents."""
     db = await get_db()
+
+    # Expire stale threads based on configurable TTL (default 7 days)
+    ttl_days = int(await get_setting("slack_thread_ttl_days", "7"))
+    if ttl_days > 0:
+        await db.execute(
+            "DELETE FROM slack_active_threads "
+            "WHERE last_activity_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)",
+            (f"-{ttl_days} days",),
+        )
+        await db.commit()
+
     async with db.execute(
         "SELECT t.id, t.channel_id, t.thread_ts, t.agent_id, t.last_ts, "
         "a.name AS agent_name "
@@ -334,6 +352,10 @@ async def _poll_thread(
         if not text:
             continue
 
+        # Skip agent-posted messages (feedback loop guard)
+        if text.startswith("[bot:"):
+            continue
+
         mentioned = _parse_agent_mentions(text, agent_map)
         if not mentioned:
             continue
@@ -345,10 +367,16 @@ async def _poll_thread(
 
         to_dispatch.append({"msg": msg, "prompt": prompt, "has_files": has_files})
 
-    # Fetch full thread history once if any mentions were found
+    # Fetch full thread history once if any mentions were found.
+    # Exclude the triggering message(s) — they appear in "Respond to:" instead.
     thread_context = ""
     if to_dispatch:
-        thread_context = await _fetch_thread_context(client, channel_id, thread_ts)
+        # When there's a single dispatch (common case), exclude its ts
+        # to avoid duplicating it in context + "Respond to:".
+        exclude = to_dispatch[-1]["msg"].get("ts", "") if len(to_dispatch) == 1 else ""
+        thread_context = await _fetch_thread_context(
+            client, channel_id, thread_ts, exclude_ts=exclude,
+        )
 
     for item in to_dispatch:
         msg = item["msg"]
@@ -387,40 +415,76 @@ async def _poll_thread(
                 "Failed to dispatch thread reply to agent %s",
                 agent_name,
             )
+            await post_slack_reply(
+                channel_id, thread_ts,
+                f"Failed to dispatch message to agent '{agent_name}'.",
+            )
 
-    # Update high-water mark
+    # Update high-water mark and last activity timestamp
     if highest_ts > last_ts:
         db = await get_db()
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await db.execute(
-            "UPDATE slack_active_threads SET last_ts = ? WHERE id = ?",
-            (highest_ts, row_id),
+            "UPDATE slack_active_threads SET last_ts = ?, last_activity_at = ? "
+            "WHERE id = ?",
+            (highest_ts, now, row_id),
         )
         await db.commit()
+
+
+_THREAD_CONTEXT_MAX_MESSAGES = 500
 
 
 async def _fetch_thread_context(
     client: WebClient,
     channel_id: str,
     thread_ts: str,
+    *,
+    exclude_ts: str = "",
 ) -> str:
-    """Fetch full thread history and format as readable context."""
+    """Fetch full thread history and format as readable context.
+
+    If *exclude_ts* is provided, the message with that timestamp is
+    omitted from the output (used to avoid duplicating the triggering
+    message that also appears in the "Respond to:" suffix).
+    """
+    all_messages: list[dict] = []
+    cursor: str | None = None
+
     try:
-        response = await asyncio.to_thread(
-            client.conversations_replies,
-            channel=channel_id,
-            ts=thread_ts,
-            limit=100,
-        )
+        while len(all_messages) < _THREAD_CONTEXT_MAX_MESSAGES:
+            kwargs: dict = {
+                "channel": channel_id,
+                "ts": thread_ts,
+                "limit": 200,
+            }
+            if cursor:
+                kwargs["cursor"] = cursor
+
+            response = await asyncio.to_thread(
+                client.conversations_replies, **kwargs,
+            )
+
+            all_messages.extend(response.get("messages", []))
+
+            if not response.get("has_more"):
+                break
+            cursor = (
+                response.get("response_metadata", {}).get("next_cursor")
+            )
+            if not cursor:
+                break
     except SlackApiError:
         logger.exception("Failed to fetch thread context %s/%s", channel_id, thread_ts)
         return ""
 
-    messages = response.get("messages", [])
-    if not messages:
+    if not all_messages:
         return ""
 
     lines: list[str] = []
-    for msg in messages:
+    for msg in all_messages:
+        if exclude_ts and msg.get("ts") == exclude_ts:
+            continue
         user = msg.get("user", "bot")
         text = msg.get("text", "")
         if not text:
@@ -594,24 +658,31 @@ async def _dispatch_to_agent(
 
 async def post_slack_reply(
     channel_id: str, thread_ts: str, text: str,
-) -> None:
+    *, agent_name: str = "",
+) -> str | None:
     """Post a message as a thread reply in Slack.
 
     Called from ipc._process_event on completion and from the poller
     for error replies. This is an orchestrator-internal function, not
     an MCP tool.
+
+    Returns the ``ts`` of the posted message, or ``None`` on failure.
     """
     client = _build_slack_client()
     if client is None:
         logger.warning("Cannot post Slack reply: no credentials configured")
-        return
+        return None
+
+    # Prefix agent responses so pollers can skip them (feedback loop guard)
+    if agent_name:
+        text = f"[bot:{agent_name}] {text}"
 
     # Respect Slack's message length limit
     if len(text) > SLACK_MESSAGE_CHAR_LIMIT:
         text = text[: SLACK_MESSAGE_CHAR_LIMIT - 30] + "\n\n[Response truncated]"
 
     try:
-        await asyncio.to_thread(
+        resp = await asyncio.to_thread(
             client.chat_postMessage,
             channel=channel_id,
             thread_ts=thread_ts,
@@ -619,11 +690,13 @@ async def post_slack_reply(
             unfurl_links=False,
             unfurl_media=False,
         )
+        return resp.get("ts")
     except SlackApiError:
         logger.exception(
             "Failed to post Slack reply to channel=%s thread=%s",
             channel_id, thread_ts,
         )
+        return None
 
 
 # ---------------------------------------------------------------------------

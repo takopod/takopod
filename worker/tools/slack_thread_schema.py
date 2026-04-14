@@ -3,8 +3,8 @@
 register_slack_thread_schema = {
     "name": "register_slack_thread",
     "description": (
-        "Start monitoring a Slack thread. New replies in the thread will be "
-        "dispatched to you automatically, without requiring an @mention. "
+        "Start monitoring a Slack thread. New replies that mention you "
+        "(e.g. 'agentname: message') will be dispatched to you automatically. "
         "Use when the user asks you to watch, monitor, or follow a Slack thread."
     ),
     "input_schema": {
