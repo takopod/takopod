@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import shutil
-import sys
 import time
 import uuid
 from collections import defaultdict, deque
@@ -26,7 +25,6 @@ from pydantic import ValidationError
 from orchestrator.search_routes import reindex_memory_file
 
 from orchestrator.container_manager import (
-    MCP_CONFIGS_DIR,
     create_agent_workspace,
     kill_container,
     seed_agent_skills,
@@ -47,10 +45,11 @@ from orchestrator.models import (
     AgentResponse,
     ContainerResponse,
     CreateAgentRequest,
+    CreateMcpServerRequest,
     CreateSkillRequest,
     ErrorFrame,
     FileEntry,
-    McpConfigRequest,
+    McpServerResponse,
     McpServerToggle,
     QueueStatusFrame,
     RegistrySkillSummary,
@@ -62,14 +61,13 @@ from orchestrator.models import (
     SystemErrorFrame,
     ToolConfigRequest,
     UpdateAgentRequest,
+    UpdateMcpServerRequest,
     UpdateSkillRequest,
     UserMessageFrame,
 )
 from orchestrator.settings import get_all_settings, get_setting, set_setting
 from orchestrator.slack_routes import router as slack_router
-from orchestrator.slack_routes import _read_slack_config
 from orchestrator.github_routes import router as github_router
-from orchestrator.github_routes import _read_github_config
 from orchestrator.search_routes import router as search_router
 from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WebSocketManager
 
@@ -146,64 +144,38 @@ _workers_lock = asyncio.Lock()
 
 async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager | None:
     """Start host-side MCP servers if configured, write tool schemas to workspace."""
-    # Load global MCP config and filter to only agent's enabled servers
-    global_config = _read_system_mcp_config()
-    global_servers = global_config.get("mcpServers", {})
-    agent_servers = _read_agent_mcp_servers(agent_id)
-    enabled_servers = {
-        name: global_servers[name]
-        for name, enabled in agent_servers.items()
-        if enabled and name in global_servers
-    }
-    mcp_config: dict = {"mcpServers": enabled_servers}
+    db = await get_db()
+    async with db.execute(
+        "SELECT ms.name, ms.transport, ms.command, ms.args, ms.url, ms.auth, "
+        "ms.env, ms.timeout "
+        "FROM mcp_servers ms "
+        "JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
+        "WHERE ams.agent_id = ? AND ams.enabled = 1",
+        (agent_id,),
+    ) as cur:
+        rows = await cur.fetchall()
 
-    # Inject Slack MCP server if globally configured and enabled for this agent
-    slack_config = _read_slack_config()
-    if slack_config:
-        db = await get_db()
-        async with db.execute(
-            "SELECT slack_enabled FROM agents WHERE id = ?", (agent_id,),
-        ) as cur:
-            row = await cur.fetchone()
-        if row and row[0]:
-            mcp_config["mcpServers"]["slack"] = {
-                "command": sys.executable,
-                "args": ["-m", "integrations.slack_mcp"],
-                "env": {
-                    "SLACK_XOXC_TOKEN": slack_config["xoxc_token"],
-                    "SLACK_D_COOKIE": slack_config["d_cookie"],
-                    "MY_MEMBER_ID": slack_config.get("member_id", ""),
-                },
-                "timeout": 30.0,
-            }
-            logger.info("Injected Slack MCP server for agent %s", agent_id)
-
-    # Inject GitHub MCP server if globally configured and enabled for this agent
-    github_config = _read_github_config()
-    if github_config:
-        db = await get_db()
-        async with db.execute(
-            "SELECT github_enabled FROM agents WHERE id = ?", (agent_id,),
-        ) as cur:
-            gh_row = await cur.fetchone()
-        if gh_row and gh_row[0]:
-            mcp_config["mcpServers"]["github"] = {
-                "command": sys.executable,
-                "args": ["-m", "integrations.github_mcp"],
-                "env": {
-                    "GITHUB_PERSONAL_ACCESS_TOKEN": github_config["personal_access_token"],
-                    "GITHUB_USERNAME": github_config.get("username", ""),
-                    "AGENT_WORKSPACE_HOST_DIR": str(host_dir),
-                },
-                "timeout": 30.0,
-            }
-            logger.info("Injected GitHub MCP server for agent %s", agent_id)
-
-    if not mcp_config["mcpServers"]:
+    if not rows:
         return None
 
+    servers: dict = {}
+    for row in rows:
+        name = row[0]
+        env = json.loads(row[6])
+        # Inject runtime env vars for builtin servers
+        if name == "github":
+            env["AGENT_WORKSPACE_HOST_DIR"] = str(host_dir)
+        servers[name] = {
+            "command": row[2],
+            "args": json.loads(row[3]),
+            "url": row[4],
+            "auth": row[5],
+            "env": env,
+            "timeout": row[7],
+        }
+
     manager = McpServerManager()
-    await manager.start(mcp_config)
+    await manager.start({"mcpServers": servers})
 
     schemas = manager.get_tool_schemas()
     if schemas:
@@ -214,22 +186,6 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
     return manager
 
 
-# --- Agent Templates ---
-
-TEMPLATES_DIR = Path("agent_templates")
-
-
-@router.get("/templates")
-async def list_templates():
-    """List available agent templates."""
-    templates = []
-    if TEMPLATES_DIR.is_dir():
-        for d in sorted(TEMPLATES_DIR.iterdir()):
-            if d.is_dir():
-                templates.append({"id": d.name, "name": d.name})
-    return templates
-
-
 # --- Agent CRUD ---
 
 
@@ -238,18 +194,15 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     db = await get_db()
     agent_id = str(uuid.uuid4())
     icon = await _next_agent_icon(db)
-    host_dir = create_agent_workspace(agent_id, req.agent_type, agent_name=req.name)
+    host_dir = create_agent_workspace(agent_id, agent_name=req.name)
 
     container_memory = await get_setting("default_container_memory", "2g")
     container_cpus = await get_setting("default_container_cpus", "2")
 
     await db.execute(
-        "INSERT INTO agents (id, name, icon, agent_type, host_dir, slack_enabled, github_enabled, "
-        "container_memory, container_cpus) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (agent_id, req.name, icon, req.agent_type, str(host_dir),
-         1 if req.slack_enabled else 0, 1 if req.github_enabled else 0,
-         container_memory, container_cpus),
+        "INSERT INTO agents (id, name, icon, host_dir, container_memory, container_cpus) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (agent_id, req.name, icon, str(host_dir), container_memory, container_cpus),
     )
     await db.commit()
 
@@ -257,27 +210,16 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     await seed_agent_skills(agent_id)
     await sync_agent_skills(agent_id, host_dir)
 
-    # Seed builtin MCP servers based on integration flags
-    initial_mcp: dict[str, bool] = {}
-    if req.slack_enabled:
-        initial_mcp["slack"] = True
-    if req.github_enabled:
-        initial_mcp["github"] = True
-    if initial_mcp:
-        _write_agent_mcp_servers(agent_id, initial_mcp)
-
     async with db.execute(
-        "SELECT id, name, icon, agent_type, status, created_at, slack_enabled, github_enabled, "
-        "container_memory, container_cpus "
+        "SELECT id, name, icon, status, created_at, container_memory, container_cpus "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
 
     return AgentResponse(
-        id=row[0], name=row[1], icon=row[2], agent_type=row[3], status=row[4],
-        created_at=row[5], slack_enabled=bool(row[6]), github_enabled=bool(row[7]),
-        container_memory=row[8], container_cpus=row[9],
+        id=row[0], name=row[1], icon=row[2], status=row[3],
+        created_at=row[4], container_memory=row[5], container_cpus=row[6],
     )
 
 
@@ -285,11 +227,9 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
 async def list_agents() -> list[AgentResponse]:
     db = await get_db()
     async with db.execute(
-        "SELECT a.id, a.name, a.icon, a.agent_type, a.status, a.created_at, "
+        "SELECT a.id, a.name, a.icon, a.status, a.created_at, "
         "  (SELECT c.status FROM agent_containers c "
         "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
-        "  a.slack_enabled, "
-        "  a.github_enabled, "
         "  a.container_memory, "
         "  a.container_cpus "
         "FROM agents a WHERE a.status = 'active' ORDER BY a.created_at"
@@ -297,10 +237,9 @@ async def list_agents() -> list[AgentResponse]:
         rows = await cur.fetchall()
     return [
         AgentResponse(
-            id=r[0], name=r[1], icon=r[2] or "", agent_type=r[3], status=r[4],
-            created_at=r[5], container_status=r[6],
-            slack_enabled=bool(r[7]), github_enabled=bool(r[8]),
-            container_memory=r[9], container_cpus=r[10],
+            id=r[0], name=r[1], icon=r[2] or "", status=r[3],
+            created_at=r[4], container_status=r[5],
+            container_memory=r[6], container_cpus=r[7],
         )
         for r in rows
     ]
@@ -310,7 +249,7 @@ async def list_agents() -> list[AgentResponse]:
 async def get_agent(agent_id: str) -> AgentDetailResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, icon, agent_type, status, created_at, host_dir, slack_enabled, github_enabled, "
+        "SELECT id, name, icon, status, created_at, host_dir, "
         "container_memory, container_cpus "
         "FROM agents WHERE id = ?",
         (agent_id,),
@@ -320,9 +259,8 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     return AgentDetailResponse(
-        id=row[0], name=row[1], icon=row[2] or "", agent_type=row[3], status=row[4],
-        created_at=row[5], slack_enabled=bool(row[7]), github_enabled=bool(row[8]),
-        container_memory=row[9], container_cpus=row[10],
+        id=row[0], name=row[1], icon=row[2] or "", status=row[3],
+        created_at=row[4], container_memory=row[6], container_cpus=row[7],
     )
 
 
@@ -537,111 +475,107 @@ VALID_BUILTIN_TOOLS = {
 }
 
 
-def _read_agent_mcp_servers(agent_id: str) -> dict[str, bool]:
-    """Return dict of MCP server names added to this agent. Value = enabled."""
-    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
-    if not mcp_path.is_file():
-        return {}
-    try:
-        data = json.loads(mcp_path.read_text())
-        # Migrate from old {"disabled": [...]} format
-        if "disabled" in data and "servers" not in data:
-            return {}
-        return data.get("servers", {})
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _write_agent_mcp_servers(agent_id: str, servers: dict[str, bool]) -> None:
-    """Persist the dict of MCP servers added to this agent."""
-    MCP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
-    mcp_path = MCP_CONFIGS_DIR / f"{agent_id}.json"
-    mcp_path.write_text(json.dumps({"servers": servers}, indent=2))
-
-
 @router.get("/agents/{agent_id}/mcp")
-async def get_mcp_config(agent_id: str):
+async def get_agent_mcp(agent_id: str):
     """Return agent's added servers and available global servers."""
     await _resolve_agent_path(agent_id)
-    global_config = _get_global_mcp_config_with_builtins()
-    global_servers = global_config.get("mcpServers", {})
-    agent_servers = _read_agent_mcp_servers(agent_id)
+    db = await get_db()
 
-    added = []
-    for name, enabled in agent_servers.items():
-        if name in global_servers:
-            added.append({"name": name, "enabled": enabled, **global_servers[name]})
+    # Servers added to this agent
+    async with db.execute(
+        "SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.url, "
+        "ms.auth, ms.env, ms.timeout, ms.builtin, ams.enabled "
+        "FROM mcp_servers ms JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
+        "WHERE ams.agent_id = ? ORDER BY ms.builtin DESC, ms.name",
+        (agent_id,),
+    ) as cur:
+        added_rows = await cur.fetchall()
+
+    added_ids = {r[0] for r in added_rows}
+    servers = []
+    for r in added_rows:
+        srv = _row_to_mcp_server(r)
+        servers.append({**srv.model_dump(), "enabled": bool(r[10])})
+
+    # Available servers not yet added to this agent
+    async with db.execute(
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "FROM mcp_servers ORDER BY builtin DESC, name",
+    ) as cur:
+        all_rows = await cur.fetchall()
 
     available = [
-        {"name": name, **srv}
-        for name, srv in global_servers.items()
-        if name not in agent_servers
+        _row_to_mcp_server(r).model_dump()
+        for r in all_rows if r[0] not in added_ids
     ]
 
-    return {"servers": added, "available": available}
+    return {"servers": servers, "available": available}
 
 
-@router.post("/agents/{agent_id}/mcp/servers/{server_name}")
-async def add_mcp_server_to_agent(agent_id: str, server_name: str):
-    """Add a global MCP server to this agent (disabled by default)."""
+@router.post("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
+async def add_mcp_server_to_agent(agent_id: str, mcp_server_id: str):
+    """Add an MCP server to this agent (disabled by default)."""
     await _resolve_agent_path(agent_id)
-    global_config = _get_global_mcp_config_with_builtins()
-    if server_name not in global_config.get("mcpServers", {}):
-        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
-    agent_servers = _read_agent_mcp_servers(agent_id)
-    if server_name in agent_servers:
-        raise HTTPException(status_code=409, detail=f"Server '{server_name}' already added")
-    agent_servers[server_name] = False
-    _write_agent_mcp_servers(agent_id, agent_servers)
-    return {"name": server_name, "enabled": False}
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT id FROM mcp_servers WHERE id = ?", (mcp_server_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="MCP server not found")
+
+    try:
+        await db.execute(
+            "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id, enabled) VALUES (?, ?, 0)",
+            (agent_id, mcp_server_id),
+        )
+        await db.commit()
+    except Exception:
+        raise HTTPException(status_code=409, detail="Server already added to this agent")
+
+    return {"mcp_server_id": mcp_server_id, "enabled": False}
 
 
-@router.put("/agents/{agent_id}/mcp/servers/{server_name}")
-async def toggle_mcp_server(agent_id: str, server_name: str, req: McpServerToggle):
+@router.put("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
+async def toggle_agent_mcp_server(agent_id: str, mcp_server_id: str, req: McpServerToggle):
     """Enable or disable an MCP server for this agent."""
     await _resolve_agent_path(agent_id)
-    agent_servers = _read_agent_mcp_servers(agent_id)
-    if server_name not in agent_servers:
-        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not added to this agent")
-    agent_servers[server_name] = req.enabled
-    _write_agent_mcp_servers(agent_id, agent_servers)
+    db = await get_db()
 
-    # Keep DB flags in sync for builtin servers so _start_mcp_manager
-    # picks them up (it checks the DB column, not the JSON config file).
-    builtin_db_columns = {"slack": "slack_enabled", "github": "github_enabled"}
-    if server_name in builtin_db_columns:
-        db = await get_db()
-        col = builtin_db_columns[server_name]
-        await db.execute(
-            f"UPDATE agents SET {col} = ? WHERE id = ?",
-            (1 if req.enabled else 0, agent_id),
-        )
-        await db.commit()
+    async with db.execute(
+        "SELECT agent_id FROM agent_mcp_servers WHERE agent_id = ? AND mcp_server_id = ?",
+        (agent_id, mcp_server_id),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Server not added to this agent")
 
-    return {"name": server_name, "enabled": req.enabled}
+    await db.execute(
+        "UPDATE agent_mcp_servers SET enabled = ? WHERE agent_id = ? AND mcp_server_id = ?",
+        (1 if req.enabled else 0, agent_id, mcp_server_id),
+    )
+    await db.commit()
+    return {"mcp_server_id": mcp_server_id, "enabled": req.enabled}
 
 
-@router.delete("/agents/{agent_id}/mcp/servers/{server_name}")
-async def remove_mcp_server_from_agent(agent_id: str, server_name: str):
+@router.delete("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
+async def remove_mcp_server_from_agent(agent_id: str, mcp_server_id: str):
     """Remove an MCP server from this agent."""
     await _resolve_agent_path(agent_id)
-    agent_servers = _read_agent_mcp_servers(agent_id)
-    if server_name not in agent_servers:
-        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not added to this agent")
-    del agent_servers[server_name]
-    _write_agent_mcp_servers(agent_id, agent_servers)
+    db = await get_db()
 
-    # Disable DB flag for builtin servers
-    builtin_db_columns = {"slack": "slack_enabled", "github": "github_enabled"}
-    if server_name in builtin_db_columns:
-        db = await get_db()
-        col = builtin_db_columns[server_name]
-        await db.execute(
-            f"UPDATE agents SET {col} = 0 WHERE id = ?", (agent_id,),
-        )
-        await db.commit()
+    async with db.execute(
+        "SELECT agent_id FROM agent_mcp_servers WHERE agent_id = ? AND mcp_server_id = ?",
+        (agent_id, mcp_server_id),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Server not added to this agent")
 
-    return {"status": "ok", "removed": server_name}
+    await db.execute(
+        "DELETE FROM agent_mcp_servers WHERE agent_id = ? AND mcp_server_id = ?",
+        (agent_id, mcp_server_id),
+    )
+    await db.commit()
+    return {"status": "ok", "removed": mcp_server_id}
 
 
 @router.get("/agents/{agent_id}/mcp/status")
@@ -1265,79 +1199,122 @@ async def reset_system_skill(skill_id: str) -> SkillDetail:
     )
 
 
-# --- System-Level MCP Defaults API ---
-
-SYSTEM_MCP_CONFIG_PATH = Path("data/mcp-defaults.json")
-
-BUILTIN_MCP_SERVERS = {"slack", "github"}
+# --- System MCP Servers API ---
 
 
-def _is_builtin_mcp_server(server_name: str) -> bool:
-    return server_name in BUILTIN_MCP_SERVERS
+def _row_to_mcp_server(row) -> McpServerResponse:
+    return McpServerResponse(
+        id=row[0],
+        name=row[1],
+        transport=row[2],
+        command=row[3],
+        args=json.loads(row[4]),
+        url=row[5],
+        auth=row[6],
+        env=json.loads(row[7]),
+        timeout=row[8],
+        builtin=bool(row[9]),
+    )
 
 
-def _read_system_mcp_config() -> dict:
-    if SYSTEM_MCP_CONFIG_PATH.is_file():
-        try:
-            return json.loads(SYSTEM_MCP_CONFIG_PATH.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"mcpServers": {}}
+@router.get("/mcp/servers")
+async def list_mcp_servers() -> list[McpServerResponse]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "FROM mcp_servers ORDER BY builtin DESC, name",
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_row_to_mcp_server(r) for r in rows]
 
 
-def _write_system_mcp_config(config: dict) -> None:
-    SYSTEM_MCP_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SYSTEM_MCP_CONFIG_PATH.write_text(json.dumps(config, indent=2))
+@router.post("/mcp/servers")
+async def create_mcp_server(req: CreateMcpServerRequest) -> McpServerResponse:
+    db = await get_db()
+    server_id = str(uuid.uuid4())
+    await db.execute(
+        "INSERT INTO mcp_servers (id, name, transport, command, args, url, auth, env, timeout) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            server_id, req.name, req.transport, req.command,
+            json.dumps(req.args), req.url, req.auth,
+            json.dumps(req.env), req.timeout,
+        ),
+    )
+    await db.commit()
+    async with db.execute(
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "FROM mcp_servers WHERE id = ?",
+        (server_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _row_to_mcp_server(row)
 
 
-def _get_global_mcp_config_with_builtins() -> dict:
-    """Read system MCP config and inject builtin servers when integrations are configured."""
-    config = _read_system_mcp_config()
-    servers = config.get("mcpServers", {})
+@router.put("/mcp/servers/{server_id}")
+async def update_mcp_server(server_id: str, req: UpdateMcpServerRequest) -> McpServerResponse:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, builtin FROM mcp_servers WHERE id = ?", (server_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    if row[1]:
+        raise HTTPException(status_code=403, detail="Cannot edit builtin MCP server")
 
-    slack_config = _read_slack_config()
-    if slack_config and "slack" not in servers:
-        servers["slack"] = {"builtin": True}
-    elif "slack" in servers:
-        servers["slack"]["builtin"] = True
+    updates = req.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    if "args" in updates:
+        updates["args"] = json.dumps(updates["args"])
+    if "env" in updates:
+        updates["env"] = json.dumps(updates["env"])
 
-    github_config = _read_github_config()
-    if github_config and "github" not in servers:
-        servers["github"] = {"builtin": True}
-    elif "github" in servers:
-        servers["github"]["builtin"] = True
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [server_id]
+    await db.execute(f"UPDATE mcp_servers SET {set_clause} WHERE id = ?", values)
+    await db.commit()
 
-    config["mcpServers"] = servers
-    return config
-
-
-@router.get("/mcp")
-async def get_system_mcp_config():
-    return _get_global_mcp_config_with_builtins()
-
-
-@router.put("/mcp")
-async def put_system_mcp_config(req: McpConfigRequest):
-    data = req.model_dump(exclude_defaults=True)
-    data.setdefault("mcpServers", {})
-    _write_system_mcp_config(data)
-    return data
+    async with db.execute(
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "FROM mcp_servers WHERE id = ?",
+        (server_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _row_to_mcp_server(row)
 
 
-@router.delete("/mcp/servers/{server_name}")
-async def delete_system_mcp_server(server_name: str):
-    if _is_builtin_mcp_server(server_name):
+@router.delete("/mcp/servers/{server_id}")
+async def delete_mcp_server(server_id: str):
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, name, builtin FROM mcp_servers WHERE id = ?", (server_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    if row[2]:
+        raise HTTPException(status_code=403, detail="Cannot delete builtin MCP server")
+
+    # Check if any agents reference this server
+    async with db.execute(
+        "SELECT a.id, a.name FROM agents a "
+        "JOIN agent_mcp_servers ams ON a.id = ams.agent_id "
+        "WHERE ams.mcp_server_id = ?",
+        (server_id,),
+    ) as cur:
+        agents = await cur.fetchall()
+    if agents:
+        agent_names = [a[1] for a in agents]
         raise HTTPException(
-            status_code=403,
-            detail=f"Cannot delete builtin MCP server '{server_name}'",
+            status_code=409,
+            detail=f"Cannot delete: server is added to agents: {', '.join(agent_names)}",
         )
-    config = _read_system_mcp_config()
-    servers = config.get("mcpServers", {})
-    if server_name not in servers:
-        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
-    del servers[server_name]
-    _write_system_mcp_config(config)
-    return {"status": "ok", "removed": server_name}
+
+    await db.execute("DELETE FROM mcp_servers WHERE id = ?", (server_id,))
+    await db.commit()
+    return {"status": "ok", "removed": row[1]}
 
 
 # --- Containers API ---

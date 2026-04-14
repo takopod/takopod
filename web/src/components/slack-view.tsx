@@ -113,12 +113,19 @@ export function SlackView() {
     const res = await fetch("/api/agents")
     if (!res.ok) return
     const agentList: Agent[] = await res.json()
-    setAgents(
-      agentList.map((agent) => ({
-        agent,
-        enabled: agent.slack_enabled ?? false,
-      })),
+    const withStatus = await Promise.all(
+      agentList.map(async (agent) => {
+        try {
+          const r = await fetch(`/api/agents/${agent.id}/slack`)
+          if (r.ok) {
+            const data = await r.json()
+            return { agent, enabled: data.enabled as boolean }
+          }
+        } catch { /* ignore */ }
+        return { agent, enabled: false }
+      }),
     )
+    setAgents(withStatus)
   }, [])
 
   const fetchThreadTtl = useCallback(async () => {
@@ -435,9 +442,6 @@ export function SlackView() {
                 >
                   <div>
                     <div className="text-sm">{agent.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {agent.agent_type}
-                    </div>
                   </div>
                   <button
                     onClick={() => handleToggleAgent(agent.id, enabled)}

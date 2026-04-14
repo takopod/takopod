@@ -57,12 +57,19 @@ export function GitHubView() {
     const res = await fetch("/api/agents")
     if (!res.ok) return
     const agentList: Agent[] = await res.json()
-    setAgents(
-      agentList.map((agent) => ({
-        agent,
-        enabled: agent.github_enabled ?? false,
-      })),
+    const withStatus = await Promise.all(
+      agentList.map(async (agent) => {
+        try {
+          const r = await fetch(`/api/agents/${agent.id}/github`)
+          if (r.ok) {
+            const data = await r.json()
+            return { agent, enabled: data.enabled as boolean }
+          }
+        } catch { /* ignore */ }
+        return { agent, enabled: false }
+      }),
     )
+    setAgents(withStatus)
   }, [])
 
   const loadAll = useCallback(async () => {
@@ -261,9 +268,6 @@ export function GitHubView() {
                 >
                   <div>
                     <div className="text-sm">{agent.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {agent.agent_type}
-                    </div>
                   </div>
                   <button
                     onClick={() => handleToggleAgent(agent.id, enabled)}

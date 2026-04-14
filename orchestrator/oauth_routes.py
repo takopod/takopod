@@ -2,58 +2,48 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
+from orchestrator.db import get_db
 from orchestrator.oauth import FileTokenStorage, flow_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SYSTEM_MCP_CONFIG_PATH = Path("data/mcp-defaults.json")
 
-
-def _get_server_url(server_name: str) -> str:
-    """Look up the URL for an HTTP MCP server from global config."""
-    if not SYSTEM_MCP_CONFIG_PATH.is_file():
+async def _get_server_url(server_name: str) -> str:
+    """Look up the URL for an HTTP MCP server from the database."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT transport, url FROM mcp_servers WHERE name = ?",
+        (server_name,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
         raise HTTPException(
             status_code=404, detail=f"Server '{server_name}' not found",
         )
-    try:
-        config = json.loads(SYSTEM_MCP_CONFIG_PATH.read_text())
-    except (json.JSONDecodeError, OSError):
-        raise HTTPException(
-            status_code=404, detail=f"Server '{server_name}' not found",
-        )
-
-    server = config.get("mcpServers", {}).get(server_name)
-    if not server:
-        raise HTTPException(
-            status_code=404, detail=f"Server '{server_name}' not found",
-        )
-    if server.get("transport") != "http":
+    if row[0] != "http":
         raise HTTPException(
             status_code=400,
             detail=f"Server '{server_name}' is not an HTTP transport server",
         )
-    url = server.get("url", "")
-    if not url:
+    if not row[1]:
         raise HTTPException(
             status_code=400,
             detail=f"Server '{server_name}' has no URL configured",
         )
-    return url
+    return row[1]
 
 
 @router.get("/oauth/start/{server_name}")
 async def start_oauth(server_name: str):
     """Initiate OAuth flow for an HTTP MCP server."""
-    server_url = _get_server_url(server_name)
+    server_url = await _get_server_url(server_name)
     try:
         authorize_url = await flow_manager.start_flow(server_name, server_url)
     except RuntimeError as exc:

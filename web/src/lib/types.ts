@@ -77,12 +77,9 @@ export interface Agent {
   id: string
   name: string
   icon: string
-  agent_type: string
   status: string
   created_at: string
   container_status?: string | null
-  slack_enabled?: boolean
-  github_enabled?: boolean
   container_memory?: string
   container_cpus?: string
 }

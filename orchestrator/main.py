@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from orchestrator.boot_recovery import boot_recovery
 from orchestrator.container_manager import build_image, ensure_network
 from orchestrator.db import connect, disconnect, run_migrations
+from orchestrator.mcp_seed import seed_builtin_mcp_servers
 from orchestrator.ollama import check_ollama_status
 from orchestrator.oauth_routes import router as oauth_router
 from orchestrator.routes import router
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     global _schema_version
     db = await connect()
     _schema_version = await run_migrations(db)
+    await seed_builtin_mcp_servers(db)
 
     await boot_recovery()
 

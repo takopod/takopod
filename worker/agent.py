@@ -74,7 +74,7 @@ def _build_system_prompt(
             agents = json.loads(agents_json.read_text())
             if agents:
                 agent_list = "\n".join(
-                    f"- {a['name']} ({a.get('agent_type', 'unknown')})"
+                    f"- {a['name']}"
                     for a in agents
                 )
                 parts.append(

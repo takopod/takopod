@@ -19,13 +19,6 @@ import { McpStatusPanel } from "@/components/mcp-status-panel"
 import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
@@ -47,11 +40,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 
-interface Template {
-  id: string
-  name: string
-}
-
 export function App() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -61,13 +49,7 @@ export function App() {
     () => localStorage.getItem("rhclaw:selectedAgentId"),
   )
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [templates, setTemplates] = useState<Template[]>([])
   const [newAgentName, setNewAgentName] = useState("")
-  const [newAgentType, setNewAgentType] = useState("default")
-  const [newSlackEnabled, setNewSlackEnabled] = useState(false)
-  const [slackConfigured, setSlackConfigured] = useState(false)
-  const [newGitHubEnabled, setNewGitHubEnabled] = useState(false)
-  const [githubConfigured, setGithubConfigured] = useState(false)
 
   useEffect(() => {
     if (selectedAgentId) {
@@ -98,27 +80,8 @@ export function App() {
     fetchAgents()
   }, [fetchAgents])
 
-  const openCreateDialog = async () => {
-    const [templatesRes, slackRes, githubRes] = await Promise.all([
-      fetch("/api/templates"),
-      fetch("/api/slack/config"),
-      fetch("/api/github/config"),
-    ])
-    if (templatesRes.ok) {
-      setTemplates(await templatesRes.json())
-    }
-    if (slackRes.ok) {
-      const data = await slackRes.json()
-      setSlackConfigured(data.configured)
-    }
-    if (githubRes.ok) {
-      const data = await githubRes.json()
-      setGithubConfigured(data.configured)
-    }
+  const openCreateDialog = () => {
     setNewAgentName("")
-    setNewAgentType("default")
-    setNewSlackEnabled(false)
-    setNewGitHubEnabled(false)
     setShowCreateDialog(true)
   }
 
@@ -128,7 +91,7 @@ export function App() {
     const res = await fetch("/api/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newAgentName.trim(), agent_type: newAgentType, slack_enabled: newSlackEnabled, github_enabled: newGitHubEnabled }),
+      body: JSON.stringify({ name: newAgentName.trim() }),
     })
     if (res.ok) {
       const agent: Agent = await res.json()
@@ -334,61 +297,6 @@ export function App() {
                   autoFocus
                   onKeyDown={(e) => e.key === "Enter" && handleCreateAgent()}
                 />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="agent-type" className="text-sm">Type</Label>
-                <Select value={newAgentType} onValueChange={setNewAgentType}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {templates.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="slack-enabled"
-                  checked={newSlackEnabled}
-                  onChange={(e) => setNewSlackEnabled(e.target.checked)}
-                  disabled={!slackConfigured}
-                  className="size-4 rounded border"
-                />
-                <Label
-                  htmlFor="slack-enabled"
-                  className={`text-sm ${!slackConfigured ? "text-muted-foreground" : ""}`}
-                  title={!slackConfigured ? "Configure Slack credentials in Settings first" : ""}
-                >
-                  Enable Slack integration
-                </Label>
-                {!slackConfigured && (
-                  <span className="text-xs text-muted-foreground">(not configured)</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="github-enabled"
-                  checked={newGitHubEnabled}
-                  onChange={(e) => setNewGitHubEnabled(e.target.checked)}
-                  disabled={!githubConfigured}
-                  className="size-4 rounded border"
-                />
-                <Label
-                  htmlFor="github-enabled"
-                  className={`text-sm ${!githubConfigured ? "text-muted-foreground" : ""}`}
-                  title={!githubConfigured ? "Configure GitHub token in Settings first" : ""}
-                >
-                  Enable GitHub integration
-                </Label>
-                {!githubConfigured && (
-                  <span className="text-xs text-muted-foreground">(not configured)</span>
-                )}
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <Button

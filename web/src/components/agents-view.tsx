@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import {
   DropdownMenu,
@@ -45,9 +44,7 @@ import {
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 
-interface AgentDetail extends Agent {
-  slack_enabled?: boolean
-}
+interface AgentDetail extends Agent {}
 
 const IDENTITY_FILES = [
   { file: "CLAUDE.md", description: "System prompt & instructions" },
@@ -56,6 +53,7 @@ const IDENTITY_FILES = [
 ]
 
 interface McpServer {
+  id: string
   name: string
   enabled?: boolean
   builtin?: boolean
@@ -133,23 +131,23 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
     fetchServers()
   }, [fetchServers])
 
-  const handleToggle = async (name: string, enabled: boolean) => {
-    setToggling(name)
-    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${name}`, {
+  const handleToggle = async (id: string, enabled: boolean) => {
+    setToggling(id)
+    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
     })
     if (res.ok) {
       setServers((prev) =>
-        prev.map((s) => (s.name === name ? { ...s, enabled } : s)),
+        prev.map((s) => (s.id === id ? { ...s, enabled } : s)),
       )
     }
     setToggling(null)
   }
 
-  const handleAdd = async (name: string) => {
-    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${name}`, {
+  const handleAdd = async (id: string) => {
+    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
       method: "POST",
     })
     if (res.ok) {
@@ -160,8 +158,8 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
     }
   }
 
-  const handleRemove = async (name: string) => {
-    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${name}`, {
+  const handleRemove = async (id: string) => {
+    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
       method: "DELETE",
     })
     if (res.ok) {
@@ -239,7 +237,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                         <Button
                           variant="ghost"
                           size="icon-sm"
-                          onClick={() => handleAdd(srv.name)}
+                          onClick={() => handleAdd(srv.id)}
                         >
                           <Plus className="size-3.5" />
                         </Button>
@@ -268,9 +266,9 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                       type="button"
                       className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                         srv.enabled ? "bg-primary" : "bg-input"
-                      } ${toggling === srv.name ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                      disabled={toggling === srv.name}
-                      onClick={() => handleToggle(srv.name, !srv.enabled)}
+                      } ${toggling === srv.id ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                      disabled={toggling === srv.id}
+                      onClick={() => handleToggle(srv.id, !srv.enabled)}
                     >
                       <span
                         className={`pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
@@ -298,7 +296,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        onClick={() => handleRemove(srv.name)}
+                        onClick={() => handleRemove(srv.id)}
                       >
                         <X className="size-3.5" />
                       </Button>
@@ -504,7 +502,6 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
               <AgentIcon name={detail.icon} className="size-4" />
               {detail.name}
             </span>
-            <Badge variant="secondary">{detail.agent_type}</Badge>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm">

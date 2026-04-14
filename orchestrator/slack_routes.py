@@ -69,6 +69,11 @@ async def put_slack_config(req: SlackConfigRequest):
     SLACK_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = req.model_dump()
     SLACK_CONFIG_PATH.write_text(json.dumps(data, indent=2))
+
+    from orchestrator.mcp_seed import seed_builtin_mcp_servers
+    db = await get_db()
+    await seed_builtin_mcp_servers(db)
+
     return {
         "configured": True,
         "xoxc_token": _mask_token(data["xoxc_token"]),
@@ -81,6 +86,11 @@ async def put_slack_config(req: SlackConfigRequest):
 async def delete_slack_config():
     if SLACK_CONFIG_PATH.is_file():
         SLACK_CONFIG_PATH.unlink()
+
+    from orchestrator.mcp_seed import seed_builtin_mcp_servers
+    db = await get_db()
+    await seed_builtin_mcp_servers(db)
+
     return {"configured": False}
 
 
@@ -115,13 +125,20 @@ async def get_slack_status():
 async def get_agent_slack(agent_id: str):
     db = await get_db()
     async with db.execute(
-        "SELECT slack_enabled FROM agents WHERE id = ? AND status = 'active'",
+        "SELECT id FROM agents WHERE id = ? AND status = 'active'",
+        (agent_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    async with db.execute(
+        "SELECT ams.enabled FROM agent_mcp_servers ams "
+        "JOIN mcp_servers ms ON ms.id = ams.mcp_server_id "
+        "WHERE ams.agent_id = ? AND ms.name = 'slack'",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    return {"enabled": bool(row[0])}
+    return {"enabled": bool(row[0]) if row else False}
 
 
 @router.put("/agents/{agent_id}/slack")
@@ -131,13 +148,23 @@ async def put_agent_slack(agent_id: str, req: SlackAgentToggle):
         "SELECT id FROM agents WHERE id = ? AND status = 'active'",
         (agent_id,),
     ) as cur:
-        row = await cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Look up the slack MCP server
+    async with db.execute(
+        "SELECT id FROM mcp_servers WHERE name = 'slack' AND builtin = 1",
+    ) as cur:
+        srv = await cur.fetchone()
+    if not srv:
+        raise HTTPException(status_code=404, detail="Slack integration not configured")
+
+    # Upsert into agent_mcp_servers
     await db.execute(
-        "UPDATE agents SET slack_enabled = ? WHERE id = ?",
-        (1 if req.enabled else 0, agent_id),
+        "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id, enabled) "
+        "VALUES (?, ?, ?) "
+        "ON CONFLICT(agent_id, mcp_server_id) DO UPDATE SET enabled = excluded.enabled",
+        (agent_id, srv[0], 1 if req.enabled else 0),
     )
     await db.commit()
     return {"enabled": req.enabled}

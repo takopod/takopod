@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS agents (
     id               TEXT PRIMARY KEY,
     name             TEXT NOT NULL,
     icon             TEXT NOT NULL DEFAULT '',
-    agent_type       TEXT NOT NULL DEFAULT 'default',
     host_dir         TEXT NOT NULL,
     container_memory TEXT NOT NULL DEFAULT '2g',
     container_cpus   TEXT NOT NULL DEFAULT '2',

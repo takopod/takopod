@@ -15,8 +15,7 @@ PODMAN = "/opt/podman/bin/podman"
 NETWORK = "rhclaw-internal"
 IMAGE = "rhclaw-worker"
 AGENTS_DIR = Path("data/agents")
-MCP_CONFIGS_DIR = Path("data/mcp-configs")
-TEMPLATES_DIR = Path("agent_templates")
+SEED_DIR = Path("agent_templates/default")
 
 
 def slugify(name: str) -> str:
@@ -64,7 +63,6 @@ async def build_image() -> None:
 
 def create_agent_workspace(
     agent_id: str,
-    agent_type: str,
     agent_name: str | None = None,
 ) -> Path:
     slug = slugify(agent_name) if agent_name else agent_id
@@ -73,15 +71,12 @@ def create_agent_workspace(
     (host_dir / "memory").mkdir(exist_ok=True)
     (host_dir / "config").mkdir(exist_ok=True)
 
-    template_dir = TEMPLATES_DIR / agent_type
-    if not template_dir.is_dir():
-        template_dir = TEMPLATES_DIR / "default"
-
     for filename in ("CLAUDE.md", "SOUL.md", "MEMORY.md"):
         content = None
         target = host_dir / filename
-        if (template_dir / filename).is_file():
-            content = (template_dir / filename).read_text()
+        seed_file = SEED_DIR / filename
+        if seed_file.is_file():
+            content = seed_file.read_text()
 
         # Prepend agent identity to MEMORY.md
         if filename == "MEMORY.md" and agent_name and content:
@@ -92,17 +87,6 @@ def create_agent_workspace(
 
         if content:
             target.write_text(content)
-
-    # Skills are synced separately via sync_agent_skills() after DB rows are created.
-    # Template-specific skills are still copied here as overrides.
-    dest_skills = host_dir / ".claude" / "skills"
-    template_skills = template_dir / ".claude" / "skills"
-    if template_skills.is_dir():
-        dest_skills.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(template_skills, dest_skills, dirs_exist_ok=True)
-
-    # MCP servers are now configured globally and toggled per-agent.
-    # No per-agent MCP config file is created at workspace setup.
 
     return host_dir
 
@@ -229,12 +213,12 @@ async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:
 async def write_agents_json(agent_id: str, host_dir: Path) -> None:
     db = await get_db()
     async with db.execute(
-        "SELECT name, agent_type FROM agents WHERE id != ? AND status = 'active'",
+        "SELECT name FROM agents WHERE id != ? AND status = 'active'",
         (agent_id,),
     ) as cur:
         rows = await cur.fetchall()
 
-    agents = [{"name": row[0], "agent_type": row[1]} for row in rows]
+    agents = [{"name": row[0]} for row in rows]
     manifest_path = host_dir / "agents.json"
     manifest_path.write_text(json.dumps(agents, indent=2))
 

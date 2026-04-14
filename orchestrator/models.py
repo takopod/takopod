@@ -54,21 +54,15 @@ class StatusFrame(BaseModel):
 
 class CreateAgentRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    agent_type: str = "default"
-    slack_enabled: bool = False
-    github_enabled: bool = False
 
 
 class AgentResponse(BaseModel):
     id: str
     name: str
     icon: str = ""
-    agent_type: str
     status: str
     created_at: str
     container_status: str | None = None
-    slack_enabled: bool = False
-    github_enabled: bool = False
     container_memory: str = "2g"
     container_cpus: str = "2"
 
@@ -123,15 +117,26 @@ class ContainerResponse(BaseModel):
     pid: int | None = None
 
 
-class McpServerConfig(BaseModel):
-    transport: Literal["stdio", "http"] = "stdio"
-    # stdio fields
+class McpServerResponse(BaseModel):
+    id: str
+    name: str
+    transport: str = "stdio"
     command: str = ""
     args: list[str] = []
-    # http fields
+    url: str = ""
+    auth: str = "none"
+    env: dict[str, str] = {}
+    timeout: float = 30.0
+    builtin: bool = False
+
+
+class CreateMcpServerRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    transport: Literal["stdio", "http"] = "stdio"
+    command: str = ""
+    args: list[str] = []
     url: str = ""
     auth: Literal["none", "basic", "oauth"] = "none"
-    # common fields
     env: dict[str, str] = {}
     timeout: float = 30.0
 
@@ -144,8 +149,14 @@ class McpServerConfig(BaseModel):
         return self
 
 
-class McpConfigRequest(BaseModel):
-    mcpServers: dict[str, McpServerConfig]
+class UpdateMcpServerRequest(BaseModel):
+    transport: Literal["stdio", "http"] | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    url: str | None = None
+    auth: Literal["none", "basic", "oauth"] | None = None
+    env: dict[str, str] | None = None
+    timeout: float | None = None
 
 
 class McpServerToggle(BaseModel):

@@ -7,22 +7,21 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Info, Pencil, Plus, Trash2, X } from "lucide-react"
 
-interface McpServerConfig {
-  transport?: "stdio" | "http"
-  command?: string
-  args?: string[]
-  url?: string
-  auth?: "none" | "basic" | "oauth"
-  env?: Record<string, string>
-  builtin?: boolean
-}
-
-interface McpConfig {
-  mcpServers: Record<string, McpServerConfig>
+interface McpServer {
+  id: string
+  name: string
+  transport: "stdio" | "http"
+  command: string
+  args: string[]
+  url: string
+  auth: "none" | "basic" | "oauth"
+  env: Record<string, string>
+  timeout: number
+  builtin: boolean
 }
 
 export function SystemMcpView() {
-  const [config, setConfig] = useState<McpConfig>({ mcpServers: {} })
+  const [servers, setServers] = useState<McpServer[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [newName, setNewName] = useState("")
@@ -43,23 +42,21 @@ export function SystemMcpView() {
   const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
   const [authorizing, setAuthorizing] = useState<string | null>(null)
 
-  const fetchConfig = useCallback(async () => {
-    const res = await fetch("/api/mcp")
+  const fetchServers = useCallback(async () => {
+    const res = await fetch("/api/mcp/servers")
     if (res.ok) {
-      const data = await res.json()
-      setConfig(data)
+      const data: McpServer[] = await res.json()
+      setServers(data)
       // Fetch OAuth status for all oauth-configured servers
-      const oauthServers = Object.entries(
-        data.mcpServers as Record<string, McpServerConfig>,
-      ).filter(([, srv]) => srv.auth === "oauth")
+      const oauthServers = data.filter((s) => s.auth === "oauth")
       const statuses: Record<string, boolean> = {}
       await Promise.all(
-        oauthServers.map(async ([name]) => {
+        oauthServers.map(async (srv) => {
           try {
-            const r = await fetch(`/oauth/status/${name}`)
+            const r = await fetch(`/oauth/status/${srv.name}`)
             if (r.ok) {
               const s = await r.json()
-              statuses[name] = s.authorized
+              statuses[srv.name] = s.authorized
             }
           } catch {
             // ignore
@@ -72,8 +69,8 @@ export function SystemMcpView() {
   }, [])
 
   useEffect(() => {
-    fetchConfig()
-  }, [fetchConfig])
+    fetchServers()
+  }, [fetchServers])
 
   const handleAuthorize = async (name: string) => {
     setAuthorizing(name)
@@ -100,44 +97,48 @@ export function SystemMcpView() {
     }
   }
 
+  const parseEnvVars = (text: string): Record<string, string> => {
+    const env: Record<string, string> = {}
+    for (const line of text.split("\n")) {
+      const eq = line.indexOf("=")
+      if (eq > 0) {
+        env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+      }
+    }
+    return env
+  }
+
   const handleAdd = async () => {
     if (!newName.trim()) return
     if (newTransport === "stdio" && !newCommand.trim()) return
     if (newTransport === "http" && !newUrl.trim()) return
 
     setSaving(true)
-    const env: Record<string, string> = {}
-    for (const line of newEnvVars.split("\n")) {
-      const eq = line.indexOf("=")
-      if (eq > 0) {
-        env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
-      }
-    }
+    const env = parseEnvVars(newEnvVars)
 
-    let server: McpServerConfig
+    const body: Record<string, unknown> = {
+      name: newName.trim(),
+      transport: newTransport,
+    }
     if (newTransport === "http") {
-      server = { transport: "http", url: newUrl.trim(), auth: newAuth }
+      body.url = newUrl.trim()
+      body.auth = newAuth
     } else {
+      body.command = newCommand.trim()
       const args = newArgs.trim()
         ? newArgs.split("\n").map((a) => a.trim()).filter(Boolean)
         : []
-      server = { transport: "stdio", command: newCommand.trim(), args }
+      if (args.length > 0) body.args = args
     }
-    if (Object.keys(env).length > 0) server.env = env
+    if (Object.keys(env).length > 0) body.env = env
 
-    const updated: McpConfig = {
-      mcpServers: {
-        ...config.mcpServers,
-        [newName.trim()]: server,
-      },
-    }
-    const res = await fetch("/api/mcp", {
-      method: "PUT",
+    const res = await fetch("/api/mcp/servers", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updated),
+      body: JSON.stringify(body),
     })
     if (res.ok) {
-      setConfig(await res.json())
+      await fetchServers()
       setShowAdd(false)
       setNewName("")
       setNewTransport("stdio")
@@ -150,21 +151,18 @@ export function SystemMcpView() {
     setSaving(false)
   }
 
-  const handleRemove = async (name: string) => {
-    if (!confirm(`Remove "${name}" from default MCP servers?`)) return
-    const res = await fetch(`/api/mcp/servers/${name}`, {
+  const handleRemove = async (srv: McpServer) => {
+    if (!confirm(`Remove "${srv.name}" from MCP servers?`)) return
+    const res = await fetch(`/api/mcp/servers/${srv.id}`, {
       method: "DELETE",
     })
     if (res.ok) {
-      setConfig((prev) => {
-        const { [name]: _, ...rest } = prev.mcpServers
-        return { mcpServers: rest }
-      })
+      setServers((prev) => prev.filter((s) => s.id !== srv.id))
     }
   }
 
-  const startEdit = (name: string, srv: McpServerConfig) => {
-    setEditing(name)
+  const startEdit = (srv: McpServer) => {
+    setEditing(srv.id)
     setEditTransport(srv.transport || "stdio")
     setEditCommand(srv.command || "")
     setEditArgs((srv.args || []).join("\n"))
@@ -185,46 +183,32 @@ export function SystemMcpView() {
     if (editTransport === "http" && !editUrl.trim()) return
 
     setSaving(true)
-    const env: Record<string, string> = {}
-    for (const line of editEnvVars.split("\n")) {
-      const eq = line.indexOf("=")
-      if (eq > 0) {
-        env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
-      }
-    }
+    const env = parseEnvVars(editEnvVars)
 
-    let server: McpServerConfig
+    const body: Record<string, unknown> = { transport: editTransport }
     if (editTransport === "http") {
-      server = { transport: "http", url: editUrl.trim(), auth: editAuth }
+      body.url = editUrl.trim()
+      body.auth = editAuth
     } else {
+      body.command = editCommand.trim()
       const args = editArgs.trim()
         ? editArgs.split("\n").map((a) => a.trim()).filter(Boolean)
         : []
-      server = { transport: "stdio", command: editCommand.trim(), args }
+      body.args = args
     }
-    if (Object.keys(env).length > 0) server.env = env
+    body.env = env
 
-    const updated: McpConfig = {
-      mcpServers: {
-        ...config.mcpServers,
-        [editing]: server,
-      },
-    }
-    const res = await fetch("/api/mcp", {
+    const res = await fetch(`/api/mcp/servers/${editing}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updated),
+      body: JSON.stringify(body),
     })
     if (res.ok) {
-      setConfig(await res.json())
+      await fetchServers()
       setEditing(null)
     }
     setSaving(false)
   }
-
-  const servers = Object.entries(config.mcpServers).sort(
-    ([, a], [, b]) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0),
-  )
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -245,8 +229,8 @@ export function SystemMcpView() {
           <div className="mb-4 flex items-start gap-2.5 rounded-md border border-primary/20 bg-primary/5 px-4 py-3">
             <Info className="mt-0.5 size-4 shrink-0 text-primary" />
             <p className="text-xs text-muted-foreground">
-              They are included in each new agent's configuration at creation
-              time. Changes here do not affect existing agents.
+              MCP servers available to assign to agents. Add a server here,
+              then enable it per-agent from the agent's MCP settings.
             </p>
           </div>
 
@@ -256,16 +240,16 @@ export function SystemMcpView() {
             <div className="flex flex-col gap-3">
               {servers.length === 0 && !showAdd && (
                 <p className="text-sm text-muted-foreground">
-                  No default MCP servers configured. Add one to give new agents
-                  external tool integrations out of the box.
+                  No MCP servers configured. Add one to give agents
+                  external tool integrations.
                 </p>
               )}
 
-              {servers.map(([name, srv]) =>
-                editing === name ? (
-                  <div key={name} className="rounded-md border p-4">
+              {servers.map((srv) =>
+                editing === srv.id ? (
+                  <div key={srv.id} className="rounded-md border p-4">
                     <div className="mb-3 flex items-center justify-between">
-                      <span className="text-sm font-medium">{name}</span>
+                      <span className="text-sm font-medium">{srv.name}</span>
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -388,23 +372,23 @@ export function SystemMcpView() {
                   </div>
                 ) : (
                   <div
-                    key={name}
+                    key={srv.id}
                     className="flex items-start justify-between rounded-md border px-4 py-3"
                   >
                     <div className="flex flex-col gap-1">
-                      <span className="text-sm font-medium">{name}</span>
+                      <span className="text-sm font-medium">{srv.name}</span>
                       <code className="text-xs text-muted-foreground">
                         {srv.builtin
-                          ? `Managed by ${name} integration settings`
+                          ? `Managed by ${srv.name} integration settings`
                           : srv.transport === "http"
                             ? `HTTP: ${srv.url}`
                             : `${srv.command || ""} ${(srv.args || []).join(" ")}`}
                       </code>
                       {srv.auth === "oauth" && (
                         <span
-                          className={`text-xs ${oauthStatus[name] ? "text-green-500" : "text-yellow-500"}`}
+                          className={`text-xs ${oauthStatus[srv.name] ? "text-green-500" : "text-yellow-500"}`}
                         >
-                          {oauthStatus[name] ? "Authorized" : "Not authorized"}
+                          {oauthStatus[srv.name] ? "Authorized" : "Not authorized"}
                         </span>
                       )}
                       {srv.auth !== "oauth" &&
@@ -420,12 +404,12 @@ export function SystemMcpView() {
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={authorizing === name}
-                          onClick={() => handleAuthorize(name)}
+                          disabled={authorizing === srv.name}
+                          onClick={() => handleAuthorize(srv.name)}
                         >
-                          {authorizing === name
+                          {authorizing === srv.name
                             ? "Authorizing..."
-                            : oauthStatus[name]
+                            : oauthStatus[srv.name]
                               ? "Re-authorize"
                               : "Authorize"}
                         </Button>
@@ -439,14 +423,14 @@ export function SystemMcpView() {
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            onClick={() => startEdit(name, srv)}
+                            onClick={() => startEdit(srv)}
                           >
                             <Pencil className="size-3.5" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            onClick={() => handleRemove(name)}
+                            onClick={() => handleRemove(srv)}
                           >
                             <Trash2 className="size-3.5 text-destructive" />
                           </Button>
@@ -461,7 +445,7 @@ export function SystemMcpView() {
                 <div className="rounded-md border p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <span className="text-sm font-medium">
-                      Add Default MCP Server
+                      Add MCP Server
                     </span>
                     <Button
                       variant="ghost"
@@ -480,7 +464,7 @@ export function SystemMcpView() {
                         id="mcp-name"
                         value={newName}
                         onChange={(e) => setNewName(e.target.value)}
-                        placeholder="e.g. github"
+                        placeholder="e.g. jira"
                         autoFocus
                       />
                     </div>
@@ -521,7 +505,7 @@ export function SystemMcpView() {
                             value={newArgs}
                             onChange={(e) => setNewArgs(e.target.value)}
                             placeholder={
-                              "-y\n@modelcontextprotocol/server-github"
+                              "mcp-atlassian\n--jira-url\nhttps://your-domain.atlassian.net"
                             }
                             className="min-h-20 resize-none font-mono text-xs"
                             spellCheck={false}
@@ -575,7 +559,7 @@ export function SystemMcpView() {
                           placeholder={
                             newTransport === "http" && newAuth === "basic"
                               ? "MCP_USERNAME=user@example.com\nMCP_API_TOKEN=your-api-token"
-                              : "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."
+                              : "JIRA_API_TOKEN=your-api-token"
                           }
                           className="min-h-16 resize-none font-mono text-xs"
                           spellCheck={false}
