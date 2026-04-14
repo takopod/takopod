@@ -90,21 +90,28 @@ async def store_slack_message(
     content: str,
     channel_id: str,
     thread_ts: str,
+    *,
+    attachments: list[str] | None = None,
 ) -> None:
     """Store a user message from Slack and queue it for processing."""
     db = await get_db()
-    metadata = json.dumps({
+    meta: dict = {
         "source": "slack",
         "channel_id": channel_id,
         "thread_ts": thread_ts,
-    })
+    }
+    if attachments:
+        meta["attachments"] = attachments
+    metadata = json.dumps(meta)
     await db.execute(
         "INSERT INTO messages (id, agent_id, role, content, metadata) "
         "VALUES (?, ?, 'user', ?, ?)",
         (message_id, agent_id, content, metadata),
     )
     await db.commit()
-    await queue_message(agent_id, message_id, content, source="slack")
+    await queue_message(
+        agent_id, message_id, content, source="slack", attachments=attachments,
+    )
 
 
 async def queue_system_command(agent_id: str, command: str) -> None:

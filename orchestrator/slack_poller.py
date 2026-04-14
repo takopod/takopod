@@ -12,7 +12,9 @@ import asyncio
 import logging
 import re
 import uuid
+from pathlib import Path
 
+import httpx
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
@@ -163,26 +165,48 @@ async def _poll_channel(channel_id: str, last_ts: str) -> None:
     for msg in reversed(messages):
         ts = msg.get("ts", "")
 
-        # Skip bot messages and subtypes (joins, leaves, etc.)
-        if msg.get("bot_id") or msg.get("subtype"):
+        # Skip bot messages and non-content subtypes (joins, leaves, etc.)
+        # Allow "file_share" subtype — that's a user sharing files/images.
+        if msg.get("bot_id"):
+            continue
+        subtype = msg.get("subtype")
+        if subtype and subtype != "file_share":
             continue
 
         text = msg.get("text", "")
+        has_files = bool(msg.get("files"))
         if not text:
             continue
 
         mentioned = _parse_agent_mentions(text, agent_map)
+        slack_files = msg.get("files", [])
+        slack_config = _read_slack_config() if slack_files else None
         for agent_name in mentioned:
             agent_id = agent_map[agent_name]
             # Strip the @AgentName prefix from the prompt
             prompt = _extract_prompt(text, agent_name)
-            if not prompt.strip():
+            if not prompt.strip() and not has_files:
                 continue
+
+            # Download any attached files into the agent workspace
+            attachments: list[str] = []
+            if slack_files and slack_config:
+                attachments = await _download_slack_files(
+                    slack_files, agent_id, slack_config,
+                )
+
+            if not prompt.strip():
+                prompt = "See attached files."
+
             try:
-                await _dispatch_to_agent(agent_id, prompt, channel_id, ts)
+                await _dispatch_to_agent(
+                    agent_id, prompt, channel_id, ts,
+                    attachments=attachments or None,
+                )
                 logger.info(
-                    "Dispatched Slack message to agent %s (%s)",
-                    agent_name, agent_id[:8],
+                    "Dispatched Slack message to agent %s (%s), "
+                    "%d attachment(s)",
+                    agent_name, agent_id[:8], len(attachments),
                 )
             except Exception:
                 logger.exception(
@@ -250,6 +274,90 @@ def _extract_prompt(text: str, agent_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Slack file downloads
+# ---------------------------------------------------------------------------
+
+UPLOAD_MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+
+
+async def _download_slack_files(
+    files: list[dict], agent_id: str, config: dict,
+) -> list[str]:
+    """Download Slack file attachments into the agent workspace.
+
+    Returns a list of relative paths (relative to host_dir) suitable for
+    passing as ``attachments`` to the message queue.
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT host_dir FROM agents WHERE id = ? AND status = 'active'",
+        (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        logger.warning("Cannot download Slack files: agent %s not found", agent_id)
+        return []
+
+    host_dir = Path(row[0]).resolve()
+    upload_id = str(uuid.uuid4())[:8]
+    upload_dir = host_dir / "uploads" / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    token = config["xoxc_token"]
+    cookie = f"d={config['d_cookie']}"
+    headers = {"Authorization": f"Bearer {token}", "Cookie": cookie}
+
+    downloaded: list[str] = []
+    async with httpx.AsyncClient(timeout=30) as client:
+        for f in files:
+            url = f.get("url_private_download") or f.get("url_private")
+            if not url:
+                continue
+            size = f.get("size", 0)
+            if size > UPLOAD_MAX_FILE_SIZE:
+                logger.warning(
+                    "Skipping Slack file %s: too large (%d bytes)",
+                    f.get("name", "?"), size,
+                )
+                continue
+
+            name = f.get("name", "attachment")
+            safe_name = Path(name).name
+            if not safe_name or safe_name in (".", ".."):
+                safe_name = "attachment"
+
+            try:
+                resp = await client.get(url, headers=headers, follow_redirects=True)
+                resp.raise_for_status()
+            except httpx.HTTPError:
+                logger.exception("Failed to download Slack file %s", safe_name)
+                continue
+
+            dest = upload_dir / safe_name
+            # Avoid clobbering if multiple files share the same name
+            if dest.exists():
+                stem = dest.stem
+                suffix = dest.suffix
+                counter = 1
+                while dest.exists():
+                    dest = upload_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
+            dest.write_bytes(resp.content)
+            rel_path = str(dest.relative_to(host_dir))
+            downloaded.append(rel_path)
+            logger.info("Downloaded Slack file %s → %s", safe_name, rel_path)
+
+    # Clean up empty upload dir if nothing was downloaded
+    if not downloaded:
+        try:
+            upload_dir.rmdir()
+        except OSError:
+            pass
+
+    return downloaded
+
+
+# ---------------------------------------------------------------------------
 # Dispatch to agent
 # ---------------------------------------------------------------------------
 
@@ -259,6 +367,8 @@ async def _dispatch_to_agent(
     content: str,
     channel_id: str,
     thread_ts: str,
+    *,
+    attachments: list[str] | None = None,
 ) -> None:
     """Route a Slack message through the normal message pipeline."""
     from orchestrator.ipc import _inflight_source, store_slack_message
@@ -277,6 +387,7 @@ async def _dispatch_to_agent(
 
     await store_slack_message(
         agent_id, message_id, content, channel_id, thread_ts,
+        attachments=attachments,
     )
 
 
