@@ -229,6 +229,12 @@ class SlackPollingChannelUpdate(BaseModel):
     enabled: bool | None = None
 
 
+class SlackThreadRequest(BaseModel):
+    channel_id: str = Field(..., min_length=1)
+    thread_ts: str = Field(..., min_length=1)
+    agent_id: str = Field(..., min_length=1)
+
+
 class GitHubConfigRequest(BaseModel):
     personal_access_token: str
 

@@ -88,6 +88,9 @@ async def run_slack_poller() -> None:
                     if rid not in active_ids:
                         del last_poll[rid]
                         fail_count.pop(rid, None)
+
+            # Poll active threads regardless of channel polling toggle
+            await _poll_active_threads()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -232,6 +235,199 @@ async def _poll_channel(channel_id: str, last_ts: str) -> None:
             (highest_ts, channel_id),
         )
         await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Thread polling
+# ---------------------------------------------------------------------------
+
+
+async def _poll_active_threads() -> None:
+    """Poll all active threads for new replies and dispatch to agents."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT t.id, t.channel_id, t.thread_ts, t.agent_id, t.last_ts, "
+        "a.name AS agent_name "
+        "FROM slack_active_threads t "
+        "JOIN agents a ON a.id = t.agent_id AND a.status = 'active'",
+    ) as cur:
+        threads = await cur.fetchall()
+
+    if not threads:
+        return
+
+    client = _build_slack_client()
+    if client is None:
+        return
+
+    config = _read_slack_config()
+
+    for row_id, channel_id, thread_ts, agent_id, last_ts, agent_name in threads:
+        try:
+            await _poll_thread(
+                client, row_id, channel_id, thread_ts,
+                agent_id, agent_name, last_ts, config,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to poll thread %s/%s for agent %s",
+                channel_id, thread_ts, agent_name,
+            )
+
+
+async def _poll_thread(
+    client: WebClient,
+    row_id: str,
+    channel_id: str,
+    thread_ts: str,
+    agent_id: str,
+    agent_name: str,
+    last_ts: str,
+    config: dict | None,
+) -> None:
+    """Fetch new replies in a thread and dispatch to the agent.
+
+    Only replies that mention the agent (``AgentName: message``) are
+    dispatched — same mention-matching as channel polling.  When a mention
+    is found, the full thread history is fetched and prepended as context
+    so the agent can produce an informed response.
+    """
+    try:
+        response = await asyncio.to_thread(
+            client.conversations_replies,
+            channel=channel_id,
+            ts=thread_ts,
+            oldest=last_ts,
+            limit=50,
+        )
+    except SlackApiError as e:
+        logger.warning(
+            "Slack API error polling thread %s/%s: %s",
+            channel_id, thread_ts, e,
+        )
+        return
+
+    messages = response.get("messages", [])
+    if not messages:
+        return
+
+    highest_ts = last_ts
+    agent_map = {agent_name.lower(): agent_id}
+
+    # Collect messages that mention the agent
+    to_dispatch: list[dict] = []
+
+    for msg in messages:
+        ts = msg.get("ts", "")
+        if ts <= last_ts:
+            continue
+        if ts > highest_ts:
+            highest_ts = ts
+
+        if msg.get("bot_id"):
+            continue
+        subtype = msg.get("subtype")
+        if subtype and subtype != "file_share":
+            continue
+
+        text = msg.get("text", "")
+        if not text:
+            continue
+
+        mentioned = _parse_agent_mentions(text, agent_map)
+        if not mentioned:
+            continue
+
+        prompt = _extract_prompt(text, agent_name.lower())
+        has_files = bool(msg.get("files"))
+        if not prompt.strip() and not has_files:
+            continue
+
+        to_dispatch.append({"msg": msg, "prompt": prompt, "has_files": has_files})
+
+    # Fetch full thread history once if any mentions were found
+    thread_context = ""
+    if to_dispatch:
+        thread_context = await _fetch_thread_context(client, channel_id, thread_ts)
+
+    for item in to_dispatch:
+        msg = item["msg"]
+        prompt = item["prompt"]
+
+        # Download any attached files
+        attachments: list[str] = []
+        slack_files = msg.get("files", [])
+        if slack_files and config:
+            attachments = await _download_slack_files(
+                slack_files, agent_id, config,
+            )
+
+        if not prompt.strip():
+            prompt = "See attached files."
+
+        # Prepend thread context so the agent has full conversation history
+        if thread_context:
+            prompt = (
+                f"Here is the Slack thread conversation so far:\n"
+                f"---\n{thread_context}\n---\n\n"
+                f"Respond to: {prompt}"
+            )
+
+        try:
+            await _dispatch_to_agent(
+                agent_id, prompt, channel_id, thread_ts,
+                attachments=attachments or None,
+            )
+            logger.info(
+                "Dispatched thread reply to agent %s, %d attachment(s)",
+                agent_name, len(attachments),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch thread reply to agent %s",
+                agent_name,
+            )
+
+    # Update high-water mark
+    if highest_ts > last_ts:
+        db = await get_db()
+        await db.execute(
+            "UPDATE slack_active_threads SET last_ts = ? WHERE id = ?",
+            (highest_ts, row_id),
+        )
+        await db.commit()
+
+
+async def _fetch_thread_context(
+    client: WebClient,
+    channel_id: str,
+    thread_ts: str,
+) -> str:
+    """Fetch full thread history and format as readable context."""
+    try:
+        response = await asyncio.to_thread(
+            client.conversations_replies,
+            channel=channel_id,
+            ts=thread_ts,
+            limit=100,
+        )
+    except SlackApiError:
+        logger.exception("Failed to fetch thread context %s/%s", channel_id, thread_ts)
+        return ""
+
+    messages = response.get("messages", [])
+    if not messages:
+        return ""
+
+    lines: list[str] = []
+    for msg in messages:
+        user = msg.get("user", "bot")
+        text = msg.get("text", "")
+        if not text:
+            continue
+        lines.append(f"{user}: {text}")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

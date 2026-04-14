@@ -371,6 +371,18 @@ async def _process_event(
                     await post_slack_reply(ch, ts, event.get("content", ""))
                 except Exception:
                     logger.exception("Failed to post Slack reply")
+                # Auto-register thread so follow-up replies are polled
+                try:
+                    thread_id = str(uuid.uuid4())
+                    await db.execute(
+                        "INSERT OR IGNORE INTO slack_active_threads "
+                        "(id, channel_id, thread_ts, agent_id, last_ts) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (thread_id, ch, ts, agent_id, ts),
+                    )
+                    await db.commit()
+                except Exception:
+                    logger.exception("Failed to auto-register slack thread")
 
     elif event_type == "status" and event.get("status") == "done":
         # Worker finished processing — no DB action needed
@@ -531,6 +543,73 @@ async def _handle_tool_request(
             if cursor.rowcount == 0:
                 return {"request_id": request_id, "status": "error", "error": "Schedule not found or not paused"}
             return {"request_id": request_id, "status": "ok", "data": {"task_id": task_id, "status": "active"}}
+
+        elif action == "register_slack_thread":
+            channel_id = params.get("channel_id", "")
+            thread_ts = params.get("thread_ts", "")
+            if not channel_id or not thread_ts:
+                return {"request_id": request_id, "status": "error", "error": "channel_id and thread_ts are required"}
+            row_id = str(uuid.uuid4())
+            try:
+                await db.execute(
+                    "INSERT INTO slack_active_threads "
+                    "(id, channel_id, thread_ts, agent_id, last_ts) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (row_id, channel_id, thread_ts, agent_id, thread_ts),
+                )
+                await db.commit()
+            except Exception:
+                # UNIQUE constraint — already monitoring
+                return {
+                    "request_id": request_id,
+                    "status": "ok",
+                    "data": {"already_registered": True, "channel_id": channel_id, "thread_ts": thread_ts},
+                }
+            logger.info("Registered slack thread %s/%s for agent %s", channel_id, thread_ts, agent_id[:8])
+            return {
+                "request_id": request_id,
+                "status": "ok",
+                "data": {"registered": True, "channel_id": channel_id, "thread_ts": thread_ts},
+            }
+
+        elif action == "unregister_slack_thread":
+            channel_id = params.get("channel_id", "")
+            thread_ts = params.get("thread_ts", "")
+            if not channel_id or not thread_ts:
+                return {"request_id": request_id, "status": "error", "error": "channel_id and thread_ts are required"}
+            cursor = await db.execute(
+                "DELETE FROM slack_active_threads "
+                "WHERE channel_id = ? AND thread_ts = ? AND agent_id = ?",
+                (channel_id, thread_ts, agent_id),
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                return {"request_id": request_id, "status": "error", "error": "Thread not found"}
+            logger.info("Unregistered slack thread %s/%s for agent %s", channel_id, thread_ts, agent_id[:8])
+            return {
+                "request_id": request_id,
+                "status": "ok",
+                "data": {"unregistered": True, "channel_id": channel_id, "thread_ts": thread_ts},
+            }
+
+        elif action == "list_slack_threads":
+            async with db.execute(
+                "SELECT id, channel_id, thread_ts, last_ts, created_at "
+                "FROM slack_active_threads WHERE agent_id = ?",
+                (agent_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+            threads = [
+                {
+                    "id": r[0],
+                    "channel_id": r[1],
+                    "thread_ts": r[2],
+                    "last_ts": r[3],
+                    "created_at": r[4],
+                }
+                for r in rows
+            ]
+            return {"request_id": request_id, "status": "ok", "data": {"threads": threads}}
 
         elif action == "mcp_call":
             tool_name = params.get("tool_name", "")

@@ -20,9 +20,10 @@ from claude_agent_sdk import (
 )
 
 from worker.tools import (
-    TOOL_NAMES as SCHEDULE_TOOL_NAMES,
+    TOOL_NAMES as BUILTIN_TOOL_NAMES,
     create_mcp_proxy_servers,
     create_schedule_server,
+    create_slack_thread_server,
 )
 
 WORKSPACE = Path("/workspace")
@@ -155,10 +156,14 @@ async def run_query(
         return {}
 
     schedule_server = create_schedule_server()
+    slack_thread_server = create_slack_thread_server()
     mcp_proxy_servers = create_mcp_proxy_servers()
     builtin_tools, permission_mode = _load_tool_config()
 
-    mcp_servers: dict[str, Any] = {"schedule": schedule_server}
+    mcp_servers: dict[str, Any] = {
+        "schedule": schedule_server,
+        "slack_thread": slack_thread_server,
+    }
     mcp_proxy_tool_names: list[str] = []
     for server_name, proxy_server, proxy_tool_names in mcp_proxy_servers:
         mcp_servers[server_name] = proxy_server
@@ -168,7 +173,7 @@ async def run_query(
     skills_dir = WORKSPACE / ".claude" / "skills"
     has_skills = skills_dir.is_dir() and any(skills_dir.iterdir())
 
-    allowed = [*builtin_tools, *SCHEDULE_TOOL_NAMES, *mcp_proxy_tool_names]
+    allowed = [*builtin_tools, *BUILTIN_TOOL_NAMES, *mcp_proxy_tool_names]
     if has_skills:
         allowed.append("Skill")
 

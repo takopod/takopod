@@ -20,6 +20,7 @@ from orchestrator.models import (
     SlackPollingChannelRequest,
     SlackPollingChannelUpdate,
     SlackPollingToggle,
+    SlackThreadRequest,
 )
 from orchestrator.settings import get_setting, set_setting
 
@@ -277,3 +278,79 @@ async def list_slack_channels():
         if ch.get("is_member")
     ]
     return {"channels": channels}
+
+
+# --- Slack Active Threads ---
+
+
+@router.get("/slack/threads")
+async def get_active_threads():
+    """Return all active threads being monitored."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT t.id, t.channel_id, t.thread_ts, t.agent_id, t.last_ts, "
+        "t.created_at, a.name AS agent_name "
+        "FROM slack_active_threads t "
+        "LEFT JOIN agents a ON a.id = t.agent_id "
+        "ORDER BY t.created_at",
+    ) as cur:
+        rows = await cur.fetchall()
+    threads = [
+        {
+            "id": r[0],
+            "channel_id": r[1],
+            "thread_ts": r[2],
+            "agent_id": r[3],
+            "last_ts": r[4],
+            "created_at": r[5],
+            "agent_name": r[6],
+        }
+        for r in rows
+    ]
+    return {"threads": threads}
+
+
+@router.post("/slack/threads")
+async def add_active_thread(req: SlackThreadRequest):
+    """Add a thread to monitor for a specific agent."""
+    import uuid
+
+    db = await get_db()
+
+    # Verify agent exists
+    async with db.execute(
+        "SELECT id FROM agents WHERE id = ? AND status = 'active'",
+        (req.agent_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    row_id = str(uuid.uuid4())
+    try:
+        await db.execute(
+            "INSERT INTO slack_active_threads "
+            "(id, channel_id, thread_ts, agent_id, last_ts) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (row_id, req.channel_id, req.thread_ts, req.agent_id, req.thread_ts),
+        )
+        await db.commit()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail="This agent is already monitoring this thread",
+        )
+    return await get_active_threads()
+
+
+@router.delete("/slack/threads/{thread_row_id}")
+async def delete_active_thread(thread_row_id: str):
+    """Stop monitoring a thread."""
+    db = await get_db()
+    cursor = await db.execute(
+        "DELETE FROM slack_active_threads WHERE id = ?",
+        (thread_row_id,),
+    )
+    await db.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return await get_active_threads()
