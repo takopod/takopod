@@ -29,6 +29,7 @@ from worker.tools import (
 WORKSPACE = Path("/workspace")
 MAX_TURNS = 25
 
+
 DEFAULT_BUILTIN_TOOLS = [
     "Read", "Write", "Edit", "Bash",
     "Glob", "Grep", "WebSearch", "WebFetch",
@@ -128,7 +129,10 @@ async def run_query(
     # Emit tool events via hooks so the frontend can display them
     async def on_pre_tool(input_data, tool_use_id, context):
         tool_name = input_data.get("tool_name", "unknown")
-        sys.stderr.write(f"agent: tool_call {tool_name} id={tool_use_id[:12]}\n")
+        sys.stderr.write(
+            f"agent: tool_call {tool_name} id={tool_use_id}\n"
+            f"{json.dumps(input_data, indent=2)}\n"
+        )
         sys.stderr.flush()
         emit({
             "type": "tool_call",
@@ -145,7 +149,11 @@ async def run_query(
             output = json.dumps(output)
         output_str = str(output)
 
-        sys.stderr.write(f"agent: tool_result id={tool_use_id[:12]}\n")
+        tool_name = input_data.get("tool_name", "unknown")
+        sys.stderr.write(
+            f"agent: tool_result {tool_name} id={tool_use_id}\n"
+            f"{output_str}\n"
+        )
         sys.stderr.flush()
         emit({
             "type": "tool_result",
@@ -231,7 +239,10 @@ async def run_query(
                         "message_id": message_id,
                         "seq": seq,
                     })
-            sys.stderr.write(f"agent: AssistantMessage seq={seq}\n")
+            sys.stderr.write(
+                f"agent: AssistantMessage seq={seq}\n"
+                f"{full_text_parts[-1] if full_text_parts else ''}\n"
+            )
             sys.stderr.flush()
 
         elif isinstance(msg, ResultMessage):
