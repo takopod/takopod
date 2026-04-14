@@ -605,6 +605,19 @@ async def toggle_mcp_server(agent_id: str, server_name: str, req: McpServerToggl
         raise HTTPException(status_code=404, detail=f"Server '{server_name}' not added to this agent")
     agent_servers[server_name] = req.enabled
     _write_agent_mcp_servers(agent_id, agent_servers)
+
+    # Keep DB flags in sync for builtin servers so _start_mcp_manager
+    # picks them up (it checks the DB column, not the JSON config file).
+    builtin_db_columns = {"slack": "slack_enabled", "github": "github_enabled"}
+    if server_name in builtin_db_columns:
+        db = await get_db()
+        col = builtin_db_columns[server_name]
+        await db.execute(
+            f"UPDATE agents SET {col} = ? WHERE id = ?",
+            (1 if req.enabled else 0, agent_id),
+        )
+        await db.commit()
+
     return {"name": server_name, "enabled": req.enabled}
 
 
@@ -617,6 +630,17 @@ async def remove_mcp_server_from_agent(agent_id: str, server_name: str):
         raise HTTPException(status_code=404, detail=f"Server '{server_name}' not added to this agent")
     del agent_servers[server_name]
     _write_agent_mcp_servers(agent_id, agent_servers)
+
+    # Disable DB flag for builtin servers
+    builtin_db_columns = {"slack": "slack_enabled", "github": "github_enabled"}
+    if server_name in builtin_db_columns:
+        db = await get_db()
+        col = builtin_db_columns[server_name]
+        await db.execute(
+            f"UPDATE agents SET {col} = 0 WHERE id = ?", (agent_id,),
+        )
+        await db.commit()
+
     return {"status": "ok", "removed": server_name}
 
 

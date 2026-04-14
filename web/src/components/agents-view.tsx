@@ -367,7 +367,7 @@ function ContainerResourcesPanel({
   return (
     <div>
       <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Container Resources
+        Container Settings
       </h3>
       <div className="rounded-md border px-4 py-4">
         <p className="text-xs text-muted-foreground mb-4">
@@ -605,9 +605,6 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
               </div>
             </div>
 
-            {/* Container Resources */}
-            <ContainerResourcesPanel agentId={agentId} detail={detail} onUpdate={setDetail} />
-
             {/* Files */}
             <div>
               <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -644,6 +641,9 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                   </Card>
                 </Link>
               </div>
+
+              {/* Container Settings */}
+              <ContainerResourcesPanel agentId={agentId} detail={detail} onUpdate={setDetail} />
             </div>
             {/* Danger Zone */}
             <Separator />
