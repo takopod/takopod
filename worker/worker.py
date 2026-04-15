@@ -361,6 +361,13 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 async def main() -> None:
     global _conn
 
+    # Redirect stderr to a log file in /workspace/logs/{container_name}.log
+    container_name = os.environ.get("CONTAINER_NAME", "worker")
+    logs_dir = WORKSPACE / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = open(logs_dir / f"{container_name}.log", "w")
+    sys.stderr = log_file
+
     sys.stderr.write("worker: starting, connecting to database\n")
     sys.stderr.flush()
 

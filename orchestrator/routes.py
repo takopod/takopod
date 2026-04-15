@@ -1355,36 +1355,53 @@ async def get_container_logs(container_id: str, tail: int = 100):
     agent_id = row[0]
     container_name = f"rhclaw-{agent_id[:8]}"
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "/opt/podman/bin/podman", "logs", "--tail", str(tail), container_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        logs = stdout.decode() + stderr.decode()
-    except Exception as e:
-        logs = f"Error fetching logs: {e}"
-
     from fastapi.responses import PlainTextResponse
+    logs = await _read_container_log(agent_id, container_name, tail)
     return PlainTextResponse(logs)
 
 
 @router.get("/containers/name/{container_name}/logs")
 async def get_container_logs_by_name(container_name: str, tail: int = 100):
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "/opt/podman/bin/podman", "logs", "--tail", str(tail), container_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        logs = stdout.decode() + stderr.decode()
-    except Exception as e:
-        logs = f"Error fetching logs: {e}"
+    # Resolve agent_id from container name (rhclaw-{agent_id[:8]} or rhclaw-task-{agent_id[:8]})
+    db = await get_db()
+    prefix = container_name.replace("rhclaw-task-", "").replace("rhclaw-", "")
+    async with db.execute(
+        "SELECT id, host_dir FROM agents WHERE id LIKE ?",
+        (f"{prefix}%",),
+    ) as cur:
+        row = await cur.fetchone()
+
+    if not row:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(f"No agent found for container {container_name}")
 
     from fastapi.responses import PlainTextResponse
+    logs = await _read_container_log(row[0], container_name, tail)
     return PlainTextResponse(logs)
+
+
+async def _read_container_log(
+    agent_id: str, container_name: str, tail: int,
+) -> str:
+    """Read the last *tail* lines from a worker log file."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT host_dir FROM agents WHERE id = ?", (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return f"Agent {agent_id} not found"
+
+    log_path = Path(row[0]) / "logs" / f"{container_name}.log"
+    if not log_path.exists():
+        return f"No log file found at {log_path}"
+
+    try:
+        with open(log_path) as f:
+            lines = f.readlines()
+        return "".join(lines[-tail:])
+    except Exception as e:
+        return f"Error reading log file: {e}"
 
 
 @router.delete("/containers/{container_id}")
@@ -2042,17 +2059,11 @@ async def _monitor_worker(agent_id: str) -> None:
         await _cancel_task(worker.polling_task)
         worker.polling_task = None
 
-    # Capture container logs before cleanup (container persists without --rm)
+    # Read crash logs from the worker log file (persists after container removal)
     container_name = f"rhclaw-{agent_id[:8]}"
     try:
-        log_proc = await asyncio.create_subprocess_exec(
-            "/opt/podman/bin/podman", "logs", "--tail", "50", container_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        log_stdout, log_stderr = await log_proc.communicate()
-        crash_logs = (log_stdout.decode() + log_stderr.decode()).strip()
-        if crash_logs:
+        crash_logs = await _read_container_log(agent_id, container_name, 50)
+        if crash_logs and not crash_logs.startswith("No log file"):
             logger.error(
                 "Container logs for crashed agent %s:\n%s",
                 agent_id[:8], crash_logs,

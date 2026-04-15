@@ -281,6 +281,7 @@ async def spawn_container(
         "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
         "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
         "-e", f"OLLAMA_ENABLED={ollama_enabled}",
+        "-e", f"CONTAINER_NAME={container_name}",
         IMAGE,
     ]
 
@@ -357,6 +358,7 @@ async def spawn_scheduled_container(
         "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
         "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
         "-e", "OLLAMA_ENABLED=false",
+        "-e", f"CONTAINER_NAME={container_name}",
         IMAGE,
     ]
 
