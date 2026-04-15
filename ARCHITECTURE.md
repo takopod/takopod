@@ -45,7 +45,9 @@ All IPC is file-based, using atomic writes (temp file + `os.fsync()` + `os.renam
 
 ### Worker Output Mechanism
 
-Workers do NOT stream to stdout — stdout and stderr are `DEVNULL`. Instead, the worker's `emit()` function inserts events into a `worker_responses` table in the per-agent SQLite database with status `pending`. A separate `flush_responses()` call batches all pending rows into `output.json` via atomic write and marks them `sent`. This decouples event production from file I/O and provides crash safety.
+Worker events are first inserted into a `worker_responses` table in the per-agent SQLite database, then flushed in batches to `output.json` via atomic write. This decouples event production from file I/O and provides crash safety. After the final event, the worker blocks briefly (up to 10 seconds) to ensure all pending events are flushed before returning, preventing events from being stranded when the orchestrator hasn't consumed a previous batch yet.
+
+Worker logs are written to `/workspace/logs/{container_name}.log`, persisted via the bind-mounted workspace directory.
 
 ## 2. Atomic Write Protocol
 
