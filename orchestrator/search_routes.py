@@ -73,9 +73,9 @@ CREATE TABLE IF NOT EXISTS memory_vec_map (
 # ---------------------------------------------------------------------------
 
 
-def _open_worker_db(agent_id: str) -> sqlite3.Connection:
+def _open_worker_db(host_dir: str | Path) -> sqlite3.Connection:
     """Open a synchronous connection to an agent's worker database."""
-    path = DATA_DIR / "agents" / agent_id / "worker_db.sqlite"
+    path = Path(host_dir) / "worker_db.sqlite"
     if not path.is_file():
         raise FileNotFoundError(f"Worker DB not found: {path}")
     conn = sqlite3.connect(str(path))
@@ -90,15 +90,17 @@ def _open_worker_db(agent_id: str) -> sqlite3.Connection:
     return conn
 
 
-async def _validate_agent(agent_id: str) -> None:
-    """Raise 404 if agent doesn't exist."""
+async def _validate_agent(agent_id: str) -> Path:
+    """Raise 404 if agent doesn't exist. Returns host_dir Path."""
     db = await get_db()
     async with db.execute(
-        "SELECT id FROM agents WHERE id = ? AND status = 'active'",
+        "SELECT host_dir FROM agents WHERE id = ? AND status = 'active'",
         (agent_id,),
     ) as cur:
-        if not await cur.fetchone():
+        row = await cur.fetchone()
+        if not row:
             raise HTTPException(status_code=404, detail="Agent not found")
+    return Path(row[0])
 
 
 async def _run_worker_op(func):
@@ -193,9 +195,18 @@ async def reindex_memory_file(agent_id: str, rel_path: str, content: str) -> Non
     Called after a memory file is written to disk, from any endpoint.
     Silently skips if the worker DB doesn't exist yet.
     """
+    db = await get_db()
+    async with db.execute(
+        "SELECT host_dir FROM agents WHERE id = ?", (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return
+    host_dir = Path(row[0])
+
     def _do():
         try:
-            conn = _open_worker_db(agent_id)
+            conn = _open_worker_db(host_dir)
         except FileNotFoundError:
             return
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -282,7 +293,7 @@ async def search_index(
     db = await get_db()
     placeholders = ", ".join("?" for _ in agents)
     async with db.execute(
-        f"SELECT id, name FROM agents WHERE status = 'active' AND name IN ({placeholders})",
+        f"SELECT id, name, host_dir FROM agents WHERE status = 'active' AND name IN ({placeholders})",
         agents,
     ) as cur:
         agent_rows = await cur.fetchall()
@@ -293,9 +304,9 @@ async def search_index(
     def _query():
         all_results: list[dict] = []
         cap = min(limit, 200)
-        for agent_id, agent_name in agent_rows:
+        for agent_id, agent_name, host_dir in agent_rows:
             try:
-                conn = _open_worker_db(agent_id)
+                conn = _open_worker_db(host_dir)
             except FileNotFoundError:
                 continue
             try:
@@ -337,16 +348,16 @@ async def search_index(
 @router.get("/agents/{agent_id}/search-index/stats")
 async def index_stats(agent_id: str):
     """Return index health stats: counts for memory files, FTS, and vec."""
-    await _validate_agent(agent_id)
+    host_dir = await _validate_agent(agent_id)
 
     # Count memory files on disk
-    memory_dir = DATA_DIR / "agents" / agent_id / "memory"
+    memory_dir = host_dir / "memory"
     memory_files_count = 0
     if memory_dir.is_dir():
         memory_files_count = sum(1 for f in memory_dir.iterdir() if f.is_file() and f.suffix == ".md")
 
     def _worker_stats():
-        conn = _open_worker_db(agent_id)
+        conn = _open_worker_db(host_dir)
         try:
             try:
                 fts_count = conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
@@ -376,12 +387,12 @@ async def index_stats(agent_id: str):
 @router.post("/agents/{agent_id}/search-index/reindex")
 async def reindex(agent_id: str, req: ReindexRequest | None = None):
     """Reindex specific chunks or perform a full rebuild from memory files on disk."""
-    await _validate_agent(agent_id)
+    host_dir = await _validate_agent(agent_id)
 
     if req and req.chunk_keys:
-        return await _reindex_chunks(agent_id, req.chunk_keys)
+        return await _reindex_chunks(host_dir, req.chunk_keys)
 
-    return await _full_rebuild(agent_id)
+    return await _full_rebuild(host_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -392,10 +403,10 @@ async def reindex(agent_id: str, req: ReindexRequest | None = None):
 @router.get("/agents/{agent_id}/search-index/{chunk_key:path}")
 async def get_index_entry(agent_id: str, chunk_key: str):
     """Get full details of a single indexed entry."""
-    await _validate_agent(agent_id)
+    host_dir = await _validate_agent(agent_id)
 
     def _query():
-        conn = _open_worker_db(agent_id)
+        conn = _open_worker_db(host_dir)
         try:
             row = conn.execute(
                 "SELECT chunk_key, content, file_path, session_ref, created_at "
@@ -433,10 +444,10 @@ async def update_index_entry(
     agent_id: str, chunk_key: str, req: SearchIndexUpdateRequest,
 ):
     """Update content in memory FTS and vec indexes."""
-    await _validate_agent(agent_id)
+    host_dir = await _validate_agent(agent_id)
 
     def _update():
-        conn = _open_worker_db(agent_id)
+        conn = _open_worker_db(host_dir)
         try:
             # Get existing row metadata
             row = conn.execute(
@@ -514,10 +525,10 @@ async def update_index_entry(
 @router.delete("/agents/{agent_id}/search-index/{chunk_key:path}")
 async def delete_index_entry(agent_id: str, chunk_key: str):
     """Delete an entry from memory FTS and vec indexes."""
-    await _validate_agent(agent_id)
+    host_dir = await _validate_agent(agent_id)
 
     def _delete():
-        conn = _open_worker_db(agent_id)
+        conn = _open_worker_db(host_dir)
         try:
             fts_deleted = conn.execute(
                 "DELETE FROM memory_fts WHERE rowid IN ("
@@ -555,7 +566,7 @@ async def delete_index_entry(agent_id: str, chunk_key: str):
 # ---------------------------------------------------------------------------
 
 
-async def _reindex_chunks(agent_id: str, chunk_keys: list[str]):
+async def _reindex_chunks(host_dir: Path, chunk_keys: list[str]):
     """Reindex specific chunks by re-reading their source memory files."""
     # Determine which files to read
     file_paths = set()
@@ -564,7 +575,7 @@ async def _reindex_chunks(agent_id: str, chunk_keys: list[str]):
             file_paths.add(ck.rsplit("#", 1)[0])
 
     def _do_reindex():
-        conn = _open_worker_db(agent_id)
+        conn = _open_worker_db(host_dir)
         indexed = 0
         errors = 0
         skipped_vectors = False
@@ -572,7 +583,7 @@ async def _reindex_chunks(agent_id: str, chunk_keys: list[str]):
 
         try:
             for fp in file_paths:
-                abs_path = DATA_DIR / "agents" / agent_id / fp
+                abs_path = host_dir / fp
                 if not abs_path.is_file():
                     errors += 1
                     continue
@@ -649,9 +660,9 @@ async def _reindex_chunks(agent_id: str, chunk_keys: list[str]):
     return await _run_worker_op(_do_reindex)
 
 
-async def _full_rebuild(agent_id: str):
+async def _full_rebuild(host_dir: Path):
     """Drop and recreate memory indexes, re-index all memory files from disk."""
-    memory_dir = DATA_DIR / "agents" / agent_id / "memory"
+    memory_dir = host_dir / "memory"
 
     # Collect all memory files
     memory_files: list[tuple[str, str]] = []  # (rel_path, content)
@@ -662,7 +673,7 @@ async def _full_rebuild(agent_id: str):
                 memory_files.append((rel_path, md_file.read_text()))
 
     def _do_rebuild():
-        conn = _open_worker_db(agent_id)
+        conn = _open_worker_db(host_dir)
         indexed = 0
         errors = 0
         skipped_vectors = False
@@ -743,8 +754,8 @@ async def _full_rebuild(agent_id: str):
 @router.get("/agents/{agent_id}/memory-files")
 async def list_memory_files(agent_id: str):
     """List memory files for an agent."""
-    await _validate_agent(agent_id)
-    memory_dir = DATA_DIR / "agents" / agent_id / "memory"
+    host_dir = await _validate_agent(agent_id)
+    memory_dir = host_dir / "memory"
     if not memory_dir.is_dir():
         return []
 
@@ -769,13 +780,13 @@ async def list_memory_files(agent_id: str):
 @router.delete("/agents/{agent_id}/memory-files/{filename}")
 async def delete_memory_file(agent_id: str, filename: str):
     """Delete a memory file from disk, the memory_files table, and search indexes."""
-    await _validate_agent(agent_id)
+    host_dir = await _validate_agent(agent_id)
 
     # Prevent path traversal
     if "/" in filename or "\\" in filename or filename.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    memory_dir = DATA_DIR / "agents" / agent_id / "memory"
+    memory_dir = host_dir / "memory"
     file_path = memory_dir / filename
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Memory file not found")
@@ -785,7 +796,7 @@ async def delete_memory_file(agent_id: str, filename: str):
 
     def _clean_db():
         try:
-            conn = _open_worker_db(agent_id)
+            conn = _open_worker_db(host_dir)
             try:
                 # Remove from memory_files table
                 conn.execute(
