@@ -165,13 +165,8 @@ async def _split_session(conn) -> None:
         # Summarize from in-memory transcript
         summary = await summarize_session(_session_transcript)
         if summary:
-            sdk_path = (
-                f"sessions/{_session_id}.jsonl"
-                if _session_id
-                else f"sessions/unknown-{(_orch_session_id or 'none')[:8]}"
-            )
-            # write_memory_file indexes into memory_fts internally
-            _path, needs_compaction = write_memory_file(conn, summary, sdk_path)
+            session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+            _path, needs_compaction = write_memory_file(conn, summary, session_ref)
             _continuation_summary = summary
 
             # Async vector indexing
@@ -227,7 +222,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             try:
                 from worker.memory import run_session_end
                 compaction_date = await run_session_end(
-                    conn, _session_transcript, _session_id, _orch_session_id,
+                    conn, _session_transcript,
                 )
                 if compaction_date:
                     emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
@@ -243,7 +238,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             try:
                 from worker.memory import run_session_end
                 compaction_date = await run_session_end(
-                    conn, _session_transcript, _session_id, _orch_session_id,
+                    conn, _session_transcript,
                 )
                 if compaction_date:
                     emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})

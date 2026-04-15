@@ -360,8 +360,6 @@ def load_memory_context() -> str | None:
 async def run_session_end(
     conn: sqlite3.Connection,
     transcript: list[tuple[str, str]],
-    sdk_session_id: str | None,
-    orch_session_id: str | None = None,
 ) -> str | None:
     """Run session-end memory operations: summarize and write memory file.
 
@@ -382,14 +380,8 @@ async def run_session_end(
         sys.stderr.flush()
         return None
 
-    # Derive session filepath from SDK session ID
-    if sdk_session_id:
-        session_filepath = f"sessions/{sdk_session_id}.jsonl"
-    else:
-        orch_prefix = orch_session_id[:8] if orch_session_id else "none"
-        session_filepath = f"sessions/unknown-{orch_prefix}"
-
-    _path, needs_compaction = write_memory_file(conn, summary, session_filepath)
+    session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    _path, needs_compaction = write_memory_file(conn, summary, session_ref)
 
     # Trigger async vector indexing for the written file
     if _path:
