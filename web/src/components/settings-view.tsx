@@ -115,32 +115,6 @@ export function SettingsView() {
             <p className="text-center text-sm text-muted-foreground">No settings found.</p>
           )}
 
-          {/* Container Defaults */}
-          <div className="pt-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Container Defaults</div>
-            <p className="text-xs text-muted-foreground pb-3">
-              Default CPU and memory limits for new agent containers. Existing agents are not affected.
-            </p>
-            <div className="space-y-3">
-              <ContainerDefaultInput
-                label="Memory"
-                settingKey="default_container_memory"
-                placeholder="2g"
-                helpText="e.g. 512m, 1g, 4g"
-                value={settings["default_container_memory"] ?? ""}
-                onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_memory: v }))}
-              />
-              <ContainerDefaultInput
-                label="CPUs"
-                settingKey="default_container_cpus"
-                placeholder="2"
-                helpText="e.g. 1, 2, 4"
-                value={settings["default_container_cpus"] ?? ""}
-                onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_cpus: v }))}
-              />
-            </div>
-          </div>
-
           {/* Search */}
           <div className="pt-4">
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Search</div>
@@ -222,6 +196,32 @@ export function SettingsView() {
                 Queue Status
                 <ChevronRight className="size-4 text-muted-foreground" />
               </Link>
+            </div>
+          </div>
+
+          {/* Container Defaults */}
+          <div className="pt-4">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Container Defaults</div>
+            <p className="text-xs text-muted-foreground pb-3">
+              Default CPU and memory limits for new agent containers. Existing agents are not affected.
+            </p>
+            <div className="space-y-3">
+              <ContainerDefaultInput
+                label="Memory"
+                settingKey="default_container_memory"
+                placeholder="2g"
+                helpText="e.g. 512m, 1g, 4g"
+                value={settings["default_container_memory"] ?? ""}
+                onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_memory: v }))}
+              />
+              <ContainerDefaultInput
+                label="CPUs"
+                settingKey="default_container_cpus"
+                placeholder="2"
+                helpText="e.g. 1, 2, 4"
+                value={settings["default_container_cpus"] ?? ""}
+                onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_cpus: v }))}
+              />
             </div>
           </div>
         </div>
