@@ -326,6 +326,22 @@ async def _process_event(
         await _db_ensure_row(row_id, agent_id, source_metadata)
         await _db_append_token(row_id, event.get("content", ""))
 
+    elif event_type == "assistant_message":
+        # Snapshot of the full assistant text so far.  Overwrites content
+        # to keep the DB in sync even when individual token events were
+        # batched together and the orchestrator only sees one output.json.
+        await _db_ensure_row(row_id, agent_id, source_metadata)
+        content = event.get("content", "")
+        try:
+            db = await get_db()
+            await db.execute(
+                "UPDATE messages SET content = ? WHERE id = ?",
+                (content, row_id),
+            )
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to update assistant_message %s", row_id)
+
     elif event_type == "tool_call":
         await _db_ensure_row(row_id, agent_id, source_metadata)
         block = {

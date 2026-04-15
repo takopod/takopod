@@ -239,6 +239,15 @@ async def run_query(
                         "message_id": message_id,
                         "seq": seq,
                     })
+            # Emit every AssistantMessage so the orchestrator sees
+            # intermediate state even when there are no new text blocks
+            # (e.g. tool-use-only turns).
+            emit({
+                "type": "assistant_message",
+                "content": "\n\n".join(full_text_parts),
+                "message_id": message_id,
+                "seq": seq,
+            })
             sys.stderr.write(
                 f"agent: AssistantMessage seq={seq}\n"
                 f"{full_text_parts[-1] if full_text_parts else ''}\n"
@@ -261,5 +270,9 @@ async def run_query(
         "message_id": message_id,
         "usage": total_usage,
     })
+    # Drain: ensure all pending events (including the complete above)
+    # are flushed to output.json before returning.
+    from worker.worker import drain_pending
+    drain_pending()
 
     return captured_session_id, total_usage, full_text

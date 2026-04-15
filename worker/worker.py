@@ -114,6 +114,25 @@ def emit(event: dict[str, Any]) -> None:
     flush_responses()
 
 
+def drain_pending(max_wait: float = 10.0) -> None:
+    """Block until all pending worker_responses are flushed to output.json.
+
+    Waits for the orchestrator to consume any existing output.json, then
+    flushes remaining pending rows.  Gives up after *max_wait* seconds.
+    """
+    deadline = time.monotonic() + max_wait
+    while time.monotonic() < deadline:
+        pending = _conn.execute(
+            "SELECT COUNT(*) FROM worker_responses WHERE status = 'pending'",
+        ).fetchone()[0]
+        if pending == 0:
+            return
+        if not OUTPUT_PATH.exists():
+            flush_responses()
+        else:
+            time.sleep(0.1)
+
+
 def _is_processed(conn, message_id: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM processed_messages WHERE message_id = ?",
