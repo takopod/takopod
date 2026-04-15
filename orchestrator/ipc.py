@@ -131,14 +131,15 @@ async def queue_system_command(agent_id: str, command: str) -> None:
 
 async def get_queue_counts(agent_id: str) -> dict[str, int]:
     db = await get_db()
-    counts = {"queued": 0, "in_flight": 0, "processed": 0}
+    counts = {"queued": 0, "in_flight": 0}
     async with db.execute(
         "SELECT status, COUNT(*) FROM message_queue WHERE agent_id = ? GROUP BY status",
         (agent_id,),
     ) as cur:
         async for row in cur:
             key = row[0].lower().replace("-", "_")
-            counts[key] = row[1]
+            if key in counts:
+                counts[key] = row[1]
     return counts
 
 
@@ -734,11 +735,10 @@ async def _polling_loop(
                 in_flight_count = row[0]
 
             if in_flight_count > 0 and not input_path.exists():
-                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 await db.execute(
-                    "UPDATE message_queue SET status = 'PROCESSED', processed_at = ? "
+                    "DELETE FROM message_queue "
                     "WHERE agent_id = ? AND status = 'IN-FLIGHT'",
-                    (now, agent_id),
+                    (agent_id,),
                 )
                 await db.commit()
                 await _send_queue_status(ws_mgr, agent_id)

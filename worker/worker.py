@@ -98,7 +98,7 @@ def flush_responses() -> None:
     ids = [row[0] for row in rows]
     placeholders = ",".join("?" * len(ids))
     _conn.execute(
-        f"UPDATE worker_responses SET status = 'sent' WHERE id IN ({placeholders})",
+        f"DELETE FROM worker_responses WHERE id IN ({placeholders})",
         ids,
     )
     _conn.commit()
@@ -392,7 +392,7 @@ async def main() -> None:
     # Clean up stale state from a previous run
     if OUTPUT_PATH.exists():
         os.remove(OUTPUT_PATH)
-    conn.execute("UPDATE worker_responses SET status = 'sent' WHERE status = 'pending'")
+    conn.execute("DELETE FROM worker_responses")
     conn.execute("DELETE FROM processed_messages")
     conn.commit()
 

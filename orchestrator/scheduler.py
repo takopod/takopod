@@ -28,6 +28,7 @@ IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))
 SCHEDULER_TICK = 10  # seconds between scheduler iterations
 IDLE_REAPER_TICKS = 3  # run idle reaper every N ticks (30s at TICK=10)
 AGENTIC_TASK_TICKS = 3  # poll agentic tasks every N ticks (30s at TICK=10)
+
 TASK_POLL_RESPONSE_INTERVAL = 1.0  # seconds between response.json polls
 
 
@@ -416,6 +417,7 @@ async def _check_task_timeouts() -> None:
             info.task_id[:8], info.timeout_seconds, container_name,
         )
         info.asyncio_task.cancel()
+
 
 
 # ---------------------------------------------------------------------------

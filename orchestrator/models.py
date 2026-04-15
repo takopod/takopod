@@ -35,7 +35,6 @@ class QueueStatusFrame(BaseModel):
     type: Literal["queue_status"] = "queue_status"
     queued: int
     in_flight: int
-    processed: int
 
 
 class ErrorFrame(BaseModel):

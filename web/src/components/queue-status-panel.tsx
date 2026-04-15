@@ -35,10 +35,6 @@ export function QueueStatusPanel({ status, connected: _connected }: QueueStatusP
             <span className="text-muted-foreground">In-Flight</span>
             <Badge variant="secondary">{status.in_flight}</Badge>
           </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Processed</span>
-            <Badge variant="secondary">{status.processed}</Badge>
-          </div>
         </CardContent>
       </Card>
     </div>

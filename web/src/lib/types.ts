@@ -9,7 +9,6 @@ export interface QueueStatusFrame {
   type: "queue_status"
   queued: number
   in_flight: number
-  processed: number
 }
 
 export interface ErrorFrame {

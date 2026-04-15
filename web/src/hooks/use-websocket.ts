@@ -69,7 +69,6 @@ export function useWebSocket(agentId: string | null) {
     type: "queue_status",
     queued: 0,
     in_flight: 0,
-    processed: 0,
   })
   const [error, setError] = useState<ErrorFrame | null>(null)
   const [systemError, setSystemError] = useState<SystemErrorFrame | null>(null)
@@ -184,7 +183,7 @@ export function useWebSocket(agentId: string | null) {
 
     // Load message history from the API
     setMessages([])
-    setQueueStatus({ type: "queue_status", queued: 0, in_flight: 0, processed: 0 })
+    setQueueStatus({ type: "queue_status", queued: 0, in_flight: 0 })
 
     fetch(`/api/agents/${agentId}/messages`)
       .then((res) => (res.ok ? res.json() : []))
