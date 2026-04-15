@@ -61,7 +61,7 @@ def _find_user_id(username: str) -> tuple[str, str] | None:
     Returns (user_id, display_name) or None if not found.
 
     If the input is already a Slack user ID (e.g. U0A3LPN2FKP), resolves it
-    directly via users.info.  Otherwise, scans open DM conversations for a
+    directly via users.info.  Otherwise, searches the workspace user list for a
     case-insensitive partial match on display/real name.
     """
     cleaned = username.strip().lstrip("@")
@@ -75,35 +75,38 @@ def _find_user_id(username: str) -> tuple[str, str] | None:
 
     query = cleaned.lower()
 
-    # Scan open DM conversations for a name match
-    try:
-        cursor = None
-        while True:
-            response = client.conversations_list(
-                types="im",
-                limit=200,
-                cursor=cursor or "",
-            )
-            for ch in response["channels"]:
-                user_id = ch.get("user", "")
-                if not user_id:
-                    continue
-                display = _resolve_user(user_id)
-                if query in display.lower():
-                    return user_id, display
-            cursor = response.get("response_metadata", {}).get("next_cursor")
-            if not cursor:
-                break
-    except SlackApiError:
-        pass
-
-    # Fallback: search messages to find the user ID from results
+    # Fast path: search messages by the user to find their ID
     try:
         response = client.search_messages(query=f"from:{cleaned}", count=1)
         matches = response.get("messages", {}).get("matches", [])
         if matches and matches[0].get("user"):
             user_id = matches[0]["user"]
             return user_id, _resolve_user(user_id)
+    except SlackApiError:
+        pass
+
+    # Fallback: scan workspace user list (slow on large workspaces)
+    try:
+        cursor = None
+        while True:
+            response = client.users_list(limit=200, cursor=cursor or "")
+            for member in response.get("members", []):
+                if member.get("deleted") or member.get("is_bot"):
+                    continue
+                profile = member.get("profile", {})
+                display = (
+                    profile.get("display_name")
+                    or profile.get("real_name")
+                    or member.get("real_name")
+                    or member.get("name")
+                    or ""
+                )
+                if display and query in display.lower():
+                    _user_cache[member["id"]] = display
+                    return member["id"], display
+            cursor = response.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
     except SlackApiError:
         pass
 
@@ -128,56 +131,66 @@ def _format_message(msg: dict) -> str:
     return f"[{ts}] {user}: {text}"
 
 
-@mcp.tool()
-async def list_channels() -> str:
-    """List Slack channels and direct messages you belong to.
+def _resolve_channel_id(name: str) -> tuple[str, str] | None:
+    """Resolve a channel name to (channel_id, channel_name) via search.
 
-    Returns channel ID, type, and name for each. Types include:
-    - Channels: public and private channels (prefixed with #)
-    - DMs: direct messages with individual users (prefixed with @)
-    - Group DMs: multi-person direct messages (prefixed with group:)
-
-    Use this to find conversation IDs for read_channel.
+    Returns None if the channel cannot be found.
     """
+    cleaned = name.strip().lstrip("#")
     try:
-        channels = []
-        cursor = None
-        while True:
-            response = client.conversations_list(
-                types="public_channel,private_channel,im,mpim",
-                exclude_archived=True,
-                limit=200,
-                cursor=cursor or "",
-            )
-            for ch in response["channels"]:
-                if ch.get("is_im"):
-                    user_id = ch.get("user", "unknown")
-                    display = _resolve_user(user_id)
-                    channels.append(f"{ch['id']}: @{display} (DM)")
-                elif ch.get("is_mpim"):
-                    name = ch.get("name", "group-dm")
-                    channels.append(f"{ch['id']}: group:{name}")
-                elif ch.get("is_member"):
-                    channels.append(f"{ch['id']}: #{ch['name']}")
-            cursor = response.get("response_metadata", {}).get("next_cursor")
-            if not cursor:
-                break
-        if not channels:
-            return "You are not a member of any channels or DMs."
-        return "\n".join(channels)
-    except SlackApiError as e:
-        return f"Slack API error: {e.response['error']}"
+        response = client.search_messages(query=f"in:#{cleaned}", count=1)
+        matches = response.get("messages", {}).get("matches", [])
+        if matches:
+            channel = matches[0].get("channel", {})
+            ch_id = channel.get("id", "")
+            ch_name = channel.get("name", cleaned)
+            if ch_id:
+                return ch_id, ch_name
+    except SlackApiError:
+        pass
+    return None
 
 
 @mcp.tool()
-async def read_channel(channel_id: str, limit: int = 20) -> str:
-    """Read recent messages from a Slack channel.
+async def find_channel(name: str) -> str:
+    """Find a Slack channel ID by name.
+
+    Use this when you need the raw channel ID (e.g. for register_slack_thread).
+    For reading messages, use read_channel directly with the channel name.
 
     Args:
-        channel_id: The channel ID (e.g. C0123ABC). Use list_channels to find IDs.
+        name: Channel name (e.g. "team-quay-downstream-dev").
+              The leading "#" is stripped automatically.
+    """
+    result = _resolve_channel_id(name)
+    if result:
+        return f"{result[0]}: #{result[1]}"
+    return f"No channel found matching '{name}'."
+
+
+@mcp.tool()
+async def read_channel(channel: str, limit: int = 20) -> str:
+    """Read recent messages from a Slack channel.
+
+    Accepts a channel name (e.g. "team-quay-downstream-dev") or a channel ID
+    (e.g. "C0123ABC"). Channel names are resolved automatically.
+
+    Args:
+        channel: Channel name or ID. Leading "#" is stripped automatically.
         limit: Number of messages to retrieve (max 100, default 20).
     """
     limit = min(max(1, limit), 100)
+    cleaned = channel.strip().lstrip("#")
+
+    # Resolve channel name to ID if needed
+    if re.fullmatch(r"C[A-Z0-9]+", cleaned):
+        channel_id = cleaned
+    else:
+        result = _resolve_channel_id(cleaned)
+        if not result:
+            return f"No channel found matching '{channel}'."
+        channel_id = result[0]
+
     try:
         response = client.conversations_history(channel=channel_id, limit=limit)
         if not response["messages"]:
@@ -229,7 +242,10 @@ async def search_messages(query: str, limit: int = 10) -> str:
         from:@user     — messages sent by a specific user
         in:#channel    — messages in a specific channel
         has:link       — messages containing links
-        before:2024-01-01 / after:2024-01-01 — date filters
+        on:2024-01-01  — messages on a specific date
+        before:2024-01-01 — messages before a date (exclusive)
+        after:2024-01-01  — messages after a date (exclusive, excludes that day)
+        during:today/yesterday/week/month — relative date ranges
 
     Args:
         query: Slack search query string (supports operators above).

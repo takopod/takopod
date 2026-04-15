@@ -14,7 +14,7 @@ register_slack_thread_schema = {
                 "type": "string",
                 "description": (
                     "The Slack channel ID (e.g. C0123ABC). "
-                    "Use the Slack list_channels tool to find IDs."
+                    "Use the Slack find_channel tool to find IDs."
                 ),
             },
             "thread_ts": {
