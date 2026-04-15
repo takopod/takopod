@@ -416,7 +416,7 @@ export function SearchIndexView() {
                           title={entry.file_path}
                         >
                           <Link
-                            to={`/agents/${entry.agent_id ?? selectedAgentId}/files?file=${encodeURIComponent(entry.file_path)}`}
+                            to={`/agents/${entry.agent_name ?? entry.agent_id ?? selectedAgentId}/files/${entry.file_path}`}
                             className="underline decoration-muted-foreground/40 hover:text-primary hover:decoration-primary"
                             onClick={(e) => e.stopPropagation()}
                           >

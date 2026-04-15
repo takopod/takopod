@@ -227,6 +227,16 @@ export function App() {
               }
             />
             <Route
+              path="/agents/:agentName/files/*"
+              element={
+                <AgentsView
+                  agents={agents}
+                  onSelectAgent={handleSelectAgentFromView}
+                  onDeleteAgent={handleDeleteAgent}
+                />
+              }
+            />
+            <Route
               path="/agents/:agentName/:file"
               element={
                 <AgentsView

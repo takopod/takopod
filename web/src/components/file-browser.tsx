@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { FileEntry } from "@/lib/types"
@@ -8,47 +8,52 @@ import { ArrowLeft, File, Folder, Save, Trash2 } from "lucide-react"
 interface FileBrowserProps {
   agentId: string
   agentName?: string
+  initialPath?: string
 }
 
-export function FileBrowser({ agentId, agentName }: FileBrowserProps) {
+export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProps) {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [content, setContent] = useState("")
   const [originalContent, setOriginalContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [openFile, setOpenFile] = useState<string | null>(null)
+  const [currentPath, setCurrentPath] = useState("")
 
-  const currentPath = searchParams.get("dir") ?? ""
-  const openFile = searchParams.get("file") ?? null
+  const basePath = `/agents/${agentName ?? agentId}/files`
 
   const IDENTITY_FILES = new Set(["CLAUDE.md", "SOUL.md", "MEMORY.md"])
   const dirty = content !== originalContent
 
-  const setCurrentPath = useCallback(
-    (path: string) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev)
-        if (path) next.set("dir", path)
-        else next.delete("dir")
-        next.delete("file")
-        return next
+  // Resolve initialPath: determine if it's a file or directory
+  useEffect(() => {
+    if (!initialPath) {
+      setOpenFile(null)
+      setCurrentPath("")
+      return
+    }
+    // Try loading as a file first
+    fetch(`/api/agents/${agentId}/files/${encodeURIComponent(initialPath)}`)
+      .then((res) => {
+        if (res.ok) {
+          // It's a file
+          res.text().then((text) => {
+            setOpenFile(initialPath)
+            const dir = initialPath.includes("/")
+              ? initialPath.substring(0, initialPath.lastIndexOf("/"))
+              : ""
+            setCurrentPath(dir)
+            setContent(text)
+            setOriginalContent(text)
+          })
+        } else {
+          // Treat as directory
+          setOpenFile(null)
+          setCurrentPath(initialPath)
+        }
       })
-    },
-    [setSearchParams],
-  )
-
-  const setOpenFile = useCallback(
-    (filePath: string | null) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev)
-        if (filePath) next.set("file", filePath)
-        else next.delete("file")
-        return next
-      })
-    },
-    [setSearchParams],
-  )
+  }, [agentId, initialPath])
 
   const fetchEntries = useCallback(
     async (path: string) => {
@@ -65,41 +70,33 @@ export function FileBrowser({ agentId, agentName }: FileBrowserProps) {
   )
 
   useEffect(() => {
-    fetchEntries(currentPath)
-  }, [currentPath, fetchEntries])
-
-  // Load file content when openFile changes
-  useEffect(() => {
-    if (!openFile) return
-    const load = async () => {
-      const res = await fetch(
-        `/api/agents/${agentId}/files/${encodeURIComponent(openFile)}`,
-      )
-      if (res.ok) {
-        const text = await res.text()
-        setContent(text)
-        setOriginalContent(text)
-      }
+    if (!openFile) {
+      fetchEntries(currentPath)
     }
-    load()
-  }, [agentId, openFile])
+  }, [currentPath, openFile, fetchEntries])
+
+  const navigateToFile = (filePath: string) => {
+    navigate(`${basePath}/${filePath}`)
+  }
+
+  const navigateToDir = (dirPath: string) => {
+    if (dirPath) {
+      navigate(`${basePath}/${dirPath}`)
+    } else {
+      navigate(basePath)
+    }
+  }
 
   const handleOpenFile = (entry: FileEntry) => {
     if (entry.type === "directory") {
-      setCurrentPath(entry.path)
+      navigateToDir(entry.path)
       return
     }
-    // Set dir to the file's parent so back button works
-    const dir = entry.path.includes("/")
-      ? entry.path.substring(0, entry.path.lastIndexOf("/"))
-      : ""
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev)
-      if (dir) next.set("dir", dir)
-      else next.delete("dir")
-      next.set("file", entry.path)
-      return next
-    })
+    navigateToFile(entry.path)
+  }
+
+  const handleCloseFile = () => {
+    navigateToDir(currentPath)
   }
 
   const handleSave = async () => {
@@ -127,7 +124,7 @@ export function FileBrowser({ agentId, agentName }: FileBrowserProps) {
   const goUp = () => {
     const parts = currentPath.split("/").filter(Boolean)
     parts.pop()
-    setCurrentPath(parts.join("/"))
+    navigateToDir(parts.join("/"))
   }
 
   if (openFile) {
@@ -140,7 +137,7 @@ export function FileBrowser({ agentId, agentName }: FileBrowserProps) {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setOpenFile(null)}
+            onClick={handleCloseFile}
           >
             <ArrowLeft className="size-4" />
           </Button>

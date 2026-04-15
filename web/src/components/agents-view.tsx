@@ -422,7 +422,7 @@ interface AgentsViewProps {
 }
 
 export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewProps) {
-  const { agentName, file } = useParams<{ agentName?: string; file?: string }>()
+  const { agentName, file, "*": fileSplat } = useParams<{ agentName?: string; file?: string; "*"?: string }>()
   const agentId = agentName
     ? agents.find((a) => a.name === agentName)?.id
     : undefined
@@ -433,7 +433,8 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
   const [dirty, setDirty] = useState(false)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
 
-  const showFileBrowser = file === "files"
+  // /agents/:name/files/* matched → file browser with optional deep path
+  const showFileBrowser = file === "files" || fileSplat !== undefined
   const showMcpConfig = file === "mcp"
   const showSkills = file === "skills"
   const openFile = !showFileBrowser && !showMcpConfig && !showSkills
@@ -492,7 +493,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
       ) : showSkills ? (
         <SkillsPanel agentId={agentId} agentName={agentName} />
       ) : showFileBrowser ? (
-        <FileBrowser agentId={agentId} agentName={agentName} />
+        <FileBrowser agentId={agentId} agentName={agentName} initialPath={fileSplat} />
       ) : !openFile ? (
         <>
           <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
