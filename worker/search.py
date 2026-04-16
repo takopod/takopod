@@ -10,6 +10,7 @@ import re
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from worker.embed import embed
@@ -18,6 +19,114 @@ EMBEDDING_DIM = 768
 RRF_K = 60
 SEARCH_TOP_K = 20
 SEARCH_RESULTS = 10
+MIN_QUERY_LENGTH = 15    # skip search for shorter queries
+MIN_RRF_SCORE = 0.015    # discard results below this threshold
+
+
+# ---------------------------------------------------------------------------
+# Query rewriting (P6)
+# ---------------------------------------------------------------------------
+
+_GREETING_PATTERN = re.compile(
+    r"\b(hi|hello|hey|greetings|good\s+(?:morning|afternoon|evening))\b[,!.\s]*",
+    re.IGNORECASE,
+)
+
+_HEDGING_PATTERN = re.compile(
+    r"\b("
+    r"can you|could you|would you|will you|"
+    r"i was wondering if|i was wondering|"
+    r"would you mind|do you think you could|"
+    r"i need you to|i want you to|i'd like you to|"
+    r"help me with|help me|"
+    r"tell me about|tell me|"
+    r"show me|explain to me|"
+    r"i have a question about|"
+    r"quick question"
+    r")\b\s*",
+    re.IGNORECASE,
+)
+
+_STOP_WORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had", "having",
+    "it", "its", "this", "that", "these", "those",
+    "about", "just", "really", "very", "also", "actually", "basically",
+    "so", "like", "well", "anyway", "right", "okay", "ok",
+    "some", "any", "much", "many", "more", "most",
+    "not", "no", "nor", "but", "or", "and", "if", "then",
+    "of", "in", "on", "at", "to", "for", "with", "from", "by",
+    "up", "out", "into", "over", "after", "before",
+    "i", "me", "my", "mine", "myself",
+    "you", "your", "yours", "yourself",
+    "we", "our", "ours", "ourselves",
+    "they", "them", "their", "theirs",
+    "he", "she", "him", "her", "his", "hers",
+    "there", "here",
+})
+
+# Matches technical terms: dotted names (foo.bar), hyphenated (my-thing),
+# underscored (my_thing), or camelCase (myThing).
+_TECHNICAL_TERM_PATTERN = re.compile(
+    r"\b[a-zA-Z0-9]+[._-][a-zA-Z0-9]+(?:[._-][a-zA-Z0-9]+)*\b"  # dotted/hyphenated/underscored
+    r"|\b[a-z]+[A-Z][a-zA-Z]*\b"  # camelCase
+)
+
+_QUOTED_STRING_PATTERN = re.compile(r'"[^"]+"|\'[^\']+\'')
+
+
+def rewrite_query(message: str) -> str:
+    """Transform a user message into a search-optimized query.
+
+    Strips greetings, hedging phrases, and stop words. Preserves quoted
+    strings, technical terms (dotted/hyphenated/underscored/camelCase),
+    and content words.
+
+    If the rewritten query is empty, falls back to the original message.
+    Logs the original and rewritten queries to stderr.
+    """
+    # 1. Extract and preserve quoted strings and technical terms
+    preserved: list[str] = []
+    for match in _QUOTED_STRING_PATTERN.finditer(message):
+        preserved.append(match.group())
+    for match in _TECHNICAL_TERM_PATTERN.finditer(message):
+        preserved.append(match.group())
+
+    # 2. Strip greetings and hedging phrases
+    text = _GREETING_PATTERN.sub(" ", message)
+    text = _HEDGING_PATTERN.sub(" ", text)
+
+    # 3. Strip trailing question marks and exclamation marks
+    text = re.sub(r"[?!]+", " ", text)
+
+    # 4. Tokenize and filter stop words
+    words = re.findall(r"\w+", text)
+    content_words = [w for w in words if w.lower() not in _STOP_WORDS]
+
+    # 5. Combine preserved terms + content words, deduplicate preserving order
+    all_terms = preserved + content_words
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for term in all_terms:
+        lower = term.lower()
+        if lower not in seen:
+            seen.add(lower)
+            deduped.append(term)
+
+    rewritten = " ".join(deduped).strip()
+
+    # 6. Fallback: if rewriting removed everything, use the original
+    if not rewritten:
+        rewritten = message.strip()
+
+    # 7. Log for debugging and quality assessment
+    if rewritten != message.strip():
+        sys.stderr.write(
+            f'search: query rewrite: "{message.strip()}" -> "{rewritten}"\n'
+        )
+        sys.stderr.flush()
+
+    return rewritten
 
 
 # ---------------------------------------------------------------------------
@@ -251,19 +360,49 @@ async def search_vector(
 
 
 async def search_hybrid(
-    conn: sqlite3.Connection, query_text: str, limit: int = SEARCH_RESULTS,
+    conn: sqlite3.Connection,
+    query_text: str,
+    limit: int = SEARCH_RESULTS,
+    min_score: float = MIN_RRF_SCORE,
 ) -> list[dict[str, Any]]:
-    """Hybrid search: BM25 + vector, merged with Reciprocal Rank Fusion."""
+    """Hybrid search: BM25 + vector, merged with Reciprocal Rank Fusion.
+
+    Results below min_score are discarded. Each returned result dict
+    includes an ``rrf_score`` key.
+    """
     bm25_results = search_bm25(conn, query_text)
     vec_results = await search_vector(conn, query_text)
 
     if vec_results is None:
-        # Ollama down — BM25 only
-        return bm25_results[:limit]
+        # Ollama down -- BM25 only, apply RRF scoring for single modality
+        rrf_scores: dict[str, float] = {}
+        doc_map: dict[str, dict] = {}
+        for rank, doc in enumerate(bm25_results, start=1):
+            key = doc["chunk_key"]
+            rrf_scores[key] = 1 / (RRF_K + rank)
+            doc_map[key] = doc
+
+        # Log all scores for threshold tuning
+        sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
+        sys.stderr.write(
+            f"search: RRF scores (BM25-only) for query={query_text!r}: "
+            + ", ".join(f"{k}={rrf_scores[k]:.4f}" for k in sorted_keys)
+            + "\n"
+        )
+        sys.stderr.flush()
+
+        # Filter and attach scores
+        results: list[dict[str, Any]] = []
+        for key in sorted_keys:
+            if rrf_scores[key] >= min_score and len(results) < limit:
+                doc = doc_map[key]
+                doc["rrf_score"] = rrf_scores[key]
+                results.append(doc)
+        return results
 
     # RRF merge: score(doc) = sum(1 / (k + rank)) across both result lists
-    rrf_scores: dict[str, float] = {}
-    doc_map: dict[str, dict] = {}
+    rrf_scores = {}
+    doc_map = {}
 
     for rank, doc in enumerate(bm25_results, start=1):
         key = doc["chunk_key"]
@@ -275,19 +414,44 @@ async def search_hybrid(
         rrf_scores[key] = rrf_scores.get(key, 0) + 1 / (RRF_K + rank)
         doc_map[key] = doc
 
+    # Log all scores for threshold tuning
     sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
-    return [doc_map[k] for k in sorted_keys[:limit]]
+    sys.stderr.write(
+        f"search: RRF scores (hybrid) for query={query_text!r}: "
+        + ", ".join(f"{k}={rrf_scores[k]:.4f}" for k in sorted_keys)
+        + "\n"
+    )
+    sys.stderr.flush()
+
+    # Filter by minimum score and attach rrf_score to each result
+    results = []
+    for key in sorted_keys:
+        if rrf_scores[key] >= min_score and len(results) < limit:
+            doc = doc_map[key]
+            doc["rrf_score"] = rrf_scores[key]
+            results.append(doc)
+
+    return results
 
 
-def format_context(results: list[dict[str, Any]], max_chars: int = 2000) -> str | None:
-    """Format search results into a context string for the system prompt."""
+def format_context(
+    results: list[dict[str, Any]],
+    max_tokens: int = 750,
+) -> str | None:
+    """Format search results into a context string for the system prompt.
+
+    Each result is prefixed with its RRF score so the agent can gauge
+    relevance. Output is capped at max_tokens (estimated as chars // 4).
+    """
     if not results:
         return None
 
+    max_chars = max_tokens * 4
     parts: list[str] = []
     total = 0
     for r in results:
-        entry = r["content"]
+        score = r.get("rrf_score", 0)
+        entry = f"[score: {score:.4f}] {r['content']}"
         if total + len(entry) > max_chars:
             remaining = max_chars - total
             if remaining > 100:
@@ -297,3 +461,67 @@ def format_context(results: list[dict[str, Any]], max_chars: int = 2000) -> str 
         total += len(entry)
 
     return "\n\n".join(parts) if parts else None
+
+
+# ---------------------------------------------------------------------------
+# Index pruning
+# ---------------------------------------------------------------------------
+
+
+def prune_old_index_entries(
+    conn: sqlite3.Connection,
+    retention_days: int = 90,
+) -> int:
+    """Remove index entries older than retention_days from FTS and vec.
+
+    Does NOT delete the underlying memory files from disk -- they remain
+    for archival. Facts extracted from those files survive in the
+    ``facts`` table, which is independent of the search index.
+
+    Returns the number of entries pruned.
+
+    Note on FTS5: ``created_at`` is an UNINDEXED column. We use the same
+    ``DELETE ... WHERE rowid IN (subquery)`` pattern as ``delete_memory_index``
+    which already operates on this FTS5 table successfully.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Find old entries -- collect chunk_keys before deleting
+    old_entries = conn.execute(
+        "SELECT chunk_key FROM memory_fts WHERE created_at < ?",
+        (cutoff_str,),
+    ).fetchall()
+
+    if not old_entries:
+        return 0
+
+    chunk_keys = [r[0] for r in old_entries]
+
+    # Delete old FTS entries using the same rowid-subquery pattern as
+    # delete_memory_index (proven to work on this FTS5 table)
+    conn.execute(
+        "DELETE FROM memory_fts WHERE rowid IN ("
+        "  SELECT rowid FROM memory_fts WHERE created_at < ?"
+        ")",
+        (cutoff_str,),
+    )
+
+    # Delete corresponding vec entries via mapping table
+    for chunk_key in chunk_keys:
+        vec_row = conn.execute(
+            "SELECT vec_rowid FROM memory_vec_map WHERE chunk_key = ?",
+            (chunk_key,),
+        ).fetchone()
+        if vec_row:
+            try:
+                conn.execute("DELETE FROM memory_vec WHERE rowid = ?", (vec_row[0],))
+            except sqlite3.OperationalError:
+                pass
+            conn.execute(
+                "DELETE FROM memory_vec_map WHERE chunk_key = ?",
+                (chunk_key,),
+            )
+
+    conn.commit()
+    return len(chunk_keys)

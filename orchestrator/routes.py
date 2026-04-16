@@ -1574,6 +1574,71 @@ async def delete_schedule(task_id: str):
     return {"status": "ok", "task_id": task_id}
 
 
+# --- Webhook Trigger ---
+
+# In-memory webhook rate limiter, keyed by task_id -> deque of timestamps
+_webhook_rate_limits: dict[str, deque[float]] = defaultdict(deque)
+WEBHOOK_RATE_LIMIT_WINDOW = 60.0  # seconds
+WEBHOOK_RATE_LIMIT_MAX = 10
+
+
+@router.post("/agents/{agent_id}/trigger/{task_id}")
+async def trigger_webhook(agent_id: str, task_id: str, request: Request):
+    """Receive an external webhook trigger for an agentic task."""
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT id, agent_id, prompt, allowed_tools, trigger_type, trigger_secret, status "
+        "FROM agentic_tasks WHERE id = ? AND agent_id = ?",
+        (task_id, agent_id),
+    ) as cur:
+        row = await cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+    if row[4] != "webhook":
+        raise HTTPException(status_code=400, detail="Task is not a webhook trigger")
+    if row[6] != "active":
+        raise HTTPException(status_code=400, detail="Task is not active")
+
+    # Authenticate
+    secret = row[5]
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != secret:
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+
+    # Rate limit using in-memory counter
+    now = time.monotonic()
+    dq = _webhook_rate_limits[task_id]
+    while dq and (now - dq[0]) > WEBHOOK_RATE_LIMIT_WINDOW:
+        dq.popleft()
+    if len(dq) >= WEBHOOK_RATE_LIMIT_MAX:
+        raise HTTPException(status_code=429, detail="Rate limit: max 10 triggers per minute")
+    dq.append(now)
+
+    # Read payload
+    try:
+        body = await request.json()
+    except Exception:
+        body = (await request.body()).decode("utf-8", errors="replace")
+
+    payload_str = json.dumps(body) if isinstance(body, dict) else str(body)
+
+    # Enrich prompt with payload
+    prompt = row[2]
+    enriched_prompt = f"{prompt}\n\nWebhook payload:\n{payload_str[:5000]}"
+
+    allowed_tools = json.loads(row[3]) if row[3] else []
+
+    from orchestrator.scheduler import execute_agentic_task
+    asyncio.create_task(
+        execute_agentic_task(task_id, agent_id, enriched_prompt, allowed_tools),
+        name=f"agentic-webhook-{task_id[:8]}",
+    )
+
+    return {"status": "ok", "task_id": task_id, "triggered": True}
+
+
 @router.post("/agents/{agent_id}/kill")
 async def kill_agent(agent_id: str):
     """Force-terminate an agent's container: graceful shutdown with 30s timeout, then kill."""

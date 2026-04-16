@@ -28,10 +28,19 @@ create_schedule_schema = {
             },
             "interval_minutes": {
                 "type": "integer",
-                "description": "How often to run, in minutes (minimum 5).",
+                "description": "How often to run, in minutes (minimum 5). Required for interval triggers.",
+            },
+            "trigger_type": {
+                "type": "string",
+                "enum": ["interval", "file_watch", "webhook"],
+                "description": "Type of trigger. 'interval' runs on a timer, 'file_watch' runs when new files appear in a directory, 'webhook' runs when an HTTP POST is received.",
+            },
+            "watch_dir": {
+                "type": "string",
+                "description": "For file_watch triggers: directory within /workspace to watch (e.g., 'inbox'). Must be a relative path within the workspace.",
             },
         },
-        "required": ["prompt", "interval_minutes"],
+        "required": ["prompt"],
     },
 }
 

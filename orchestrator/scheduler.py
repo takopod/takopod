@@ -257,28 +257,62 @@ async def _poll_agentic_tasks() -> None:
         _running_agentic.pop(tid, None)
 
     db = await get_db()
+
+    # --- Interval tasks (existing logic) ---
     async with db.execute(
         "SELECT id, agent_id, prompt, allowed_tools, interval_seconds "
         "FROM agentic_tasks "
-        "WHERE status = 'active' "
+        "WHERE status = 'active' AND trigger_type = 'interval' "
         "  AND (last_executed_at IS NULL "
         "       OR last_executed_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', "
         "          '-' || interval_seconds || ' seconds'))",
     ) as cur:
-        rows = await cur.fetchall()
+        interval_rows = await cur.fetchall()
 
-    for task_id, agent_id, prompt, allowed_tools_json, interval_seconds in rows:
+    for task_id, agent_id, prompt, allowed_tools_json, interval_seconds in interval_rows:
         if task_id in _running_agentic:
             continue
         allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
         task = asyncio.create_task(
-            _execute_agentic_task(task_id, agent_id, prompt, allowed_tools),
+            execute_agentic_task(task_id, agent_id, prompt, allowed_tools),
             name=f"agentic-{task_id[:8]}",
         )
         _running_agentic[task_id] = task
 
+    # --- File-watch tasks ---
+    async with db.execute(
+        "SELECT id, agent_id, prompt, allowed_tools, trigger_config "
+        "FROM agentic_tasks "
+        "WHERE status = 'active' AND trigger_type = 'file_watch'",
+    ) as cur:
+        watch_rows = await cur.fetchall()
 
-async def _execute_agentic_task(
+    for task_id, agent_id, prompt, allowed_tools_json, trigger_config_json in watch_rows:
+        if task_id in _running_agentic:
+            continue
+        trigger_config = json.loads(trigger_config_json) if trigger_config_json else {}
+        new_files = await _check_file_watch(agent_id, trigger_config)
+        if new_files:
+            allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
+            file_list = ", ".join(new_files)
+            enriched_prompt = f"{prompt}\n\nNew files detected: {file_list}"
+            task = asyncio.create_task(
+                execute_agentic_task(task_id, agent_id, enriched_prompt, allowed_tools),
+                name=f"agentic-watch-{task_id[:8]}",
+            )
+            _running_agentic[task_id] = task
+            # Update snapshot
+            trigger_config["last_snapshot"] = await _get_dir_listing(
+                agent_id, trigger_config.get("watch_dir", ""),
+            )
+            await db.execute(
+                "UPDATE agentic_tasks SET trigger_config = ? WHERE id = ?",
+                (json.dumps(trigger_config), task_id),
+            )
+            await db.commit()
+
+
+async def execute_agentic_task(
     task_id: str,
     agent_id: str,
     prompt: str,
@@ -346,6 +380,59 @@ async def _wait_for_completion(
             return row[0] or ""
 
     return "Error: Timed out waiting for response"
+
+
+# ---------------------------------------------------------------------------
+# File-watch helpers
+# ---------------------------------------------------------------------------
+
+
+async def _check_file_watch(agent_id: str, trigger_config: dict) -> list[str]:
+    """Check if new files appeared in the watched directory.
+
+    Returns list of new filenames, or empty list if no changes.
+    """
+    watch_dir = trigger_config.get("watch_dir", "")
+    if not watch_dir:
+        return []
+
+    current = set(await _get_dir_listing(agent_id, watch_dir))
+    previous = set(trigger_config.get("last_snapshot", []))
+    return sorted(current - previous)
+
+
+async def _get_dir_listing(agent_id: str, watch_dir: str) -> list[str]:
+    """Get current file listing for snapshot update."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT host_dir FROM agents WHERE id = ?", (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return []
+
+    host_dir = Path(row[0])
+    target = host_dir / watch_dir
+
+    try:
+        target = target.resolve()
+        if not target.is_relative_to(host_dir.resolve()):
+            return []
+    except (ValueError, OSError):
+        return []
+
+    if not target.is_dir():
+        return []
+
+    IPC_FILES = {"input.json", "output.json", "request.json", "response.json"}
+    result = []
+    try:
+        for entry in target.iterdir():
+            if entry.is_file() and entry.name not in IPC_FILES and not entry.name.endswith(".log"):
+                result.append(entry.name)
+    except OSError:
+        pass
+    return sorted(result)
 
 
 # ---------------------------------------------------------------------------

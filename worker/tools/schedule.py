@@ -40,11 +40,16 @@ def create_schedule_server():
         create_schedule_schema["input_schema"],
     )
     async def create_schedule(args: dict[str, Any]) -> dict[str, Any]:
-        data = await ipc_request("create_schedule", {
+        params: dict[str, Any] = {
             "prompt": args.get("prompt", ""),
             "allowed_tools": args.get("allowed_tools", []),
             "interval_minutes": args.get("interval_minutes", 60),
-        })
+        }
+        if args.get("trigger_type"):
+            params["trigger_type"] = args["trigger_type"]
+        if args.get("watch_dir"):
+            params["watch_dir"] = args["watch_dir"]
+        data = await ipc_request("create_schedule", params)
         sys.stderr.write(f"agent: created schedule {data.get('task_id', '')[:8]}\n")
         sys.stderr.flush()
         return {"content": [{"type": "text", "text": json.dumps(data, indent=2)}]}

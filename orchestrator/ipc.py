@@ -456,26 +456,52 @@ async def _handle_tool_request(
             task_id = str(uuid.uuid4())
             prompt = params.get("prompt", "")
             allowed_tools = json.dumps(params.get("allowed_tools", []))
-            interval_minutes = max(int(params.get("interval_minutes", 60)), 5)
-            interval_seconds = interval_minutes * 60
+            trigger_type = params.get("trigger_type", "interval")
+            trigger_config: dict = {}
+            trigger_secret = None
+
+            if trigger_type == "file_watch":
+                watch_dir = params.get("watch_dir", "")
+                if not watch_dir:
+                    return {"request_id": request_id, "status": "error", "error": "watch_dir required for file_watch trigger"}
+                if ".." in watch_dir or watch_dir.startswith("/"):
+                    return {"request_id": request_id, "status": "error", "error": "watch_dir must be a relative path within workspace"}
+                initial_snapshot = await _get_initial_snapshot(agent_id, watch_dir)
+                trigger_config = {"watch_dir": watch_dir, "last_snapshot": initial_snapshot}
+                interval_minutes = 0
+                interval_seconds = 0
+            elif trigger_type == "webhook":
+                interval_minutes = 0
+                interval_seconds = 0
+                import secrets
+                trigger_secret = secrets.token_urlsafe(24)
+            else:
+                interval_minutes = max(int(params.get("interval_minutes", 60)), 5)
+                interval_seconds = interval_minutes * 60
 
             await db.execute(
-                "INSERT INTO agentic_tasks (id, agent_id, prompt, allowed_tools, interval_seconds) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (task_id, agent_id, prompt, allowed_tools, interval_seconds),
+                "INSERT INTO agentic_tasks "
+                "(id, agent_id, prompt, allowed_tools, interval_seconds, "
+                "trigger_type, trigger_config, trigger_secret) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (task_id, agent_id, prompt, allowed_tools, interval_seconds,
+                 trigger_type, json.dumps(trigger_config), trigger_secret),
             )
             await db.commit()
-            logger.info("Created agentic task %s for agent %s", task_id[:8], agent_id[:8])
-            return {
-                "request_id": request_id,
-                "status": "ok",
-                "data": {
-                    "task_id": task_id,
-                    "prompt": prompt,
-                    "interval_minutes": interval_minutes,
-                    "status": "active",
-                },
+            logger.info("Created agentic task %s (%s) for agent %s", task_id[:8], trigger_type, agent_id[:8])
+
+            data: dict[str, Any] = {
+                "task_id": task_id,
+                "prompt": prompt,
+                "trigger_type": trigger_type,
+                "status": "active",
             }
+            if trigger_type == "interval":
+                data["interval_minutes"] = interval_minutes
+            if trigger_type == "webhook":
+                data["webhook_url"] = f"/api/agents/{agent_id}/trigger/{task_id}"
+                data["webhook_secret"] = trigger_secret
+            return {"request_id": request_id, "status": "ok", "data": data}
 
         elif action == "list_schedules":
             status_filter = params.get("status")
@@ -680,6 +706,40 @@ async def _handle_tool_request(
     except Exception as e:
         logger.exception("Error handling tool request %s", action)
         return {"request_id": request_id, "status": "error", "error": str(e)}
+
+
+async def _get_initial_snapshot(agent_id: str, watch_dir: str) -> list[str]:
+    """Get current file listing for a watch directory at task creation time."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT host_dir FROM agents WHERE id = ?", (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return []
+
+    host_dir = Path(row[0])
+    target = host_dir / watch_dir
+
+    try:
+        target = target.resolve()
+        if not target.is_relative_to(host_dir.resolve()):
+            return []
+    except (ValueError, OSError):
+        return []
+
+    if not target.is_dir():
+        return []
+
+    IPC_FILES = {"input.json", "output.json", "request.json", "response.json"}
+    result = []
+    try:
+        for entry in target.iterdir():
+            if entry.is_file() and entry.name not in IPC_FILES and not entry.name.endswith(".log"):
+                result.append(entry.name)
+    except OSError:
+        pass
+    return sorted(result)
 
 
 async def _schedule_compaction_task(agent_id: str, date: str) -> None:

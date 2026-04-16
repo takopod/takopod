@@ -1,6 +1,7 @@
 """Session memory: summarization, daily memory file I/O, and context loading."""
 
 import asyncio
+import json
 import re
 import sqlite3
 import sys
@@ -28,18 +29,323 @@ SUMMARIZE_TIMEOUT = 45  # seconds
 MAX_CONTINUATION_FILES = 3  # compact when a 4th file would be created
 
 SUMMARIZE_SYSTEM_PROMPT = (
-    "You are a session summarizer. Produce a concise summary of the following "
-    "conversation. Focus on:\n"
-    "- What the user asked for or wanted to accomplish (their intent)\n"
+    "You are a session summarizer. Produce a summary of the following "
+    "conversation in two sections.\n\n"
+    "## Facts\n"
+    "Extract key facts as a JSON array. Each fact is an object with three fields:\n"
+    '- "key": snake_case identifier (e.g., "user_name", "project_framework")\n'
+    '- "value": the fact value as a string\n'
+    '- "category": one of "preference", "project", "decision", "entity", "config", "general"\n\n'
+    "Example:\n"
+    '```json\n'
+    '[{"key": "user_name", "value": "Shaon", "category": "preference"},\n'
+    ' {"key": "project_framework", "value": "FastAPI + React", "category": "project"}]\n'
+    '```\n\n'
+    "Only include facts that are explicitly stated or clearly implied. "
+    "Do not speculate. If no facts are extractable, output an empty array `[]`.\n\n"
+    "## Summary\n"
+    "A concise narrative summary focusing on:\n"
+    "- What the user asked for or wanted to accomplish\n"
     "- Decisions made and conclusions reached\n"
     "- Unresolved questions or next steps\n\n"
     "Important: Do NOT include specific tool results, search results, or "
     "intermediate findings as facts. For example, if a search returned results "
     "from a specific channel, do not record that channel as the definitive "
-    "source — the search may have been incomplete. Summarize the user's intent "
+    "source -- the search may have been incomplete. Summarize the user's intent "
     "and what was or wasn't resolved, not the raw data returned by tools.\n\n"
-    "Output only the summary, no preamble."
+    "Output only the two sections, no preamble."
 )
+
+def _normalize_fact_key(key: str) -> str:
+    """Normalize a fact key: lowercase, collapse whitespace/underscores."""
+    return re.sub(r"[\s_]+", "_", key.strip().lower())
+
+
+# ---------------------------------------------------------------------------
+# Structured fact storage (P7) — JSON-based extraction and DB persistence
+# ---------------------------------------------------------------------------
+
+_JSON_BLOCK_PATTERN = re.compile(
+    r"```(?:json)?\s*\n?(.*?)\n?\s*```",  # fenced code block
+    re.DOTALL,
+)
+_JSON_ARRAY_PATTERN = re.compile(
+    r"\[\s*\]|\[\s*\{.*?\}\s*\]",  # empty array or array of objects only
+    re.DOTALL,
+)
+
+_VALID_CATEGORIES = frozenset({
+    "preference", "project", "decision", "entity", "config", "general",
+})
+
+
+def parse_facts_json(text: str) -> list[dict]:
+    """Extract a JSON facts array from Claude's summarization output.
+
+    Tries multiple extraction strategies in order:
+    1. Fenced code block (```json ... ```)
+    2. Bare JSON array ([{...}] or [])
+
+    Each extracted fact must have 'key' and 'value' fields. The 'category'
+    field defaults to 'general' if missing or unrecognized.
+
+    Returns an empty list on parse failure (never raises).
+    """
+    json_str: str | None = None
+
+    # Strategy 1: fenced code block
+    match = _JSON_BLOCK_PATTERN.search(text)
+    if match:
+        json_str = match.group(1).strip()
+
+    # Strategy 2: bare JSON array (objects only, or empty)
+    if json_str is None:
+        match = _JSON_ARRAY_PATTERN.search(text)
+        if match:
+            json_str = match.group(0).strip()
+
+    if not json_str:
+        sys.stderr.write("memory: no JSON facts array found in output\n")
+        sys.stderr.flush()
+        return []
+
+    # Strip trailing commas before closing bracket (common LLM formatting error)
+    json_str = re.sub(r",\s*\]", "]", json_str)
+
+    try:
+        parsed = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"memory: facts JSON parse failed: {e}\n")
+        sys.stderr.flush()
+        return []
+
+    if not isinstance(parsed, list):
+        sys.stderr.write(
+            f"memory: facts JSON is not an array: {type(parsed).__name__}\n"
+        )
+        sys.stderr.flush()
+        return []
+
+    # Validate and normalize each fact
+    facts: list[dict] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        value = item.get("value")
+        if not key or not value:
+            continue
+        category = item.get("category", "general")
+        if category not in _VALID_CATEGORIES:
+            category = "general"
+        facts.append({
+            "key": _normalize_fact_key(str(key)),
+            "value": str(value),
+            "category": category,
+        })
+
+    sys.stderr.write(f"memory: parsed {len(facts)} facts from JSON\n")
+    sys.stderr.flush()
+    return facts
+
+
+def store_facts(
+    conn: sqlite3.Connection,
+    facts: list[dict],
+    source: str,
+) -> int:
+    """Insert or update facts in the database with supersession handling.
+
+    For each fact:
+    - If an active row with the same normalized key exists and has the
+      same value, update its updated_at timestamp (confirmation).
+    - If an active row with the same key exists but has a different value,
+      mark it as superseded and insert a new active row.
+    - If no active row with the key exists, insert a new active row.
+
+    Returns the number of facts written (inserted or confirmed).
+    """
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    written = 0
+
+    for fact in facts:
+        key = fact["key"]
+        value = fact["value"]
+        category = fact.get("category", "general")
+
+        # Check for existing active fact with same key
+        existing = conn.execute(
+            "SELECT id, value FROM facts WHERE key = ? AND superseded = 0",
+            (key,),
+        ).fetchone()
+
+        if existing:
+            existing_id, existing_value = existing
+            if existing_value == value:
+                # Same value -- confirm by updating timestamp
+                conn.execute(
+                    "UPDATE facts SET updated_at = ? WHERE id = ?",
+                    (now, existing_id),
+                )
+            else:
+                # Different value -- supersede old, insert new
+                conn.execute(
+                    "UPDATE facts SET superseded = 1, updated_at = ? WHERE id = ?",
+                    (now, existing_id),
+                )
+                conn.execute(
+                    "INSERT INTO facts (id, key, value, category, source, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4()), key, value, category, source, now, now),
+                )
+        else:
+            # No existing active fact -- insert new
+            conn.execute(
+                "INSERT INTO facts (id, key, value, category, source, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), key, value, category, source, now, now),
+            )
+
+        written += 1
+
+    conn.commit()
+    sys.stderr.write(
+        f"memory: stored {written} facts (source={source})\n"
+    )
+    sys.stderr.flush()
+    return written
+
+
+def get_facts_context(conn: sqlite3.Connection) -> str | None:
+    """Query active facts and format them for system prompt injection.
+
+    Returns a formatted string with facts grouped by category, or None
+    if no active facts exist. Each fact line includes the category tag.
+
+    This replaces the old cache-based get_facts_context() which took no
+    arguments. The signature change is intentional -- all callers must
+    pass the DB connection.
+    """
+    rows = conn.execute(
+        "SELECT key, value, category FROM facts "
+        "WHERE superseded = 0 ORDER BY category, key",
+    ).fetchall()
+
+    if not rows:
+        return None
+
+    lines = [f"- {row[0]}: {row[1]} [{row[2]}]" for row in rows]
+    return "## Known Facts\n\n" + "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Migration-only code: markdown fact parsing
+#
+# These patterns and functions are used ONLY by migrate_markdown_facts_to_db()
+# to import existing markdown-embedded facts into the facts table. They can
+# be removed after one release cycle once all agents have been migrated.
+# ---------------------------------------------------------------------------
+
+_FACTS_HEADER_PATTERN = re.compile(
+    r"^#{1,3}\s+Facts\s*$", re.MULTILINE
+)
+_FACT_LINE_PATTERN = re.compile(
+    r"^[-*]\s*(.+?)\s*[:=]\s*(.+)$", re.MULTILINE
+)
+
+
+def _extract_facts_section(content: str) -> str | None:
+    """Extract the Facts section body from a memory file's content.
+
+    Matches headers with 1-3 '#' characters followed by 'Facts'.
+    Returns the text between the Facts header and the next header (or EOF).
+
+    Migration-only: used by migrate_markdown_facts_to_db().
+    """
+    match = _FACTS_HEADER_PATTERN.search(content)
+    if not match:
+        return None
+
+    start = match.end()
+    # Find the next markdown header (any level)
+    next_header = re.search(r"^#{1,6}\s+", content[start:], re.MULTILINE)
+    if next_header:
+        section = content[start:start + next_header.start()]
+    else:
+        section = content[start:]
+
+    return section.strip() or None
+
+
+def _parse_fact_lines(section: str) -> list[tuple[str, str, str]]:
+    """Parse fact lines from a Facts section body.
+
+    Returns list of (original_key, value, normalized_key) tuples.
+    Accepts '- key: value', '- key = value', '* key: value' formats.
+
+    Migration-only: used by migrate_markdown_facts_to_db().
+    """
+    facts: list[tuple[str, str, str]] = []
+    for match in _FACT_LINE_PATTERN.finditer(section):
+        orig_key = match.group(1).strip()
+        value = match.group(2).strip()
+        norm_key = _normalize_fact_key(orig_key)
+        facts.append((orig_key, value, norm_key))
+    return facts
+
+
+def migrate_markdown_facts_to_db(conn: sqlite3.Connection) -> int:
+    """One-time migration: import existing markdown-embedded facts into the facts table.
+
+    Reads all memory files, parses their Facts sections using the existing
+    lenient regex patterns, and inserts them into the facts table.
+
+    Idempotent: if the facts table already has rows, this is a no-op.
+    Returns the number of facts migrated.
+    """
+    # Check if already migrated
+    count = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+    if count > 0:
+        sys.stderr.write(
+            f"memory: facts table already has {count} rows, skipping markdown migration\n"
+        )
+        sys.stderr.flush()
+        return 0
+
+    # Parse facts from all memory files
+    facts: dict[str, tuple[str, str]] = {}
+
+    if MEMORY_MD.is_file():
+        content = MEMORY_MD.read_text()
+        section = _extract_facts_section(content)
+        if section:
+            for orig_key, value, norm_key in _parse_fact_lines(section):
+                facts[norm_key] = (orig_key, value)
+
+    if MEMORY_DIR.is_dir():
+        for md_file in sorted(MEMORY_DIR.glob("*.md")):
+            content = md_file.read_text()
+            section = _extract_facts_section(content)
+            if section:
+                for orig_key, value, norm_key in _parse_fact_lines(section):
+                    facts[norm_key] = (orig_key, value)
+
+    if not facts:
+        sys.stderr.write("memory: no markdown facts found to migrate\n")
+        sys.stderr.flush()
+        return 0
+
+    # Insert all facts with source=migration:markdown
+    migrated_facts = [
+        {"key": norm_key, "value": value, "category": "general"}
+        for norm_key, (_orig_key, value) in facts.items()
+    ]
+    written = store_facts(conn, migrated_facts, source="migration:markdown")
+
+    sys.stderr.write(f"memory: migrated {written} facts from markdown to DB\n")
+    sys.stderr.flush()
+    return written
+
 
 _RETRIEVED_CONTEXT_PATTERN = re.compile(
     r"## Relevant Past Conversations\n+"
@@ -62,10 +368,18 @@ def strip_retrieved_context(text: str) -> str:
 
 COMPACT_SYSTEM_PROMPT = (
     "You are a memory compactor. The following contains multiple session summaries "
-    "from the same day. Distill them into a single, coherent summary that preserves "
-    "all important information: key decisions, facts learned, topics discussed, "
-    "and unresolved questions. Remove redundancy. Output only the distilled summary, "
-    "no preamble."
+    "from the same day. Distill them into a single coherent document with two sections.\n\n"
+    "## Facts\n"
+    "Merge all facts from the sessions into a single JSON array. Deduplicate by key "
+    "(keep the value from the latest session if keys conflict). Each fact is an object:\n"
+    '- "key": snake_case identifier\n'
+    '- "value": the fact value as a string\n'
+    '- "category": one of "preference", "project", "decision", "entity", "config", "general"\n\n'
+    "If there are no facts in any session, output an empty array `[]`.\n\n"
+    "## Summary\n"
+    "A single narrative summary preserving key decisions, topics discussed, "
+    "and unresolved questions. Remove redundancy.\n\n"
+    "Output only the two sections, no preamble."
 )
 
 
@@ -228,6 +542,15 @@ async def compact_memory_files(
     index_memory_file(conn, canonical_path, compacted_content)
     await index_memory_vectors(conn, canonical_path, compacted_content)
 
+    # Extract and store facts from the compacted output into the DB
+    try:
+        parsed_facts = parse_facts_json(distilled)
+        if parsed_facts:
+            store_facts(conn, parsed_facts, source=f"compaction:{date}")
+    except Exception as e:
+        sys.stderr.write(f"memory: fact storage after compaction failed: {e}\n")
+        sys.stderr.flush()
+
     sys.stderr.write(
         f"memory: compacted {len(paths)} files into {canonical_path} "
         f"({len(distilled)} chars)\n"
@@ -331,6 +654,16 @@ def write_memory_file(
         from worker.search import index_memory_file
         file_content = abs_path.read_text()
         index_memory_file(conn, rel_path, file_content)
+
+        # Extract and store facts from the summary into the DB
+        try:
+            parsed_facts = parse_facts_json(summary)
+            if parsed_facts:
+                session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                store_facts(conn, parsed_facts, source=f"session:{session_ref}")
+        except Exception as e:
+            sys.stderr.write(f"memory: fact storage after write failed: {e}\n")
+            sys.stderr.flush()
 
         sys.stderr.write(f"memory: wrote summary to {rel_path}\n")
         sys.stderr.flush()

@@ -39,6 +39,9 @@ _continuation_summary: str | None = None
 # or context overflow.  Cleared on split/end.
 _session_transcript: list[tuple[str, str]] = []
 
+# In-memory buffer for events waiting to be flushed to output.json.
+_pending_events: list[dict[str, Any]] = []
+
 # Module-level DB connection, set in main().
 _conn = None
 
@@ -84,48 +87,28 @@ def atomic_write(path: Path, data: bytes) -> None:
 
 
 def flush_responses() -> None:
-    """Flush pending worker_responses rows to output.json if absent."""
-    if OUTPUT_PATH.exists():
+    """Flush pending events to output.json if absent."""
+    if OUTPUT_PATH.exists() or not _pending_events:
         return
-    rows = _conn.execute(
-        "SELECT id, event FROM worker_responses "
-        "WHERE status = 'pending' ORDER BY id",
-    ).fetchall()
-    if not rows:
-        return
-    events = [json.loads(row[1]) for row in rows]
-    atomic_write(OUTPUT_PATH, json.dumps(events).encode())
-    ids = [row[0] for row in rows]
-    placeholders = ",".join("?" * len(ids))
-    _conn.execute(
-        f"DELETE FROM worker_responses WHERE id IN ({placeholders})",
-        ids,
-    )
-    _conn.commit()
+    atomic_write(OUTPUT_PATH, json.dumps(_pending_events).encode())
+    _pending_events.clear()
 
 
 def emit(event: dict[str, Any]) -> None:
-    """Insert event into worker_responses and attempt to flush."""
-    _conn.execute(
-        "INSERT INTO worker_responses (message_id, event) VALUES (?, ?)",
-        (event.get("message_id", ""), json.dumps(event)),
-    )
-    _conn.commit()
+    """Append event to the pending list and attempt to flush."""
+    _pending_events.append(event)
     flush_responses()
 
 
 def drain_pending(max_wait: float = 10.0) -> None:
-    """Block until all pending worker_responses are flushed to output.json.
+    """Block until all pending events are flushed to output.json.
 
     Waits for the orchestrator to consume any existing output.json, then
-    flushes remaining pending rows.  Gives up after *max_wait* seconds.
+    flushes remaining pending events.  Gives up after *max_wait* seconds.
     """
     deadline = time.monotonic() + max_wait
     while time.monotonic() < deadline:
-        pending = _conn.execute(
-            "SELECT COUNT(*) FROM worker_responses WHERE status = 'pending'",
-        ).fetchone()[0]
-        if pending == 0:
+        if not _pending_events:
             return
         if not OUTPUT_PATH.exists():
             flush_responses()
@@ -297,15 +280,26 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             f"{file_lines}\n\n{content}"
         )
 
+    # Load context budget config
+    from worker.context_budget import get_config
+    config = get_config()
+
     # Retrieve relevant past context via hybrid search (memory summaries)
     retrieved_context = None
     try:
-        from worker.search import search_hybrid, format_context
-        results = await search_hybrid(conn, content)
-        retrieved_context = format_context(results)
-        if retrieved_context:
+        from worker.search import search_hybrid, format_context, rewrite_query, MIN_QUERY_LENGTH
+        if len(content.strip()) >= MIN_QUERY_LENGTH:
+            search_query = rewrite_query(content)
+            results = await search_hybrid(conn, search_query)
+            retrieved_context = format_context(results, max_tokens=config.search_tokens)
+            if retrieved_context:
+                sys.stderr.write(
+                    f"worker: retrieved {len(results)} search results for context\n"
+                )
+                sys.stderr.flush()
+        else:
             sys.stderr.write(
-                f"worker: retrieved {len(results)} search results for context\n"
+                f"worker: skipping search (query too short: {len(content.strip())} chars)\n"
             )
             sys.stderr.flush()
     except Exception as e:
@@ -326,6 +320,20 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         sys.stderr.write(f"worker: memory loading failed: {e}\n")
         sys.stderr.flush()
 
+    # Extract structured facts from cached memory data (P2)
+    facts_context = None
+    try:
+        from worker.memory import get_facts_context
+        facts_context = get_facts_context(conn)
+        if facts_context:
+            sys.stderr.write(
+                f"worker: facts context ({len(facts_context)} chars)\n"
+            )
+            sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"worker: fact extraction failed: {e}\n")
+        sys.stderr.flush()
+
     response_text = ""
     try:
         new_session_id, _usage, response_text = await run_query(
@@ -333,6 +341,8 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             retrieved_context=retrieved_context,
             memory_context=memory_context,
             continuation_summary=_continuation_summary,
+            facts_context=facts_context,
+            msg_payload=msg,
         )
         _session_id = new_session_id
         # Clear continuation summary after it has been consumed
@@ -392,7 +402,6 @@ async def main() -> None:
     # Clean up stale state from a previous run
     if OUTPUT_PATH.exists():
         os.remove(OUTPUT_PATH)
-    conn.execute("DELETE FROM worker_responses")
     conn.execute("DELETE FROM processed_messages")
     conn.commit()
 
@@ -432,6 +441,27 @@ async def main() -> None:
                     sys.stderr.flush()
     except Exception as e:
         sys.stderr.write(f"worker: memory index backfill failed: {e}\n")
+        sys.stderr.flush()
+
+    # Prune old index entries based on retention policy (P3)
+    try:
+        from worker.search import prune_old_index_entries
+        from worker.context_budget import get_config as _get_config
+        _cfg = _get_config()
+        pruned = prune_old_index_entries(conn, _cfg.retention_days)
+        if pruned > 0:
+            sys.stderr.write(f"worker: pruned {pruned} old index entries\n")
+            sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"worker: index pruning failed: {e}\n")
+        sys.stderr.flush()
+
+    # One-time migration: import markdown-embedded facts into DB (P7)
+    try:
+        from worker.memory import migrate_markdown_facts_to_db
+        migrate_markdown_facts_to_db(conn)
+    except Exception as e:
+        sys.stderr.write(f"worker: markdown facts migration failed: {e}\n")
         sys.stderr.flush()
 
     sys.stderr.write("worker: ready, polling for input.json\n")

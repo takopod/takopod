@@ -1,17 +1,8 @@
--- Consolidated schema: processed_messages, worker_responses, memory tables.
+-- Consolidated schema: processed_messages, memory tables.
 
 CREATE TABLE IF NOT EXISTS processed_messages (
     message_id  TEXT PRIMARY KEY
 );
-
-CREATE TABLE IF NOT EXISTS worker_responses (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id TEXT NOT NULL,
-    event      TEXT NOT NULL,
-    status     TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now'))
-);
-CREATE INDEX IF NOT EXISTS idx_worker_responses_status ON worker_responses(status, id);
 
 CREATE TABLE IF NOT EXISTS memory_files (
     id          TEXT PRIMARY KEY,
