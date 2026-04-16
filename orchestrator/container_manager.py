@@ -71,7 +71,7 @@ def create_agent_workspace(
     (host_dir / "memory").mkdir(exist_ok=True)
     (host_dir / "config").mkdir(exist_ok=True)
 
-    for filename in ("CLAUDE.md", "SOUL.md", "MEMORY.md"):
+    for filename in ("CLAUDE.md", "SOUL.md", "MEMORY.md", "BOOTSTRAP.md"):
         content = None
         target = host_dir / filename
         seed_file = SEED_DIR / filename
@@ -172,17 +172,15 @@ def _copy_system_skill(skill_id: str, dest_skills: Path) -> None:
 
 
 async def seed_agent_skills(agent_id: str) -> None:
-    """Seed builtin skills into the DB for a newly created agent.
-
-    always_enabled skills get enabled=1, others get enabled=0 (available but off).
-    """
+    """Seed always_enabled builtin skills into the DB for a newly created agent."""
     db = await get_db()
     for skill_id in _scan_skills_dir(BUILTIN_SKILLS_DIR):
-        enabled = 1 if _is_always_enabled_skill(skill_id) else 0
+        if not _is_always_enabled_skill(skill_id):
+            continue
         await db.execute(
             "INSERT INTO agent_skills (agent_id, skill_id, enabled) "
-            "VALUES (?, ?, ?) ON CONFLICT(agent_id, skill_id) DO NOTHING",
-            (agent_id, skill_id, enabled),
+            "VALUES (?, ?, 1) ON CONFLICT(agent_id, skill_id) DO NOTHING",
+            (agent_id, skill_id),
         )
     await db.commit()
 

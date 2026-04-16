@@ -12,6 +12,7 @@ interface RegistrySkill {
   description: string
   builtin: boolean
   enabled: boolean
+  always_enabled: boolean
 }
 
 interface SkillDetail {
@@ -549,8 +550,8 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                       type="button"
                       className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                         skill.enabled ? "bg-primary" : "bg-input"
-                      } ${toggling === skill.id || skill.builtin ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                      disabled={toggling === skill.id || skill.builtin}
+                      } ${toggling === skill.id || skill.always_enabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                      disabled={toggling === skill.id || skill.always_enabled}
                       onClick={() => handleToggle(skill.id, !skill.enabled)}
                     >
                       <span
@@ -571,7 +572,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                         </span>
                       )}
                     </button>
-                    {skill.builtin ? (
+                    {skill.always_enabled ? (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                         BUILTIN
                       </span>

@@ -39,6 +39,7 @@ from orchestrator.ipc import (
     queue_message,
     queue_system_command,
     start_polling_loop,
+    store_bootstrap_message,
 )
 from orchestrator.models import (
     AgentDetailResponse,
@@ -191,6 +192,17 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
 # --- Agent CRUD ---
 
 
+async def _run_bootstrap(agent_id: str, bootstrap_content: str) -> None:
+    """Spawn a headless worker and queue the bootstrap message."""
+    try:
+        message_id = str(uuid.uuid4())
+        await ensure_worker_headless(agent_id)
+        await store_bootstrap_message(agent_id, message_id, bootstrap_content)
+        logger.info("Bootstrap queued for agent %s", agent_id[:8])
+    except Exception:
+        logger.exception("Bootstrap failed for agent %s", agent_id[:8])
+
+
 @router.post("/agents")
 async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     db = await get_db()
@@ -211,6 +223,14 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     # Seed all registry skills as enabled, then sync to workspace
     await seed_agent_skills(agent_id)
     await sync_agent_skills(agent_id, host_dir)
+
+    # Run bootstrap in background — agent introduces itself before user connects
+    bootstrap_path = host_dir / "BOOTSTRAP.md"
+    if bootstrap_path.is_file():
+        asyncio.create_task(
+            _run_bootstrap(agent_id, bootstrap_path.read_text()),
+            name=f"bootstrap-{agent_id[:8]}",
+        )
 
     async with db.execute(
         "SELECT id, name, icon, status, created_at, container_memory, container_cpus "
@@ -961,6 +981,7 @@ async def list_registry_skills(agent_id: str):
             description=desc,
             builtin=builtin,
             enabled=enabled,
+            always_enabled=always_on,
         )
         if skill_id in agent_state or always_on:
             added.append(summary.model_dump())

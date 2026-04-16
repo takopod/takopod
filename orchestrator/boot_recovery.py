@@ -90,18 +90,20 @@ async def boot_recovery() -> None:
     )
     tasks_failed = cursor.rowcount
 
-    # Step 7: Seed builtin skills for all agents
-    builtin_skill_ids = _scan_skills_dir(BUILTIN_SKILLS_DIR)
+    # Step 7: Seed always_enabled builtin skills for all agents
+    builtin_skill_ids = [
+        sid for sid in _scan_skills_dir(BUILTIN_SKILLS_DIR)
+        if _is_always_enabled_skill(sid)
+    ]
     async with db.execute("SELECT id FROM agents") as cur:
         agent_rows = await cur.fetchall()
     skills_seeded = 0
     for (agent_id,) in agent_rows:
         for skill_id in builtin_skill_ids:
-            enabled = 1 if _is_always_enabled_skill(skill_id) else 0
             cursor = await db.execute(
                 "INSERT INTO agent_skills (agent_id, skill_id, enabled) "
-                "VALUES (?, ?, ?) ON CONFLICT(agent_id, skill_id) DO NOTHING",
-                (agent_id, skill_id, enabled),
+                "VALUES (?, ?, 1) ON CONFLICT(agent_id, skill_id) DO NOTHING",
+                (agent_id, skill_id),
             )
             skills_seeded += cursor.rowcount
 

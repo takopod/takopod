@@ -85,6 +85,23 @@ async def store_scheduled_message(
     )
 
 
+async def store_bootstrap_message(
+    agent_id: str,
+    message_id: str,
+    content: str,
+) -> None:
+    """Store a bootstrap prompt (hidden) and queue it for processing."""
+    db = await get_db()
+    metadata = json.dumps({"source": "bootstrap"})
+    await db.execute(
+        "INSERT INTO messages (id, agent_id, role, content, metadata, visibility) "
+        "VALUES (?, ?, 'user', ?, ?, 'hidden')",
+        (message_id, agent_id, content, metadata),
+    )
+    await db.commit()
+    await queue_message(agent_id, message_id, content, source="bootstrap")
+
+
 async def store_slack_message(
     agent_id: str,
     message_id: str,

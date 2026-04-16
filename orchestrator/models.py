@@ -210,6 +210,7 @@ class RegistrySkillSummary(BaseModel):
     description: str
     builtin: bool = False
     enabled: bool = True
+    always_enabled: bool = False
 
 
 class RegistrySkillToggle(BaseModel):
