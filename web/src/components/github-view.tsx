@@ -5,8 +5,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { ArrowLeft, RefreshCw, Trash2 } from "lucide-react"
-import type { Agent } from "@/lib/types"
-
 interface GitHubConfig {
   configured: boolean
   personal_access_token?: string
@@ -19,19 +17,12 @@ interface GitHubStatus {
   error?: string
 }
 
-interface AgentGitHub {
-  agent: Agent
-  enabled: boolean
-}
-
 export function GitHubView() {
   const [config, setConfig] = useState<GitHubConfig>({ configured: false })
   const [status, setStatus] = useState<GitHubStatus | null>(null)
-  const [agents, setAgents] = useState<AgentGitHub[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [toggling, setToggling] = useState<string | null>(null)
 
   const [token, setToken] = useState("")
 
@@ -53,33 +44,14 @@ export function GitHubView() {
     }
   }, [])
 
-  const fetchAgents = useCallback(async () => {
-    const res = await fetch("/api/agents")
-    if (!res.ok) return
-    const agentList: Agent[] = await res.json()
-    const withStatus = await Promise.all(
-      agentList.map(async (agent) => {
-        try {
-          const r = await fetch(`/api/agents/${agent.id}/github`)
-          if (r.ok) {
-            const data = await r.json()
-            return { agent, enabled: data.enabled as boolean }
-          }
-        } catch { /* ignore */ }
-        return { agent, enabled: false }
-      }),
-    )
-    setAgents(withStatus)
-  }, [])
-
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      await Promise.all([fetchConfig(), fetchAgents()])
+      await fetchConfig()
     } finally {
       setLoading(false)
     }
-  }, [fetchConfig, fetchAgents])
+  }, [fetchConfig])
 
   useEffect(() => {
     loadAll()
@@ -112,26 +84,6 @@ export function GitHubView() {
     setConfig({ configured: false })
     setStatus(null)
     setToken("")
-  }
-
-  const handleToggleAgent = async (agentId: string, currentEnabled: boolean) => {
-    setToggling(agentId)
-    try {
-      const res = await fetch(`/api/agents/${agentId}/github`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: !currentEnabled }),
-      })
-      if (res.ok) {
-        setAgents((prev) =>
-          prev.map((a) =>
-            a.agent.id === agentId ? { ...a, enabled: !currentEnabled } : a,
-          ),
-        )
-      }
-    } finally {
-      setToggling(null)
-    }
   }
 
   return (
@@ -252,57 +204,6 @@ export function GitHubView() {
             </div>
           )}
 
-          {/* Per-Agent Toggle */}
-          <div className="rounded-md border px-4 py-3">
-            <div className="mb-3 text-sm font-medium">Agent Access</div>
-            {agents.length === 0 && !loading && (
-              <p className="text-xs text-muted-foreground">
-                No agents found.
-              </p>
-            )}
-            <div className="space-y-2">
-              {agents.map(({ agent, enabled }) => (
-                <div
-                  key={agent.id}
-                  className="flex items-center justify-between rounded-md border px-3 py-2"
-                >
-                  <div>
-                    <div className="text-sm">{agent.name}</div>
-                  </div>
-                  <button
-                    onClick={() => handleToggleAgent(agent.id, enabled)}
-                    disabled={
-                      !config.configured || toggling === agent.id
-                    }
-                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                      enabled ? "bg-primary" : "bg-muted"
-                    } ${!config.configured || toggling === agent.id ? "opacity-50 cursor-not-allowed" : ""}`}
-                    title={
-                      !config.configured
-                        ? "Configure GitHub token first"
-                        : enabled
-                          ? "Disable GitHub for this agent"
-                          : "Enable GitHub for this agent"
-                    }
-                  >
-                    <span
-                      className={`pointer-events-none inline-block size-5 rounded-full bg-background shadow-sm ring-0 transition-transform ${
-                        enabled ? "translate-x-5" : "translate-x-0"
-                      }`}
-                    />
-                  </button>
-                </div>
-              ))}
-            </div>
-            {config.configured && agents.length > 0 && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Agents with GitHub enabled can monitor PRs, inspect CI
-                failures, and restart workflows. Restart the
-                agent&apos;s worker after toggling for changes to take
-                effect.
-              </p>
-            )}
-          </div>
         </div>
       </div>
     </div>
