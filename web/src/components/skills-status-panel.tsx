@@ -10,6 +10,7 @@ interface SkillSummary {
 
 export function SkillsStatusPanel({ agentId }: { agentId: string }) {
   const [skills, setSkills] = useState<SkillSummary[]>([])
+  const [draftCount, setDraftCount] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -20,6 +21,15 @@ export function SkillsStatusPanel({ agentId }: { agentId: string }) {
         if (cancelled || !res.ok) return
         const data = await res.json()
         setSkills(data.skills ?? [])
+      } catch {
+        // ignore fetch errors
+      }
+      try {
+        const draftsRes = await fetch(`/api/agents/${agentId}/skill-drafts`)
+        if (!cancelled && draftsRes.ok) {
+          const draftsData = await draftsRes.json()
+          setDraftCount(draftsData.length)
+        }
       } catch {
         // ignore fetch errors
       }
@@ -57,6 +67,11 @@ export function SkillsStatusPanel({ agentId }: { agentId: string }) {
             </span>
           </div>
         ))
+      )}
+      {draftCount > 0 && (
+        <span className="text-[10px] text-amber-600">
+          {draftCount} {draftCount === 1 ? "draft" : "drafts"} pending review
+        </span>
       )}
     </div>
   )

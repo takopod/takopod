@@ -189,6 +189,21 @@ class SkillDetail(SkillSummary):
     files: list[str] = []
 
 
+class SkillDraftSummary(BaseModel):
+    id: str
+    name: str
+    description: str
+    files: list[str] = []
+
+
+class SkillDraftDetail(BaseModel):
+    id: str
+    name: str
+    description: str
+    content: str
+    files: list[str] = []
+
+
 class RegistrySkillSummary(BaseModel):
     id: str
     name: str

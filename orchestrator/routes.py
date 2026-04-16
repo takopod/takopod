@@ -56,6 +56,8 @@ from orchestrator.models import (
     RegistrySkillToggle,
     ScheduleResponse,
     SkillDetail,
+    SkillDraftDetail,
+    SkillDraftSummary,
     SkillSummary,
     SystemCommandFrame,
     SystemErrorFrame,
@@ -643,6 +645,10 @@ def _skills_dir(host_dir: Path) -> Path:
     return host_dir / ".claude" / "skills"
 
 
+def _skill_drafts_dir(host_dir: Path) -> Path:
+    return host_dir / ".claude" / "skill-drafts"
+
+
 def _collect_supporting_files(skill_dir: Path) -> list[str]:
     """List supporting files in a skill directory (excludes SKILL.md)."""
     files: list[str] = []
@@ -745,6 +751,109 @@ async def delete_skill(agent_id: str, skill_id: str):
         raise HTTPException(status_code=404, detail="Skill not found")
     shutil.rmtree(skill_dir)
     return {"status": "ok", "skill_id": skill_id}
+
+
+# --- Skill Drafts API ---
+
+
+@router.get("/agents/{agent_id}/skill-drafts")
+async def list_skill_drafts(agent_id: str) -> list[SkillDraftSummary]:
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    drafts_dir = _skill_drafts_dir(host_dir)
+    if not drafts_dir.is_dir():
+        return []
+    result: list[SkillDraftSummary] = []
+    for d in sorted(drafts_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        skill_md = d / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        name, desc = _parse_skill_frontmatter(skill_md.read_text())
+        result.append(SkillDraftSummary(
+            id=d.name,
+            name=name or d.name,
+            description=desc,
+            files=_collect_supporting_files(d),
+        ))
+    return result
+
+
+@router.get("/agents/{agent_id}/skill-drafts/{name}")
+async def get_skill_draft(agent_id: str, name: str) -> SkillDraftDetail:
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    draft_dir = _skill_drafts_dir(host_dir) / name
+    skill_md = draft_dir / "SKILL.md"
+    if not skill_md.is_file():
+        raise HTTPException(status_code=404, detail="Draft not found")
+    content = skill_md.read_text()
+    parsed_name, desc = _parse_skill_frontmatter(content)
+    return SkillDraftDetail(
+        id=name,
+        name=parsed_name or name,
+        description=desc,
+        content=content,
+        files=_collect_supporting_files(draft_dir),
+    )
+
+
+@router.post("/agents/{agent_id}/skill-drafts/{name}/approve")
+async def approve_skill_draft(agent_id: str, name: str):
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    draft_dir = _skill_drafts_dir(host_dir) / name
+    if not draft_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Draft not found")
+    skills_dir = _skills_dir(host_dir)
+    target_dir = skills_dir / name
+    if target_dir.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{name}' already exists. Rename or delete the existing skill first.",
+        )
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(draft_dir), str(target_dir))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return {"status": "ok", "skill_id": name}
+
+
+@router.post("/agents/{agent_id}/skill-drafts/{name}/reject")
+async def reject_skill_draft(agent_id: str, name: str):
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    draft_dir = _skill_drafts_dir(host_dir) / name
+    if not draft_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Draft not found")
+    shutil.rmtree(draft_dir)
+    return {"status": "ok", "skill_id": name}
+
+
+@router.put("/agents/{agent_id}/skill-drafts/{name}")
+async def update_skill_draft(
+    agent_id: str, name: str, req: UpdateSkillRequest,
+) -> SkillDraftDetail:
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+    host_dir, _ = await _resolve_agent_path(agent_id)
+    draft_dir = _skill_drafts_dir(host_dir) / name
+    skill_md = draft_dir / "SKILL.md"
+    if not skill_md.is_file():
+        raise HTTPException(status_code=404, detail="Draft not found")
+    skill_md.write_text(req.content)
+    parsed_name, desc = _parse_skill_frontmatter(req.content)
+    return SkillDraftDetail(
+        id=name,
+        name=parsed_name or name,
+        description=desc,
+        content=req.content,
+        files=_collect_supporting_files(draft_dir),
+    )
 
 
 @router.post("/agents/{agent_id}/skills/{skill_id}/files")

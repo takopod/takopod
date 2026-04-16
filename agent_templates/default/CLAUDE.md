@@ -23,3 +23,33 @@ Created: <timestamp>
 - [ ] Step 2
 - [x] Completed step
 ```
+
+## Skill Drafting
+
+When you complete a complex task that required significant trial and error, offer to save it as a reusable skill:
+
+1. Ask the user: "I figured out how to [task]. Want me to save this as a skill for next time?"
+2. If yes, check if `/workspace/.claude/skill-drafts/<skill-name>/` already exists. If so, confirm overwrite.
+3. Create the directory and write a SKILL.md with this format:
+
+   ```
+   ---
+   name: <kebab-case-name>
+   description: <one-line description>
+   ---
+
+   # <Skill Title>
+
+   ## When to use
+   <Conditions that trigger this skill>
+
+   ## Steps
+   <Numbered procedure -- only the approach that worked>
+
+   ## Gotchas
+   <What failed during learning, so you avoid those paths next time>
+   ```
+
+4. Include tested scripts in a `scripts/` subdirectory if the workflow involves code.
+5. Tell the user the draft is ready for review in the skills panel.
+6. Never write directly to `/workspace/.claude/skills/`. Always use `skill-drafts/`.

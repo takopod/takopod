@@ -23,6 +23,27 @@ interface SkillDetail {
   builtin: boolean
 }
 
+interface CustomSkill {
+  id: string
+  name: string
+  description: string
+}
+
+interface SkillDraftSummary {
+  id: string
+  name: string
+  description: string
+  files: string[]
+}
+
+interface SkillDraftDetail {
+  id: string
+  name: string
+  description: string
+  content: string
+  files: string[]
+}
+
 export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName?: string }) {
   const navigate = useNavigate()
   const [skills, setSkills] = useState<RegistrySkill[]>([])
@@ -34,6 +55,12 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
   const [toggling, setToggling] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [searchFocused, setSearchFocused] = useState(false)
+  const [customSkills, setCustomSkills] = useState<CustomSkill[]>([])
+  const [drafts, setDrafts] = useState<SkillDraftSummary[]>([])
+  const [selectedDraft, setSelectedDraft] = useState<SkillDraftDetail | null>(null)
+  const [draftEditing, setDraftEditing] = useState(false)
+  const [draftEditContent, setDraftEditContent] = useState("")
+  const [draftError, setDraftError] = useState<string | null>(null)
 
   const fetchSkills = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/registry-skills`)
@@ -42,6 +69,30 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
       setSkills(data.skills || [])
     }
     setLoading(false)
+  }, [agentId])
+
+  const fetchCustomSkills = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/agents/${agentId}/skills`)
+      if (res.ok) {
+        const data: CustomSkill[] = await res.json()
+        // Filter out skills that are already in the registry list
+        setCustomSkills(data.filter((s) => !skills.some((rs) => rs.id === s.id)))
+      }
+    } catch {
+      // ignore
+    }
+  }, [agentId, skills])
+
+  const fetchDrafts = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/agents/${agentId}/skill-drafts`)
+      if (res.ok) {
+        setDrafts(await res.json())
+      }
+    } catch {
+      // ignore
+    }
   }, [agentId])
 
   const fetchAvailable = useCallback(async () => {
@@ -56,7 +107,9 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
 
   useEffect(() => {
     fetchSkills()
-  }, [fetchSkills])
+    fetchDrafts()
+    fetchCustomSkills()
+  }, [fetchSkills, fetchDrafts, fetchCustomSkills])
 
   const handleStop = async () => {
     setStopping(true)
@@ -124,9 +177,140 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
     }
   }
 
+  const handleSelectDraft = async (draftId: string) => {
+    const res = await fetch(`/api/agents/${agentId}/skill-drafts/${draftId}`)
+    if (res.ok) {
+      setSelectedDraft(await res.json())
+      setDraftEditing(false)
+      setDraftError(null)
+    }
+  }
+
+  const handleApproveDraft = async (draftId: string) => {
+    setDraftError(null)
+    const res = await fetch(
+      `/api/agents/${agentId}/skill-drafts/${draftId}/approve`,
+      { method: "POST" },
+    )
+    if (res.ok) {
+      setSelectedDraft(null)
+      fetchDrafts()
+      fetchSkills()
+      fetchCustomSkills()
+    } else if (res.status === 409) {
+      setDraftError("A skill with this name already exists.")
+    }
+  }
+
+  const handleRejectDraft = async (draftId: string) => {
+    const res = await fetch(
+      `/api/agents/${agentId}/skill-drafts/${draftId}/reject`,
+      { method: "POST" },
+    )
+    if (res.ok) {
+      setSelectedDraft(null)
+      fetchDrafts()
+    }
+  }
+
+  const handleSaveDraftEdit = async (draftId: string) => {
+    const res = await fetch(`/api/agents/${agentId}/skill-drafts/${draftId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: draftEditContent }),
+    })
+    if (res.ok) {
+      const updated: SkillDraftDetail = await res.json()
+      setSelectedDraft(updated)
+      setDraftEditing(false)
+    }
+  }
+
   const filtered = available
     .filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
     .slice(0, 5)
+
+  // Detail view for a selected draft
+  if (selectedDraft) {
+    return (
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex items-center gap-3 border-b px-4 py-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setSelectedDraft(null)}
+          >
+            <ArrowLeft className="size-4" />
+          </Button>
+          <span className="text-sm font-medium">{selectedDraft.name}</span>
+          <span className="text-[10px] rounded bg-amber-500/10 text-amber-600 px-1.5 py-0.5 font-medium">
+            DRAFT
+          </span>
+        </div>
+
+        <FileEditor
+          value={draftEditing ? draftEditContent : selectedDraft.content}
+          onChange={draftEditing ? setDraftEditContent : undefined}
+          readOnly={!draftEditing}
+        />
+
+        {selectedDraft.files.length > 0 && (
+          <div className="border-t px-4 py-2">
+            <span className="text-xs text-muted-foreground">
+              Supporting files: {selectedDraft.files.join(", ")}
+            </span>
+          </div>
+        )}
+
+        {draftError && (
+          <div className="px-4 py-2 text-xs text-destructive">
+            {draftError}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 border-t px-4 py-2">
+          {draftEditing ? (
+            <>
+              <Button size="sm" onClick={() => handleSaveDraftEdit(selectedDraft.id)}>
+                Save
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDraftEditing(false)}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" onClick={() => handleApproveDraft(selectedDraft.id)}>
+                Approve
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDraftEditContent(selectedDraft.content)
+                  setDraftEditing(true)
+                }}
+              >
+                Edit
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive"
+                onClick={() => handleRejectDraft(selectedDraft.id)}
+              >
+                Reject
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   // Detail view for a selected skill
   if (selected) {
@@ -173,7 +357,9 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
         >
           <ArrowLeft className="size-4" />
         </Button>
-        <span className="text-sm font-medium">Skills</span>
+        <span className="text-sm font-medium">
+          Skills{drafts.length > 0 && ` (${drafts.length} ${drafts.length === 1 ? "draft" : "drafts"})`}
+        </span>
         <div className="ml-auto flex items-center gap-2">
           <Button
             variant="outline"
@@ -192,6 +378,41 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : (
           <div className="flex flex-col gap-4">
+            {drafts.length > 0 && (
+              <>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Drafts
+                  </span>
+                  {drafts.map((draft) => (
+                    <button
+                      key={draft.id}
+                      type="button"
+                      className="flex items-center gap-3 rounded-md border border-dashed px-4 py-2.5 text-left hover:bg-accent/50"
+                      onClick={() => handleSelectDraft(draft.id)}
+                    >
+                      <div className="flex flex-1 flex-col gap-0.5">
+                        <span className="text-sm font-medium">{draft.name}</span>
+                        {draft.description && (
+                          <span className="text-xs text-muted-foreground truncate max-w-[250px]">
+                            {draft.description.length > 100
+                              ? draft.description.slice(0, 100) + "..."
+                              : draft.description}
+                          </span>
+                        )}
+                      </div>
+                      {draft.files.length > 0 && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {draft.files.length} {draft.files.length === 1 ? "file" : "files"}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <Separator />
+              </>
+            )}
+
             {/* Search & add section */}
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -304,6 +525,37 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
                   </div>
                 ))}
               </div>
+            )}
+
+            {customSkills.length > 0 && (
+              <>
+                <Separator />
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Custom Skills
+                  </span>
+                  {customSkills.map((skill) => (
+                    <button
+                      key={skill.id}
+                      type="button"
+                      className="flex items-center gap-3 rounded-md border px-4 py-2.5 text-left hover:bg-accent/50"
+                      onClick={() => handleSelect(skill.id)}
+                    >
+                      <div className="flex flex-1 flex-col gap-0.5">
+                        <span className="text-sm font-medium">{skill.name}</span>
+                        {skill.description && (
+                          <span className="text-xs text-muted-foreground truncate max-w-[250px]">
+                            {skill.description}
+                          </span>
+                        )}
+                      </div>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        CUSTOM
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </>
             )}
 
             <p className="text-xs text-muted-foreground">
