@@ -2,6 +2,7 @@
 name: schedule
 description: Create, list, pause, resume, or delete recurring scheduled tasks
 user_invocable: true
+always_enabled: true
 ---
 
 Use your `mcp__schedule__*` tools to manage recurring tasks.

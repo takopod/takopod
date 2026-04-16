@@ -5,7 +5,13 @@ import logging
 import time
 from pathlib import Path
 
-from orchestrator.container_manager import AGENTS_DIR, PODMAN
+from orchestrator.container_manager import (
+    AGENTS_DIR,
+    BUILTIN_SKILLS_DIR,
+    PODMAN,
+    _is_always_enabled_skill,
+    _scan_skills_dir,
+)
 from orchestrator.db import get_db
 
 logger = logging.getLogger(__name__)
@@ -84,11 +90,27 @@ async def boot_recovery() -> None:
     )
     tasks_failed = cursor.rowcount
 
+    # Step 7: Seed builtin skills for all agents
+    builtin_skill_ids = _scan_skills_dir(BUILTIN_SKILLS_DIR)
+    async with db.execute("SELECT id FROM agents") as cur:
+        agent_rows = await cur.fetchall()
+    skills_seeded = 0
+    for (agent_id,) in agent_rows:
+        for skill_id in builtin_skill_ids:
+            enabled = 1 if _is_always_enabled_skill(skill_id) else 0
+            cursor = await db.execute(
+                "INSERT INTO agent_skills (agent_id, skill_id, enabled) "
+                "VALUES (?, ?, ?) ON CONFLICT(agent_id, skill_id) DO NOTHING",
+                (agent_id, skill_id, enabled),
+            )
+            skills_seeded += cursor.rowcount
+
     await db.commit()
 
     logger.info(
         "Boot recovery complete: %d containers killed, %d messages re-queued, "
         "%d IPC files cleaned, %d container statuses reset, "
-        "%d scheduled tasks failed",
+        "%d scheduled tasks failed, %d builtin skills seeded",
         killed, requeued, files_cleaned, statuses_reset, tasks_failed,
+        skills_seeded,
     )

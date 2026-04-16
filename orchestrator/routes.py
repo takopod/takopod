@@ -630,20 +630,24 @@ async def put_tool_config(agent_id: str, req: ToolConfigRequest):
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
 
 
-def _parse_skill_frontmatter(content: str) -> tuple[str, str]:
-    """Extract name and description from SKILL.md YAML frontmatter."""
+def _parse_skill_frontmatter(content: str) -> tuple[str, str, bool]:
+    """Extract name, description, and always_enabled from SKILL.md YAML frontmatter."""
     m = _FRONTMATTER_RE.match(content)
     if not m:
-        return "", ""
+        return "", "", False
     try:
         import yaml
 
         data = yaml.safe_load(m.group(1))
         if not isinstance(data, dict):
-            return "", ""
-        return str(data.get("name", "")), str(data.get("description", ""))
+            return "", "", False
+        return (
+            str(data.get("name", "")),
+            str(data.get("description", "")),
+            bool(data.get("always_enabled", False)),
+        )
     except Exception:
-        return "", ""
+        return "", "", False
 
 
 def _skills_dir(host_dir: Path) -> Path:
@@ -676,7 +680,7 @@ async def list_skills(agent_id: str) -> list[SkillSummary]:
         skill_md = d / "SKILL.md"
         if not skill_md.is_file():
             continue
-        name, desc = _parse_skill_frontmatter(skill_md.read_text())
+        name, desc, _ = _parse_skill_frontmatter(skill_md.read_text())
         result.append(SkillSummary(
             id=d.name,
             name=name or d.name,
@@ -693,7 +697,7 @@ async def get_skill(agent_id: str, skill_id: str) -> SkillDetail:
     if not skill_md.is_file():
         raise HTTPException(status_code=404, detail="Skill not found")
     content = skill_md.read_text()
-    name, desc = _parse_skill_frontmatter(content)
+    name, desc, _ = _parse_skill_frontmatter(content)
     return SkillDetail(
         id=skill_id,
         name=name or skill_id,
@@ -720,7 +724,7 @@ async def create_skill(agent_id: str, req: CreateSkillRequest) -> SkillDetail:
         )
     (skill_dir / "SKILL.md").write_text(content)
 
-    name, desc = _parse_skill_frontmatter(content)
+    name, desc, _ = _parse_skill_frontmatter(content)
     return SkillDetail(
         id=req.name,
         name=name or req.name,
@@ -738,7 +742,7 @@ async def update_skill(agent_id: str, skill_id: str, req: UpdateSkillRequest) ->
     if not skill_md.is_file():
         raise HTTPException(status_code=404, detail="Skill not found")
     skill_md.write_text(req.content)
-    name, desc = _parse_skill_frontmatter(req.content)
+    name, desc, _ = _parse_skill_frontmatter(req.content)
     return SkillDetail(
         id=skill_id,
         name=name or skill_id,
@@ -794,7 +798,7 @@ async def get_skill_draft(agent_id: str, name: str) -> SkillDraftDetail:
     if not skill_md.is_file():
         raise HTTPException(status_code=404, detail="Draft not found")
     content = skill_md.read_text()
-    parsed_name, desc = _parse_skill_frontmatter(content)
+    parsed_name, desc, _ = _parse_skill_frontmatter(content)
     return SkillDraftDetail(
         id=name,
         name=parsed_name or name,
@@ -945,16 +949,20 @@ async def list_registry_skills(agent_id: str):
     available: list[dict] = []
     for skill_id, skill_path, _ in _list_system_skills():
         content = skill_path.read_text()
-        name, desc = _parse_skill_frontmatter(content)
+        name, desc, always_on = _parse_skill_frontmatter(content)
         builtin = _is_builtin_skill(skill_id)
+        if always_on:
+            enabled = True
+        else:
+            enabled = agent_state.get(skill_id, False)
         summary = RegistrySkillSummary(
             id=skill_id,
             name=name or skill_id,
             description=desc,
             builtin=builtin,
-            enabled=True if builtin else agent_state.get(skill_id, False),
+            enabled=enabled,
         )
-        if skill_id in agent_state or builtin:
+        if skill_id in agent_state or always_on:
             added.append(summary.model_dump())
         else:
             available.append(summary.model_dump())
@@ -966,10 +974,10 @@ async def toggle_registry_skill(
     agent_id: str, skill_id: str, req: RegistrySkillToggle,
 ):
     """Enable or disable a registry skill for an agent."""
-    if not req.enabled and _is_builtin_skill(skill_id):
+    if not req.enabled and _is_always_enabled_skill(skill_id):
         raise HTTPException(
             status_code=403,
-            detail=f"Builtin skill '{skill_id}' cannot be disabled.",
+            detail=f"Skill '{skill_id}' cannot be disabled.",
         )
 
     host_dir, _ = await _resolve_agent_path(agent_id)
@@ -1021,10 +1029,10 @@ async def add_registry_skill(agent_id: str, skill_id: str):
 @router.delete("/agents/{agent_id}/registry-skills/{skill_id}")
 async def remove_registry_skill(agent_id: str, skill_id: str):
     """Remove a skill from this agent."""
-    if _is_builtin_skill(skill_id):
+    if _is_always_enabled_skill(skill_id):
         raise HTTPException(
             status_code=403,
-            detail=f"Builtin skill '{skill_id}' cannot be removed.",
+            detail=f"Skill '{skill_id}' cannot be removed.",
         )
 
     host_dir, _ = await _resolve_agent_path(agent_id)
@@ -1106,6 +1114,16 @@ def _is_builtin_skill(skill_id: str) -> bool:
     return (dir_path.is_dir() and (dir_path / "SKILL.md").is_file()) or flat_path.is_file()
 
 
+def _is_always_enabled_skill(skill_id: str) -> bool:
+    """Check if a builtin skill has always_enabled: true in its frontmatter."""
+    found = _find_system_skill(skill_id)
+    if not found:
+        return False
+    _, skill_path, _ = found
+    _, _, always_on = _parse_skill_frontmatter(skill_path.read_text())
+    return always_on
+
+
 
 
 @router.get("/skills")
@@ -1113,7 +1131,7 @@ async def list_system_skills() -> list[SkillSummary]:
     result: list[SkillSummary] = []
     for skill_id, skill_path, _ in _list_system_skills():
         content = skill_path.read_text()
-        name, desc = _parse_skill_frontmatter(content)
+        name, desc, _ = _parse_skill_frontmatter(content)
         result.append(SkillSummary(
             id=skill_id,
             name=name or skill_id,
@@ -1132,7 +1150,7 @@ async def get_system_skill(skill_id: str) -> SkillDetail:
     skill_dir_or_parent, skill_path, fmt = found
     content = skill_path.read_text()
     files = _collect_supporting_files(skill_dir_or_parent) if fmt == "dir" else []
-    name, desc = _parse_skill_frontmatter(content)
+    name, desc, _ = _parse_skill_frontmatter(content)
     return SkillDetail(
         id=skill_id,
         name=name or skill_id,
@@ -1213,7 +1231,7 @@ async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
     for agent_id, host_dir in agents:
         await sync_agent_skills(agent_id, Path(host_dir))
 
-    name, desc = _parse_skill_frontmatter(content)
+    name, desc, _ = _parse_skill_frontmatter(content)
     return SkillDetail(
         id=req.name,
         name=name or req.name,
@@ -1240,7 +1258,7 @@ async def update_system_skill(skill_id: str, req: UpdateSkillRequest) -> SkillDe
     # Propagate update to agents that have this skill enabled
     await _propagate_skill_to_agents(skill_id)
 
-    name, desc = _parse_skill_frontmatter(req.content)
+    name, desc, _ = _parse_skill_frontmatter(req.content)
     return SkillDetail(
         id=skill_id,
         name=name or skill_id,
@@ -1303,7 +1321,7 @@ async def reset_system_skill(skill_id: str) -> SkillDetail:
     # Propagate reset content to agents
     await _propagate_skill_to_agents(skill_id)
 
-    name, desc = _parse_skill_frontmatter(content)
+    name, desc, _ = _parse_skill_frontmatter(content)
     return SkillDetail(
         id=skill_id,
         name=name or skill_id,

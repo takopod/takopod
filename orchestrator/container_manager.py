@@ -123,6 +123,24 @@ def _list_registry_skill_ids() -> list[str]:
     return ids
 
 
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
+
+
+def _is_always_enabled_skill(skill_id: str) -> bool:
+    """Check if a skill has always_enabled: true in its frontmatter."""
+    for sdir in (USER_SKILLS_DIR, BUILTIN_SKILLS_DIR):
+        for path in (sdir / skill_id / "SKILL.md", sdir / f"{skill_id}.md"):
+            if path.is_file():
+                m = _FRONTMATTER_RE.match(path.read_text())
+                if m:
+                    import yaml
+                    data = yaml.safe_load(m.group(1))
+                    if isinstance(data, dict):
+                        return bool(data.get("always_enabled", False))
+                return False
+    return False
+
+
 def _find_skill_source(skill_id: str) -> Path | None:
     """Find which directory a skill lives in (user override first, then builtin)."""
     for sdir in (USER_SKILLS_DIR, BUILTIN_SKILLS_DIR):
@@ -154,12 +172,19 @@ def _copy_system_skill(skill_id: str, dest_skills: Path) -> None:
 
 
 async def seed_agent_skills(agent_id: str) -> None:
-    """Placeholder for agent creation — no skills are auto-added.
+    """Seed builtin skills into the DB for a newly created agent.
 
-    Builtin skills are always synced by sync_agent_skills() regardless of DB
-    rows, so new agents start with only builtins.  Users add non-builtin skills
-    explicitly via the registry-skills API.
+    always_enabled skills get enabled=1, others get enabled=0 (available but off).
     """
+    db = await get_db()
+    for skill_id in _scan_skills_dir(BUILTIN_SKILLS_DIR):
+        enabled = 1 if _is_always_enabled_skill(skill_id) else 0
+        await db.execute(
+            "INSERT INTO agent_skills (agent_id, skill_id, enabled) "
+            "VALUES (?, ?, ?) ON CONFLICT(agent_id, skill_id) DO NOTHING",
+            (agent_id, skill_id, enabled),
+        )
+    await db.commit()
 
 
 async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:
@@ -182,8 +207,10 @@ async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:
         rows = await cur.fetchall()
     enabled_ids = {row[0] for row in rows}
 
-    # Builtin skills are always enabled regardless of DB state
-    enabled_ids.update(_scan_skills_dir(BUILTIN_SKILLS_DIR))
+    # Only always_enabled builtin skills are force-enabled regardless of DB state
+    for sid in _scan_skills_dir(BUILTIN_SKILLS_DIR):
+        if _is_always_enabled_skill(sid):
+            enabled_ids.add(sid)
 
     # Read current registry manifest (tracks which skills in workspace came from registry)
     manifest_path = dest_skills / REGISTRY_MANIFEST

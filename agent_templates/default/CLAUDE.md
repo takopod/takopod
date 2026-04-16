@@ -33,6 +33,17 @@ Created: <timestamp>
 - [x] Completed step
 ```
 
+## Learning
+
+When you succeed at a task after multiple attempts, corrections, or discoveries:
+1. Append a brief entry to `/workspace/MEMORY.md` under a `## Learned: <topic>` heading
+2. Record the approach that worked and what failed — focus on *why*, not step-by-step details
+3. Keep each entry to 2-3 lines
+
+When you discover an effective pattern for using a tool or service, record it the same way.
+
+Do not record obvious things. Only record what surprised you, what took multiple tries, or what the user corrected you on.
+
 ## Skill Drafting
 
 When you complete a complex task that required significant trial and error, offer to save it as a reusable skill:
