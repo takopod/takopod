@@ -227,6 +227,16 @@ export function App() {
               }
             />
             <Route
+              path="/agents/:agentName/skills/*"
+              element={
+                <AgentsView
+                  agents={agents}
+                  onSelectAgent={handleSelectAgentFromView}
+                  onDeleteAgent={handleDeleteAgent}
+                />
+              }
+            />
+            <Route
               path="/agents/:agentName/files/*"
               element={
                 <AgentsView
@@ -276,7 +286,7 @@ export function App() {
       <aside className="w-52 shrink-0 border-l sticky top-0 h-svh overflow-y-auto">
         {selectedAgentId && isAgentRoute && (
           <>
-            <SkillsStatusPanel agentId={selectedAgentId} />
+            <SkillsStatusPanel agentId={selectedAgentId} agentName={agents.find((a) => a.id === selectedAgentId)?.name} />
             <McpStatusPanel agentId={selectedAgentId} />
             <ContainerStatusPanel agentId={selectedAgentId} />
           </>

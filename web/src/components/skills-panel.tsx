@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { FileEditor } from "@/components/file-editor"
-import { ArrowLeft, Plus, Search, Square, X } from "lucide-react"
+import { ArrowLeft, Pencil, Plus, Search, Square, X } from "lucide-react"
 
 interface RegistrySkill {
   id: string
@@ -44,8 +44,13 @@ interface SkillDraftDetail {
   files: string[]
 }
 
-export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName?: string }) {
+export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: string; agentName?: string; initialPath?: string }) {
   const navigate = useNavigate()
+  const basePath = `/agents/${agentName ?? agentId}/skills`
+  // Parse initialPath: "draft/deploy-to-aws" or "skill/git-workflow"
+  const pathParts = initialPath?.split("/") ?? []
+  const viewType = pathParts[0] === "draft" || pathParts[0] === "skill" ? pathParts[0] : null
+  const viewId = pathParts[1] ?? null
   const [skills, setSkills] = useState<RegistrySkill[]>([])
   const [available, setAvailable] = useState<RegistrySkill[]>([])
   const [availableLoaded, setAvailableLoaded] = useState(false)
@@ -111,6 +116,24 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
     fetchCustomSkills()
   }, [fetchSkills, fetchDrafts, fetchCustomSkills])
 
+  // Load skill/draft detail when URL params change (enables browser back)
+  useEffect(() => {
+    if (viewType === "draft" && viewId) {
+      fetch(`/api/agents/${agentId}/skill-drafts/${viewId}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (data) { setSelectedDraft(data); setSelected(null); setDraftEditing(false); setDraftError(null) } })
+    } else if (viewType === "skill" && viewId) {
+      fetch(`/api/agents/${agentId}/skills/${viewId}`)
+        .then((res) => res.ok ? res.json() : fetch(`/api/skills/${viewId}`))
+        .then((res) => res instanceof Response ? (res.ok ? res.json() : null) : res)
+        .then((data) => { if (data) { setSelected(data); setSelectedDraft(null); setDraftEditing(false) } })
+    } else {
+      setSelected(null)
+      setSelectedDraft(null)
+      setDraftEditing(false)
+    }
+  }, [viewType, viewId, agentId])
+
   const handleStop = async () => {
     setStopping(true)
     try {
@@ -169,21 +192,12 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
     }
   }
 
-  const handleSelect = async (skillId: string) => {
-    const res = await fetch(`/api/skills/${skillId}`)
-    if (res.ok) {
-      const detail: SkillDetail = await res.json()
-      setSelected(detail)
-    }
+  const handleSelect = (skillId: string) => {
+    navigate(`${basePath}/skill/${skillId}`)
   }
 
-  const handleSelectDraft = async (draftId: string) => {
-    const res = await fetch(`/api/agents/${agentId}/skill-drafts/${draftId}`)
-    if (res.ok) {
-      setSelectedDraft(await res.json())
-      setDraftEditing(false)
-      setDraftError(null)
-    }
+  const handleSelectDraft = (draftId: string) => {
+    navigate(`${basePath}/draft/${draftId}`)
   }
 
   const handleApproveDraft = async (draftId: string) => {
@@ -193,7 +207,7 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
       { method: "POST" },
     )
     if (res.ok) {
-      setSelectedDraft(null)
+      navigate(basePath)
       fetchDrafts()
       fetchSkills()
       fetchCustomSkills()
@@ -208,7 +222,7 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
       { method: "POST" },
     )
     if (res.ok) {
-      setSelectedDraft(null)
+      navigate(basePath)
       fetchDrafts()
     }
   }
@@ -238,7 +252,7 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setSelectedDraft(null)}
+            onClick={() => navigate(basePath)}
           >
             <ArrowLeft className="size-4" />
           </Button>
@@ -314,32 +328,79 @@ export function SkillsPanel({ agentId, agentName }: { agentId: string; agentName
 
   // Detail view for a selected skill
   if (selected) {
+    const isCustom = !selected.builtin && customSkills.some((s) => s.id === selected.id)
     return (
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-3 border-b px-4 py-2">
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setSelected(null)}
+            onClick={() => navigate(basePath)}
           >
             <ArrowLeft className="size-4" />
           </Button>
           <span className="text-sm font-medium">{selected.name}</span>
-          <span className="text-xs text-muted-foreground ml-auto">
-            Read-only (edit in System Skills)
-          </span>
+          {isCustom ? (
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              CUSTOM
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground ml-auto">
+              Read-only (edit in System Skills)
+            </span>
+          )}
         </div>
 
         <FileEditor
-          value={selected.content}
-          readOnly
+          value={draftEditing ? draftEditContent : selected.content}
+          onChange={draftEditing ? setDraftEditContent : undefined}
+          readOnly={!draftEditing}
         />
 
-        {selected.description && (
+        {selected.description && !draftEditing && (
           <div className="border-t px-4 py-2">
             <span className="text-xs text-muted-foreground truncate">
               {selected.description}
             </span>
+          </div>
+        )}
+
+        {isCustom && (
+          <div className="flex items-center gap-2 border-t px-4 py-2">
+            {draftEditing ? (
+              <>
+                <Button size="sm" onClick={async () => {
+                  const res = await fetch(`/api/agents/${agentId}/skills/${selected.id}`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ content: draftEditContent }),
+                  })
+                  if (res.ok) {
+                    const updated = await res.json()
+                    setSelected(updated)
+                    setDraftEditing(false)
+                    fetchCustomSkills()
+                  }
+                }}>
+                  Save
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setDraftEditing(false)}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDraftEditContent(selected.content)
+                  setDraftEditing(true)
+                }}
+              >
+                <Pencil className="mr-1.5 size-3" />
+                Edit
+              </Button>
+            )}
           </div>
         )}
       </div>

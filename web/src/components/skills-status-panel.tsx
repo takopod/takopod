@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 
 interface SkillSummary {
   id: string
@@ -8,7 +9,7 @@ interface SkillSummary {
   enabled: boolean
 }
 
-export function SkillsStatusPanel({ agentId }: { agentId: string }) {
+export function SkillsStatusPanel({ agentId, agentName }: { agentId: string; agentName?: string }) {
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [draftCount, setDraftCount] = useState(0)
 
@@ -69,9 +70,12 @@ export function SkillsStatusPanel({ agentId }: { agentId: string }) {
         ))
       )}
       {draftCount > 0 && (
-        <span className="text-[10px] text-amber-600">
+        <Link
+          to={`/agents/${agentName ?? agentId}/skills`}
+          className="text-[10px] text-amber-600 hover:underline cursor-pointer"
+        >
           {draftCount} {draftCount === 1 ? "draft" : "drafts"} pending review
-        </span>
+        </Link>
       )}
     </div>
   )

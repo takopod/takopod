@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link, useNavigate, useParams } from "react-router-dom"
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
@@ -433,10 +433,13 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
   const [dirty, setDirty] = useState(false)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
 
+  const location = useLocation()
+  const pathAfterAgent = agentName ? location.pathname.split(`/agents/${agentName}/`)[1] ?? "" : ""
   // /agents/:name/files/* matched → file browser with optional deep path
-  const showFileBrowser = file === "files" || fileSplat !== undefined
+  const showFileBrowser = file === "files" || (fileSplat !== undefined && !pathAfterAgent.startsWith("skills"))
   const showMcpConfig = file === "mcp"
-  const showSkills = file === "skills"
+  const showSkills = file === "skills" || pathAfterAgent.startsWith("skills")
+  const skillsSplat = pathAfterAgent.startsWith("skills/") ? pathAfterAgent.slice("skills/".length) : undefined
   const openFile = !showFileBrowser && !showMcpConfig && !showSkills
     ? IDENTITY_FILES.find((f) => f.file === file)
     : null
@@ -491,7 +494,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
       ) : showMcpConfig ? (
         <McpConfigPanel agentId={agentId} agentName={agentName} />
       ) : showSkills ? (
-        <SkillsPanel agentId={agentId} agentName={agentName} />
+        <SkillsPanel agentId={agentId} agentName={agentName} initialPath={skillsSplat} />
       ) : showFileBrowser ? (
         <FileBrowser agentId={agentId} agentName={agentName} initialPath={fileSplat} />
       ) : !openFile ? (
