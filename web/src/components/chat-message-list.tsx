@@ -137,7 +137,7 @@ export function ChatMessageList({
             key={msg.id}
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <div className="max-w-[75%]">
+            <div className="max-w-[75%] min-w-0 overflow-hidden">
               {msg.source === "scheduled_task" && (
                 <div className="mb-1 flex items-center gap-1 text-xs text-amber-600">
                   <Clock className="size-3" />
@@ -145,7 +145,7 @@ export function ChatMessageList({
                 </div>
               )}
               <div
-                className={`rounded-lg px-3 py-2 text-sm ${
+                className={`rounded-lg px-3 py-2 text-sm overflow-hidden ${
                   msg.role === "user"
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted text-foreground"
@@ -168,7 +168,7 @@ export function ChatMessageList({
                   <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{msg.content}</Markdown>
                 </div>
               ) : (
-                <span className="whitespace-pre-wrap">{msg.content}</span>
+                <span className="whitespace-pre-wrap break-all">{msg.content}</span>
               )}
               {msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
                 <AttachmentChips paths={msg.attachments} />

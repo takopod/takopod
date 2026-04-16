@@ -131,6 +131,8 @@
 
 .markdown-body {
   line-height: 1.5;
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 .markdown-body p {
   margin: 0.25em 0;
@@ -154,13 +156,16 @@
   padding: 0.15em 0.35em;
   border-radius: 0.25em;
   background: var(--color-background);
+  word-break: break-all;
 }
 .markdown-body pre {
   margin: 0.5em 0;
   padding: 0.75em;
   border-radius: 0.375em;
-  overflow-x: auto;
   background: var(--color-background);
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .markdown-body pre code {
   padding: 0;
