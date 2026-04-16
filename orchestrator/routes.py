@@ -283,17 +283,18 @@ async def update_agent(agent_id: str, req: UpdateAgentRequest) -> AgentDetailRes
 
 @router.delete("/agents/{agent_id}")
 async def delete_agent(agent_id: str, delete_work_dir: bool = False):
-    """Archive an agent and kill its running container if any."""
+    """Delete an agent and kill its running container if any."""
     db = await get_db()
     async with db.execute(
-        "SELECT id, host_dir FROM agents WHERE id = ? AND status = 'active'",
+        "SELECT id, name, host_dir FROM agents WHERE id = ? AND status = 'active'",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    host_dir = Path(row[1]) if row[1] else None
+    agent_name = row[1]
+    host_dir = Path(row[2]) if row[2] else None
 
     # Kill running container
     async with _workers_lock:
@@ -311,23 +312,27 @@ async def delete_agent(agent_id: str, delete_work_dir: bool = False):
         container_name = f"rhclaw-{agent_id[:8]}"
         await kill_container(container_name)
 
-    # Mark ALL running/starting containers for this agent as stopped,
-    # regardless of whether we had an active worker reference.
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    await db.execute(
-        "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
-        "WHERE agent_id = ? AND status IN ('running', 'starting', 'idle')",
-        (now, agent_id),
-    )
-
-    await db.execute(
-        "UPDATE agents SET status = 'archived' WHERE id = ?", (agent_id,),
-    )
+    # Delete all related data, then the agent row itself.
+    # Tables with ON DELETE CASCADE (agent_skills, agent_mcp_servers,
+    # slack_active_threads) are handled automatically.
+    for table in (
+        "messages",
+        "message_queue",
+        "agent_containers",
+        "scheduled_tasks",
+        "agentic_tasks",
+    ):
+        await db.execute(f"DELETE FROM {table} WHERE agent_id = ?", (agent_id,))
+    await db.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
     await db.commit()
 
-    # Delete workspace directory if requested
-    if delete_work_dir and host_dir and host_dir.is_dir():
-        shutil.rmtree(host_dir, ignore_errors=True)
+    if host_dir and host_dir.is_dir():
+        if delete_work_dir:
+            shutil.rmtree(host_dir, ignore_errors=True)
+        else:
+            epoch = int(time.time())
+            archived_dir = host_dir.parent / f"{agent_name}_{epoch}"
+            host_dir.rename(archived_dir)
 
     return {"status": "ok", "agent_id": agent_id}
 
