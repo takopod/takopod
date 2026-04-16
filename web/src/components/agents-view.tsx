@@ -643,10 +643,11 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                 </Link>
               </div>
 
-              {/* Container Settings */}
-              <Separator className="mt-2" />
-              <ContainerResourcesPanel agentId={agentId} detail={detail} onUpdate={setDetail} />
             </div>
+
+            {/* Container Settings */}
+            <ContainerResourcesPanel agentId={agentId} detail={detail} onUpdate={setDetail} />
+
             {/* Danger Zone */}
             <Separator />
             <div>

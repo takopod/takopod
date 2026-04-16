@@ -446,28 +446,29 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                     Drafts
                   </span>
                   {drafts.map((draft) => (
-                    <button
+                    <div
                       key={draft.id}
-                      type="button"
-                      className="flex items-center gap-3 rounded-md border border-dashed px-4 py-2.5 text-left hover:bg-accent/50"
-                      onClick={() => handleSelectDraft(draft.id)}
+                      className="flex items-center gap-3 rounded-md border px-4 py-2.5"
                     >
-                      <div className="flex flex-1 flex-col gap-0.5">
+                      <button
+                        type="button"
+                        className="flex flex-1 flex-col gap-0.5 text-left hover:underline"
+                        onClick={() => handleSelectDraft(draft.id)}
+                      >
                         <span className="text-sm font-medium">{draft.name}</span>
                         {draft.description && (
-                          <span className="text-xs text-muted-foreground truncate max-w-[250px]">
+                          <span className="text-xs text-muted-foreground">
                             {draft.description.length > 100
                               ? draft.description.slice(0, 100) + "..."
                               : draft.description}
                           </span>
                         )}
-                      </div>
-                      {draft.files.length > 0 && (
-                        <span className="text-[10px] text-muted-foreground">
-                          {draft.files.length} {draft.files.length === 1 ? "file" : "files"}
-                        </span>
-                      )}
-                    </button>
+                      </button>
+                      <Pencil className="size-3.5 text-muted-foreground shrink-0" />
+                      <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+                        DRAFT
+                      </span>
+                    </div>
                   ))}
                 </div>
                 <Separator />
