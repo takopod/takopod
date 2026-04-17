@@ -67,7 +67,7 @@ export function SettingsView() {
 
   const ollamaValue = settings["ollama_enabled"]
   const filteredSettings = Object.entries(settings).filter(
-    ([key]) => key !== "ollama_enabled" && !key.startsWith("slack_polling_") && !key.startsWith("default_container_"),
+    ([key]) => key !== "ollama_enabled" && !key.startsWith("slack_polling_") && !key.startsWith("default_container_") && key !== "session_history_window_size",
   )
 
   return (
@@ -196,6 +196,21 @@ export function SettingsView() {
                 Queue Status
                 <ChevronRight className="size-4 text-muted-foreground" />
               </Link>
+            </div>
+          </div>
+
+          {/* Conversation */}
+          <div className="pt-4">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Conversation</div>
+            <div className="space-y-3">
+              <ContainerDefaultInput
+                label="Session History Window"
+                settingKey="session_history_window_size"
+                placeholder="20"
+                helpText="Number of recent messages to retain for context after container restart"
+                value={settings["session_history_window_size"] ?? ""}
+                onSaved={(v) => setSettings((prev) => ({ ...prev, session_history_window_size: v }))}
+              />
             </div>
           </div>
 

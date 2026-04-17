@@ -2016,8 +2016,36 @@ async def update_setting(key: str, request: Request):
     value = body.get("value")
     if value is None:
         raise HTTPException(status_code=400, detail="Missing 'value' field")
+
+    if key == "session_history_window_size":
+        try:
+            n = int(value)
+            if not 1 <= n <= 100:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail="session_history_window_size must be an integer between 1 and 100",
+            )
+
     await set_setting(key, str(value))
+
+    if key == "session_history_window_size":
+        await _broadcast_workspace_settings()
+
     return {"key": key, "value": str(value)}
+
+
+async def _broadcast_workspace_settings() -> None:
+    """Write .settings.json to all agent workspaces."""
+    from orchestrator.container_manager import write_workspace_settings
+    db = await get_db()
+    async with db.execute("SELECT host_dir FROM agents WHERE status = 'active'") as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        host_dir = Path(row[0])
+        if host_dir.is_dir():
+            await write_workspace_settings(host_dir)
 
 
 # --- Message History API ---

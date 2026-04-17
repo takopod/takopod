@@ -235,6 +235,20 @@ async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:
     logger.debug("Synced %d registry skills for agent %s", len(enabled_ids), agent_id)
 
 
+async def write_workspace_settings(host_dir: Path) -> None:
+    """Write global settings to .settings.json in the agent workspace."""
+    from orchestrator.settings import get_all_settings
+    all_settings = await get_all_settings()
+    workspace_settings = {
+        "session_history_window_size": int(
+            all_settings.get("session_history_window_size", "20")
+        ),
+    }
+    from orchestrator.ipc import atomic_write
+    settings_path = host_dir / ".settings.json"
+    atomic_write(settings_path, json.dumps(workspace_settings, indent=2).encode())
+
+
 async def write_agents_json(agent_id: str, host_dir: Path) -> None:
     db = await get_db()
     async with db.execute(
@@ -273,6 +287,7 @@ async def spawn_container(
 
     host_dir.mkdir(parents=True, exist_ok=True)
     await write_agents_json(agent_id, host_dir)
+    await write_workspace_settings(host_dir)
 
     record_id = str(uuid.uuid4())
     await db.execute(
@@ -355,6 +370,7 @@ async def spawn_scheduled_container(
     container_cpus = row[2]
 
     host_dir.mkdir(parents=True, exist_ok=True)
+    await write_workspace_settings(host_dir)
 
     record_id = str(uuid.uuid4())
     await db.execute(

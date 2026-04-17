@@ -14,7 +14,10 @@ from worker.agent import run_query
 WORKSPACE = Path("/workspace")
 INPUT_PATH = WORKSPACE / "input.json"
 OUTPUT_PATH = WORKSPACE / "output.json"
+SESSION_HISTORY_PATH = WORKSPACE / "session_history.json"
+SETTINGS_PATH = WORKSPACE / ".settings.json"
 POLL_INTERVAL = 0.5
+DEFAULT_WINDOW_SIZE = 20
 
 # Context overflow: split the SDK session when input tokens exceed 80% of the
 # model's context window.  The orchestrator session stays unchanged.
@@ -132,6 +135,40 @@ def _mark_processed(conn, message_id: str) -> None:
     conn.commit()
 
 
+def _get_window_size() -> int:
+    if SETTINGS_PATH.is_file():
+        try:
+            config = json.loads(SETTINGS_PATH.read_text())
+            return int(config.get("session_history_window_size", DEFAULT_WINDOW_SIZE))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return DEFAULT_WINDOW_SIZE
+
+
+def _persist_session_history() -> None:
+    window = _get_window_size()
+    entries = _session_transcript[-window:]
+    data = [{"role": role, "content": content} for role, content in entries]
+    atomic_write(SESSION_HISTORY_PATH, json.dumps(data).encode())
+
+
+def _load_session_history() -> str | None:
+    if not SESSION_HISTORY_PATH.is_file():
+        return None
+    try:
+        entries = json.loads(SESSION_HISTORY_PATH.read_text())
+        if not entries:
+            return None
+        lines = []
+        for entry in entries:
+            role = entry.get("role", "unknown")
+            content = entry.get("content", "")
+            lines.append(f"[{role}]: {content}")
+        return "\n\n".join(lines)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 async def _split_session(conn) -> None:
     """Split the SDK session due to context overflow.
 
@@ -163,9 +200,10 @@ async def _split_session(conn) -> None:
                 sys.stderr.write(f"worker: scheduled compaction for {today}\n")
                 sys.stderr.flush()
 
-        # Reset SDK session and transcript
+        # Reset SDK session; keep last N transcript entries for session history
         _session_id = None
-        _session_transcript = []
+        window = _get_window_size()
+        _session_transcript = _session_transcript[-window:]
         sys.stderr.write("worker: session split complete\n")
         sys.stderr.flush()
 
@@ -213,7 +251,10 @@ async def process_message(msg: dict[str, Any], conn) -> None:
                 sys.stderr.write(f"worker: session-end summary failed: {e}\n")
                 sys.stderr.flush()
             _session_id = None  # Next query starts a fresh SDK session
+            _continuation_summary = None
             _session_transcript = []
+            if SESSION_HISTORY_PATH.exists():
+                os.remove(SESSION_HISTORY_PATH)
             emit({"type": "status", "status": "context_cleared", "message_id": ""})
         elif command == "shutdown":
             sys.stderr.write("worker: received shutdown command, summarizing session\n")
@@ -228,6 +269,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             except Exception as e:
                 sys.stderr.write(f"worker: session-end summary failed: {e}\n")
                 sys.stderr.flush()
+            _persist_session_history()
             emit({"type": "status", "status": "done", "message_id": ""})
             flush_responses()
             sys.exit(0)
@@ -348,6 +390,12 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         # Clear continuation summary after it has been consumed
         _continuation_summary = None
 
+        # Accumulate transcript before potential split (which clears it)
+        _session_transcript.append(("user", content))
+        if response_text:
+            _session_transcript.append(("assistant", response_text))
+        _persist_session_history()
+
         # Context overflow check: if input tokens exceed the threshold,
         # split the SDK session.  The orchestrator session is unaffected.
         input_tokens = _usage.get("input_tokens", 0)
@@ -373,17 +421,12 @@ async def process_message(msg: dict[str, Any], conn) -> None:
     if attachments:
         _cleanup_attachments(attachments)
 
-    # Accumulate transcript for summarization at session end / split
-    _session_transcript.append(("user", content))
-    if response_text:
-        _session_transcript.append(("assistant", response_text))
-
     _mark_processed(conn, message_id)
     emit({"type": "status", "status": "done", "message_id": message_id})
 
 
 async def main() -> None:
-    global _conn
+    global _conn, _continuation_summary
 
     # Redirect stderr to a log file in /workspace/logs/{container_name}.log
     container_name = os.environ.get("CONTAINER_NAME", "worker")
@@ -462,6 +505,13 @@ async def main() -> None:
         migrate_markdown_facts_to_db(conn)
     except Exception as e:
         sys.stderr.write(f"worker: markdown facts migration failed: {e}\n")
+        sys.stderr.flush()
+
+    # Restore conversation context from previous session if available
+    history = _load_session_history()
+    if history:
+        _continuation_summary = history
+        sys.stderr.write("worker: loaded session history as continuation context\n")
         sys.stderr.flush()
 
     sys.stderr.write("worker: ready, polling for input.json\n")
