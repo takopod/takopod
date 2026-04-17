@@ -45,6 +45,8 @@ async def ipc_request(
 
     Raises RuntimeError on timeout or error response.
     """
+    from worker.worker import flush_responses
+
     request_id = str(uuid.uuid4())
     request = {
         "request_id": request_id,
@@ -55,6 +57,7 @@ async def ipc_request(
 
     elapsed = 0.0
     while elapsed < timeout:
+        flush_responses()
         await asyncio.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
 

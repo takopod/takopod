@@ -787,6 +787,75 @@ async def _send_queue_status(ws_mgr: WebSocketManager, agent_id: str) -> None:
 # --- Polling loop ---
 
 
+async def _handle_request_background(
+    agent_id: str,
+    request: dict,
+    response_path: Path,
+    mcp_manager: McpServerManager | None,
+) -> None:
+    """Handle a tool request from the worker in the background."""
+    try:
+        result = await _handle_tool_request(agent_id, request, mcp_manager)
+        atomic_write(response_path, json.dumps(result).encode())
+    except Exception:
+        logger.exception("Background request handler failed for agent %s", agent_id)
+        error_result = {
+            "request_id": request.get("request_id", ""),
+            "status": "error",
+            "error": "Internal error handling request",
+        }
+        try:
+            atomic_write(response_path, json.dumps(error_result).encode())
+        except Exception:
+            logger.exception("Failed to write error response for agent %s", agent_id)
+
+
+async def _process_output(
+    output_path: Path,
+    agent_id: str,
+    ws_mgr: WebSocketManager,
+) -> None:
+    """Read output.json and forward events to DB + WebSocket."""
+    if not output_path.exists():
+        return
+    try:
+        with open(output_path) as f:
+            events = json.load(f)
+        os.remove(output_path)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Error reading output.json: %s", e)
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+        return
+
+    notified: set[str] = set()
+    for event in events:
+        try:
+            msg_id = event.get("message_id", "")
+            source_meta = _inflight_source.get(msg_id)
+            row_id = await _process_event(
+                event, agent_id, ws_mgr, source_meta,
+            )
+            if row_id:
+                notified.add(row_id)
+            if event.get("type") == "complete" and msg_id:
+                _inflight_source.pop(msg_id, None)
+        except Exception:
+            logger.exception(
+                "Error processing output event for agent %s",
+                agent_id,
+            )
+
+    for row_id in notified:
+        frame = json.dumps({
+            "type": "message_updated",
+            "message_id": row_id,
+        })
+        await ws_mgr.send(frame)
+
+
 async def _polling_loop(
     agent_id: str,
     host_dir: Path,
@@ -798,6 +867,7 @@ async def _polling_loop(
     request_path = host_dir / "request.json"
     response_path = host_dir / "response.json"
     db = await get_db()
+    pending_request: asyncio.Task | None = None
 
     while True:
         await asyncio.sleep(0.5)
@@ -861,70 +931,33 @@ async def _polling_loop(
                 await db.commit()
                 await _send_queue_status(ws_mgr, agent_id)
 
-            # --- Request polling: handle tool execution requests from worker ---
+            # --- Output polling FIRST: always forward events before handling requests ---
+            await _process_output(output_path, agent_id, ws_mgr)
+
+            # --- Request polling: handle tool requests in background ---
             if request_path.exists():
-                try:
-                    with open(request_path) as f:
-                        request = json.load(f)
-                    os.remove(request_path)
-                except (json.JSONDecodeError, OSError) as e:
-                    logger.warning("Error reading request.json: %s", e)
+                if pending_request and not pending_request.done():
+                    pass
+                else:
                     try:
+                        with open(request_path) as f:
+                            request = json.load(f)
                         os.remove(request_path)
-                    except OSError:
-                        pass
-                    request = None
+                    except (json.JSONDecodeError, OSError) as e:
+                        logger.warning("Error reading request.json: %s", e)
+                        try:
+                            os.remove(request_path)
+                        except OSError:
+                            pass
+                        request = None
 
-                if request:
-                    result = await _handle_tool_request(
-                        agent_id, request, mcp_manager,
-                    )
-                    atomic_write(
-                        response_path,
-                        json.dumps(result).encode(),
-                    )
-
-            # --- Output polling: read output.json from worker ---
-            if output_path.exists():
-                try:
-                    with open(output_path) as f:
-                        events = json.load(f)
-                    os.remove(output_path)
-                except (json.JSONDecodeError, OSError) as e:
-                    logger.warning("Error reading output.json: %s", e)
-                    try:
-                        os.remove(output_path)
-                    except OSError:
-                        pass
-                    events = []
-
-                # Process events and collect unique message_ids for notification
-                notified: set[str] = set()
-                for event in events:
-                    try:
-                        msg_id = event.get("message_id", "")
-                        source_meta = _inflight_source.get(msg_id)
-                        row_id = await _process_event(
-                            event, agent_id, ws_mgr, source_meta,
+                    if request:
+                        pending_request = asyncio.create_task(
+                            _handle_request_background(
+                                agent_id, request, response_path, mcp_manager,
+                            ),
+                            name=f"req-{agent_id[:8]}",
                         )
-                        if row_id:
-                            notified.add(row_id)
-                        # Clear source metadata when this message completes
-                        if event.get("type") == "complete" and msg_id:
-                            _inflight_source.pop(msg_id, None)
-                    except Exception:
-                        logger.exception(
-                            "Error processing output event for agent %s",
-                            agent_id,
-                        )
-
-                # Send one message_updated notification per unique message
-                for row_id in notified:
-                    frame = json.dumps({
-                        "type": "message_updated",
-                        "message_id": row_id,
-                    })
-                    await ws_mgr.send(frame)
 
         except (ConnectionError, RuntimeError):
             # WebSocket disconnected

@@ -53,7 +53,7 @@ npm run format        # Prettier (ts, tsx files)
 ## Key Concepts
 
 - **Agent-centric routing**: All state is keyed by `agent_id`. No sessions table.
-- **Worker output**: Workers do NOT use stdout (it's DEVNULL). Events go through `emit()` -> `worker_responses` DB table -> `output.json` file.
+- **Worker output**: Workers do NOT use stdout (it's DEVNULL). Events go through `emit()` -> in-memory buffer -> `output.json` file (atomic write).
 - **Atomic writes**: All IPC files use temp file + `os.fsync()` + `os.rename()`. Never bypass this.
 - **Context assembly**: System prompt is built from CLAUDE.md + SOUL.md + agents list + memory + hybrid search results + continuation summary (see `worker/agent.py`).
 
@@ -69,7 +69,7 @@ npm run format        # Prettier (ts, tsx files)
 ### Adding a New Tool to the Worker
 
 1. Add tool in `worker/tools/`
-2. Tool output goes through `emit()` -> `worker_responses` table -> `output.json`
+2. Tool output goes through `emit()` -> in-memory buffer -> `output.json`
 
 ### Adding/Editing Agent Templates
 

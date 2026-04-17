@@ -19,7 +19,7 @@ The platform has four components:
 4. Worker's polling loop detects `input.json`, reads it, deletes it (ACK).
 5. Orchestrator's next tick detects the deletion, marks messages `PROCESSED`, flushes any new `QUEUED` messages.
 6. Worker invokes the Claude Agent SDK with the message plus retrieved context.
-7. Worker inserts response events into the `worker_responses` table, then flushes them to `output.json` via atomic write.
+7. Worker buffers response events in memory, then flushes them to `output.json` via atomic write.
 8. Orchestrator's polling loop detects `output.json`, reads it, deletes it, and forwards events to the WebSocket.
 9. UI renders streaming tokens, tool calls, and completion.
 
@@ -45,7 +45,7 @@ All IPC is file-based, using atomic writes (temp file + `os.fsync()` + `os.renam
 
 ### Worker Output Mechanism
 
-Worker events are first inserted into a `worker_responses` table in the per-agent SQLite database, then flushed in batches to `output.json` via atomic write. This decouples event production from file I/O and provides crash safety. After the final event, the worker blocks briefly (up to 10 seconds) to ensure all pending events are flushed before returning, preventing events from being stranded when the orchestrator hasn't consumed a previous batch yet.
+Worker events are buffered in an in-memory list (`_pending_events`) and flushed to `output.json` via atomic write whenever the file does not already exist. The `emit()` function appends an event and attempts to flush; additionally, `flush_responses()` is called during IPC request polling to prevent events from being stranded while waiting for MCP tool responses. After the final event, the worker blocks briefly (up to 10 seconds via `drain_pending()`) to ensure all pending events are flushed before returning.
 
 Worker logs are written to `/workspace/logs/{container_name}.log`, persisted via the bind-mounted workspace directory.
 
