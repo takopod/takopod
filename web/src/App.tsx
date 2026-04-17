@@ -17,6 +17,7 @@ import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { ContainerStatusPanel } from "@/components/container-status-panel"
 import { McpStatusPanel } from "@/components/mcp-status-panel"
+import { CliToolsStatusPanel } from "@/components/cli-tools-status-panel"
 import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { Button } from "@/components/ui/button"
@@ -290,6 +291,7 @@ export function App() {
           <>
             <SkillsStatusPanel agentId={selectedAgentId} agentName={agents.find((a) => a.id === selectedAgentId)?.name} />
             <McpStatusPanel agentId={selectedAgentId} />
+            <CliToolsStatusPanel agentId={selectedAgentId} />
             <ContainerStatusPanel agentId={selectedAgentId} />
           </>
         )}
