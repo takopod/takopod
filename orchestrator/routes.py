@@ -49,6 +49,8 @@ from orchestrator.models import (
     CreateMcpServerRequest,
     CreateSkillRequest,
     ErrorFrame,
+    ExternalToolResponse,
+    ExternalToolToggle,
     FileEntry,
     McpServerResponse,
     McpServerToggle,
@@ -71,12 +73,14 @@ from orchestrator.models import (
 from orchestrator.settings import get_all_settings, get_setting, set_setting
 from orchestrator.slack_routes import router as slack_router
 from orchestrator.github_routes import router as github_router
+from orchestrator.gws_routes import router as gws_router
 from orchestrator.search_routes import router as search_router
 from orchestrator.ws_manager import WS_CLOSE_ADMIN_KILL, WebSocketManager
 
 router = APIRouter(prefix="/api")
 router.include_router(slack_router)
 router.include_router(github_router)
+router.include_router(gws_router)
 router.include_router(search_router)
 
 AGENT_ICONS = [
@@ -615,6 +619,141 @@ async def get_mcp_status(agent_id: str):
     if not worker.mcp_manager:
         return {"running": True, "servers": []}
     return {"running": True, "servers": worker.mcp_manager.get_status()}
+
+
+# --- Per-Agent External Tools ---
+
+
+def _external_tool_config_summary(name: str, config_json: str) -> dict[str, str]:
+    try:
+        config = json.loads(config_json)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if name == "gws":
+        summary: dict[str, str] = {}
+        if config.get("user_email"):
+            summary["user_email"] = config["user_email"]
+        if config.get("credentials_json"):
+            summary["credentials"] = "configured"
+        return summary
+    return {k: "configured" for k in config if config[k]}
+
+
+@router.get("/agents/{agent_id}/external-tools")
+async def get_agent_external_tools(agent_id: str):
+    """Return agent's added external tools and available tools."""
+    await _resolve_agent_path(agent_id)
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT et.id, et.name, et.config, et.builtin, aet.enabled "
+        "FROM external_tools et "
+        "JOIN agent_external_tools aet ON et.id = aet.external_tool_id "
+        "WHERE aet.agent_id = ? ORDER BY et.builtin DESC, et.name",
+        (agent_id,),
+    ) as cur:
+        added_rows = await cur.fetchall()
+
+    added_ids = {r[0] for r in added_rows}
+    tools = []
+    for r in added_rows:
+        tool = ExternalToolResponse(
+            id=r[0],
+            name=r[1],
+            config_summary=_external_tool_config_summary(r[1], r[2]),
+            builtin=bool(r[3]),
+        )
+        tools.append({**tool.model_dump(), "enabled": bool(r[4])})
+
+    async with db.execute(
+        "SELECT id, name, config, builtin FROM external_tools "
+        "ORDER BY builtin DESC, name",
+    ) as cur:
+        all_rows = await cur.fetchall()
+
+    available = [
+        ExternalToolResponse(
+            id=r[0],
+            name=r[1],
+            config_summary=_external_tool_config_summary(r[1], r[2]),
+            builtin=bool(r[3]),
+        ).model_dump()
+        for r in all_rows if r[0] not in added_ids
+    ]
+
+    return {"tools": tools, "available": available}
+
+
+@router.post("/agents/{agent_id}/external-tools/{tool_id}")
+async def add_external_tool_to_agent(agent_id: str, tool_id: str):
+    """Add an external tool to this agent (disabled by default)."""
+    await _resolve_agent_path(agent_id)
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT id FROM external_tools WHERE id = ?", (tool_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="External tool not found")
+
+    try:
+        await db.execute(
+            "INSERT INTO agent_external_tools (agent_id, external_tool_id, enabled) "
+            "VALUES (?, ?, 0)",
+            (agent_id, tool_id),
+        )
+        await db.commit()
+    except Exception:
+        raise HTTPException(status_code=409, detail="Tool already added to this agent")
+
+    return {"external_tool_id": tool_id, "enabled": False}
+
+
+@router.put("/agents/{agent_id}/external-tools/{tool_id}")
+async def toggle_agent_external_tool(
+    agent_id: str, tool_id: str, req: ExternalToolToggle,
+):
+    """Enable or disable an external tool for this agent."""
+    await _resolve_agent_path(agent_id)
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT agent_id FROM agent_external_tools "
+        "WHERE agent_id = ? AND external_tool_id = ?",
+        (agent_id, tool_id),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Tool not added to this agent")
+
+    await db.execute(
+        "UPDATE agent_external_tools SET enabled = ? "
+        "WHERE agent_id = ? AND external_tool_id = ?",
+        (1 if req.enabled else 0, agent_id, tool_id),
+    )
+    await db.commit()
+    return {"external_tool_id": tool_id, "enabled": req.enabled}
+
+
+@router.delete("/agents/{agent_id}/external-tools/{tool_id}")
+async def remove_external_tool_from_agent(agent_id: str, tool_id: str):
+    """Remove an external tool from this agent."""
+    await _resolve_agent_path(agent_id)
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT agent_id FROM agent_external_tools "
+        "WHERE agent_id = ? AND external_tool_id = ?",
+        (agent_id, tool_id),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Tool not added to this agent")
+
+    await db.execute(
+        "DELETE FROM agent_external_tools WHERE agent_id = ? AND external_tool_id = ?",
+        (agent_id, tool_id),
+    )
+    await db.commit()
+    return {"status": "ok", "removed": tool_id}
 
 
 # --- Per-Agent Tool Config API ---

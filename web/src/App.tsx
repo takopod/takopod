@@ -11,6 +11,7 @@ import { SystemMcpView } from "@/components/system-mcp-view"
 import { SettingsView } from "@/components/settings-view"
 import { SlackView } from "@/components/slack-view"
 import { GitHubView } from "@/components/github-view"
+import { GWSView } from "@/components/gws-view"
 import { SearchIndexView } from "@/components/search-index-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
@@ -279,6 +280,7 @@ export function App() {
             <Route path="/settings" element={<SettingsView />} />
             <Route path="/settings/slack" element={<SlackView />} />
             <Route path="/settings/github" element={<GitHubView />} />
+            <Route path="/settings/google-workspace" element={<GWSView />} />
             <Route path="/settings/search-index" element={<SearchIndexView />} />
           </Routes>
       </SidebarInset>

@@ -29,6 +29,7 @@ import {
   Check,
   ChevronRight,
   GitBranch,
+  Globe,
   Hash,
   MessageSquare,
   Moon,
@@ -223,6 +224,17 @@ export function AppSidebar({
                         <Link to="/settings/github">
                           <GitBranch className="size-3.5" />
                           <span>GitHub</span>
+                        </Link>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                    <SidebarMenuSubItem>
+                      <SidebarMenuSubButton
+                        asChild
+                        isActive={currentPath === "/settings/google-workspace"}
+                      >
+                        <Link to="/settings/google-workspace">
+                          <Globe className="size-3.5" />
+                          <span>Google Workspace</span>
                         </Link>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>

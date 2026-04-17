@@ -269,6 +269,25 @@ class GitHubAgentToggle(BaseModel):
     enabled: bool
 
 
+class ExternalToolResponse(BaseModel):
+    id: str
+    name: str
+    config_summary: dict[str, str] = {}
+    builtin: bool = False
+
+
+class ExternalToolToggle(BaseModel):
+    enabled: bool
+
+
+class GWSConfigRequest(BaseModel):
+    credentials_json: str
+
+
+class GWSAgentToggle(BaseModel):
+    enabled: bool
+
+
 # --- Search Index ---
 
 

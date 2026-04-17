@@ -302,14 +302,16 @@ async def spawn_container(
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
         "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
-        "-v", f"{Path.home() / '.config/gws'}:/root/.config/gws:ro,Z",
         "-e", "CLAUDE_CODE_USE_VERTEX=1",
         "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
         "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
         "-e", f"OLLAMA_ENABLED={ollama_enabled}",
         "-e", f"CONTAINER_NAME={container_name}",
-        IMAGE,
     ]
+
+    external_tool_env = await _provision_external_tools(agent_id, host_dir)
+    cmd.extend(external_tool_env)
+    cmd.append(IMAGE)
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -380,14 +382,16 @@ async def spawn_scheduled_container(
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
         "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
-        "-v", f"{Path.home() / '.config/gws'}:/root/.config/gws:ro,Z",
         "-e", "CLAUDE_CODE_USE_VERTEX=1",
         "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
         "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
         "-e", "OLLAMA_ENABLED=false",
         "-e", f"CONTAINER_NAME={container_name}",
-        IMAGE,
     ]
+
+    external_tool_env = await _provision_external_tools(agent_id, host_dir)
+    cmd.extend(external_tool_env)
+    cmd.append(IMAGE)
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -406,6 +410,43 @@ async def spawn_scheduled_container(
     )
 
     return record_id, process, host_dir
+
+
+async def _provision_external_tools(agent_id: str, host_dir: Path) -> list[str]:
+    """Query enabled external tools and provision credentials into workspace.
+
+    Returns a list of podman env var args (e.g., ["-e", "KEY=VALUE", ...]).
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT et.name, et.config FROM external_tools et "
+        "JOIN agent_external_tools aet ON et.id = aet.external_tool_id "
+        "WHERE aet.agent_id = ? AND aet.enabled = 1",
+        (agent_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    env_args: list[str] = []
+    for name, config_json in rows:
+        try:
+            config = json.loads(config_json)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Invalid config for external tool %s, skipping", name)
+            continue
+
+        if name == "gws":
+            creds = config.get("credentials_json", "")
+            if creds:
+                config_dir = host_dir / "config"
+                config_dir.mkdir(exist_ok=True)
+                creds_path = config_dir / "gws-credentials.json"
+                creds_path.write_text(creds)
+                env_args.extend([
+                    "-e", "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/workspace/config/gws-credentials.json",
+                ])
+                logger.debug("Provisioned GWS credentials for agent %s", agent_id[:8])
+
+    return env_args
 
 
 async def stop_container(container_name: str) -> None:
