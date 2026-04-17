@@ -895,12 +895,35 @@ async def _process_output(
                 agent_id,
             )
 
+    db = await get_db()
     for row_id in notified:
-        frame = json.dumps({
+        msg_data = None
+        try:
+            async with db.execute(
+                "SELECT id, role, content, created_at, metadata, status "
+                "FROM messages WHERE id = ?",
+                (row_id,),
+            ) as cur:
+                msg_row = await cur.fetchone()
+            if msg_row:
+                msg_data = {
+                    "id": msg_row[0],
+                    "role": msg_row[1],
+                    "content": msg_row[2],
+                    "created_at": msg_row[3],
+                    "metadata": msg_row[4],
+                    "status": msg_row[5],
+                }
+        except Exception:
+            logger.exception("Failed to read message %s for WS frame", row_id)
+
+        payload: dict[str, typing.Any] = {
             "type": "message_updated",
             "message_id": row_id,
-        })
-        await ws_mgr.send(frame)
+        }
+        if msg_data:
+            payload["message"] = msg_data
+        await ws_mgr.send(json.dumps(payload))
 
 
 async def _polling_loop(

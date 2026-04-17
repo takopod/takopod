@@ -127,7 +127,20 @@ export function useWebSocket(agentId: string | null) {
         setError(frame)
         clearError()
       } else if (frame.type === "message_updated") {
-        fetchMessage(frame.message_id)
+        if (frame.message) {
+          const parsed = parseMessage(frame.message)
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === parsed.id)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = parsed
+              return updated
+            }
+            return [...prev, parsed]
+          })
+        } else {
+          fetchMessage(frame.message_id)
+        }
       } else if (frame.type === "gh_approval_request") {
         fetchMessage(frame.message_id)
       } else if (

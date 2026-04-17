@@ -400,6 +400,7 @@ async def run_query(
     total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
     full_text_parts: list[str] = []
     seq = 0
+    last_emitted_text = ""
 
     emit({"type": "status", "status": "generating", "message_id": message_id})
 
@@ -426,15 +427,15 @@ async def run_query(
                         "message_id": message_id,
                         "seq": seq,
                     })
-            # Emit every AssistantMessage so the orchestrator sees
-            # intermediate state even when there are no new text blocks
-            # (e.g. tool-use-only turns).
-            emit({
-                "type": "assistant_message",
-                "content": "\n\n".join(full_text_parts),
-                "message_id": message_id,
-                "seq": seq,
-            })
+            current_text = "\n\n".join(full_text_parts)
+            if current_text != last_emitted_text:
+                emit({
+                    "type": "assistant_message",
+                    "content": current_text,
+                    "message_id": message_id,
+                    "seq": seq,
+                })
+                last_emitted_text = current_text
             sys.stderr.write(
                 f"agent: AssistantMessage seq={seq}\n"
                 f"{full_text_parts[-1] if full_text_parts else ''}\n"

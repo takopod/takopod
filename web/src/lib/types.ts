@@ -20,6 +20,14 @@ export interface ErrorFrame {
 export interface MessageUpdatedFrame {
   type: "message_updated"
   message_id: string
+  message?: {
+    id: string
+    role: string
+    content: string
+    created_at: string
+    metadata?: string
+    status?: string
+  }
 }
 
 export interface StatusFrame {
