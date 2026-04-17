@@ -39,7 +39,6 @@ import {
   Server,
   Settings,
   Sparkles,
-  Terminal,
   Trash2,
   X,
 } from "lucide-react"
@@ -63,12 +62,14 @@ interface McpServer {
   args?: string[]
   url?: string
   auth?: "none" | "basic" | "oauth"
+  note?: string
+  display_name?: string
 }
 
 function McpServerLabel({ srv }: { srv: McpServer }) {
   return (
     <>
-      <span className="text-sm font-medium">{srv.name}</span>
+      <span className="text-sm font-medium">{srv.display_name || srv.name}</span>
       <code className="text-xs text-muted-foreground">
         {srv.transport === "http"
           ? `HTTP: ${srv.url}`
@@ -229,6 +230,9 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                       >
                         <div className="flex flex-1 flex-col gap-0.5">
                           <McpServerLabel srv={srv} />
+                          {srv.note && (
+                            <span className="text-xs text-amber-500">{srv.note}</span>
+                          )}
                         </div>
                         {srv.builtin && (
                           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -288,6 +292,9 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                             : "Not authorized"}
                         </span>
                       )}
+                      {srv.note && (
+                        <span className="text-xs text-amber-500">{srv.note}</span>
+                      )}
                     </div>
                     {srv.builtin ? (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -317,238 +324,6 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
   )
 }
 
-interface ExternalTool {
-  id: string
-  name: string
-  builtin: boolean
-  enabled: boolean
-  config_summary?: Record<string, string>
-}
-
-interface AvailableExternalTool {
-  id: string
-  name: string
-  builtin: boolean
-  config_summary?: Record<string, string>
-}
-
-function ExternalToolsConfigPanel({ agentId, agentName }: { agentId: string; agentName?: string }) {
-  const navigate = useNavigate()
-  const [tools, setTools] = useState<ExternalTool[]>([])
-  const [available, setAvailable] = useState<AvailableExternalTool[]>([])
-  const [availableLoaded, setAvailableLoaded] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [toggling, setToggling] = useState<string | null>(null)
-  const [search, setSearch] = useState("")
-  const [searchFocused, setSearchFocused] = useState(false)
-
-  const fetchTools = useCallback(async () => {
-    const res = await fetch(`/api/agents/${agentId}/external-tools`)
-    if (res.ok) {
-      const data = await res.json()
-      setTools(data.tools || [])
-      if (!availableLoaded) {
-        setAvailable(data.available || [])
-        setAvailableLoaded(true)
-      }
-    }
-    setLoading(false)
-  }, [agentId, availableLoaded])
-
-  const fetchAvailable = useCallback(async () => {
-    if (availableLoaded) return
-    const res = await fetch(`/api/agents/${agentId}/external-tools`)
-    if (res.ok) {
-      const data = await res.json()
-      setAvailable(data.available || [])
-    }
-    setAvailableLoaded(true)
-  }, [agentId, availableLoaded])
-
-  useEffect(() => {
-    fetchTools()
-  }, [fetchTools])
-
-  const handleToggle = async (id: string, enabled: boolean) => {
-    setToggling(id)
-    const res = await fetch(`/api/agents/${agentId}/external-tools/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
-    })
-    if (res.ok) {
-      setTools((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, enabled } : t)),
-      )
-    }
-    setToggling(null)
-  }
-
-  const handleAdd = async (id: string) => {
-    const res = await fetch(`/api/agents/${agentId}/external-tools/${id}`, {
-      method: "POST",
-    })
-    if (res.ok) {
-      setSearch("")
-      setAvailableLoaded(false)
-      setAvailable([])
-      await fetchTools()
-    }
-  }
-
-  const handleRemove = async (id: string) => {
-    const res = await fetch(`/api/agents/${agentId}/external-tools/${id}`, {
-      method: "DELETE",
-    })
-    if (res.ok) {
-      setAvailableLoaded(false)
-      setAvailable([])
-      await fetchTools()
-    }
-  }
-
-  const filtered = available
-    .filter((t) => t.name.toLowerCase().includes(search.toLowerCase()))
-    .slice(0, 5)
-
-  return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex items-center gap-3 border-b px-4 py-2">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => navigate(`/agents/${agentName}`)}
-        >
-          <ArrowLeft className="size-4" />
-        </Button>
-        <span className="text-sm font-medium">CLI Tools</span>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4">
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {/* Search & add section */}
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onFocus={() => {
-                  setSearchFocused(true)
-                  fetchAvailable()
-                }}
-                onBlur={() => {
-                  setTimeout(() => setSearchFocused(false), 150)
-                }}
-                placeholder="Search available tools..."
-                className="pl-8"
-              />
-              {searchFocused && availableLoaded && (
-                <div className="absolute left-0 right-0 top-full z-50 mt-1 flex flex-col rounded-md border bg-popover shadow-md">
-                  {filtered.length === 0 ? (
-                    <p className="px-3 py-2 text-xs text-muted-foreground">
-                      No tools available to add.
-                    </p>
-                  ) : (
-                    filtered.map((tool, i) => (
-                      <div
-                        key={tool.id}
-                        className={`flex items-center gap-3 px-3 py-2 ${
-                          i > 0 ? "border-t" : ""
-                        }`}
-                      >
-                        <div className="flex flex-1 flex-col gap-0.5">
-                          <span className="text-sm font-medium">{tool.name}</span>
-                          {tool.config_summary && Object.keys(tool.config_summary).length > 0 && (
-                            <span className="text-xs text-muted-foreground">
-                              {Object.values(tool.config_summary).join(", ")}
-                            </span>
-                          )}
-                        </div>
-                        {tool.builtin && (
-                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            BUILTIN
-                          </span>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => handleAdd(tool.id)}
-                        >
-                          <Plus className="size-3.5" />
-                        </Button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            <Separator />
-
-            {/* Added tools */}
-            {tools.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No CLI tools added to this agent yet.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {tools.map((tool) => (
-                  <div
-                    key={tool.id}
-                    className="flex items-center gap-3 rounded-md border px-4 py-2.5"
-                  >
-                    <button
-                      type="button"
-                      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        tool.enabled ? "bg-primary" : "bg-input"
-                      } ${toggling === tool.id ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                      disabled={toggling === tool.id}
-                      onClick={() => handleToggle(tool.id, !tool.enabled)}
-                    >
-                      <span
-                        className={`pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-                          tool.enabled ? "translate-x-4" : "translate-x-0"
-                        }`}
-                      />
-                    </button>
-                    <div className="flex flex-1 flex-col gap-0.5">
-                      <span className="text-sm font-medium">{tool.name}</span>
-                      {tool.config_summary && Object.keys(tool.config_summary).length > 0 && (
-                        <span className="text-xs text-muted-foreground">
-                          {Object.values(tool.config_summary).join(", ")}
-                        </span>
-                      )}
-                    </div>
-                    {tool.builtin ? (
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                        BUILTIN
-                      </span>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => handleRemove(tool.id)}
-                      >
-                        <X className="size-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <p className="text-xs text-muted-foreground">
-              Changes take effect after stopping and restarting the worker.
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 function ContainerResourcesPanel({
   agentId,
@@ -672,10 +447,9 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
   // /agents/:name/files/* matched → file browser with optional deep path
   const showFileBrowser = file === "files" || (fileSplat !== undefined && !pathAfterAgent.startsWith("skills"))
   const showMcpConfig = file === "mcp"
-  const showExternalTools = file === "external-tools"
   const showSkills = file === "skills" || pathAfterAgent.startsWith("skills")
   const skillsSplat = pathAfterAgent.startsWith("skills/") ? pathAfterAgent.slice("skills/".length) : undefined
-  const openFile = !showFileBrowser && !showMcpConfig && !showExternalTools && !showSkills
+  const openFile = !showFileBrowser && !showMcpConfig && !showSkills
     ? IDENTITY_FILES.find((f) => f.file === file)
     : null
 
@@ -728,8 +502,6 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
         </div>
       ) : showMcpConfig ? (
         <McpConfigPanel agentId={agentId} agentName={agentName} />
-      ) : showExternalTools ? (
-        <ExternalToolsConfigPanel agentId={agentId} agentName={agentName} />
       ) : showSkills ? (
         <SkillsPanel agentId={agentId} agentName={agentName} initialPath={skillsSplat} />
       ) : showFileBrowser ? (
@@ -841,20 +613,6 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                   </Card>
                 </Link>
 
-                <Link to={`/agents/${agentName}/external-tools`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Terminal className="size-4 text-muted-foreground" />
-                        CLI Tools
-                      </CardTitle>
-                      <CardDescription>Container-side tool integrations</CardDescription>
-                      <CardAction>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </CardAction>
-                    </CardHeader>
-                  </Card>
-                </Link>
               </div>
             </div>
 

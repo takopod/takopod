@@ -3,6 +3,8 @@ import { useEffect, useState } from "react"
 interface McpServer {
   name: string
   enabled: boolean
+  note?: string
+  display_name?: string
 }
 
 interface McpServerStatus {
@@ -80,13 +82,15 @@ export function McpStatusPanel({ agentId }: { agentId: string }) {
           <div key={srv.name} className="flex items-center gap-2 py-0.5">
             <span
               className={`inline-block size-1.5 shrink-0 rounded-full ${
-                srv.enabled
-                  ? "bg-green-500"
-                  : "bg-muted-foreground/40"
+                srv.note
+                  ? "bg-amber-500"
+                  : srv.enabled
+                    ? "bg-green-500"
+                    : "bg-muted-foreground/40"
               }`}
             />
             <span className="text-xs text-muted-foreground truncate">
-              {srv.name}
+              {srv.display_name || srv.name}
             </span>
             {live && running && (
               <span className="ml-auto text-[10px] text-muted-foreground/60 tabular-nums">

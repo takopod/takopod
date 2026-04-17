@@ -18,6 +18,8 @@ interface McpServer {
   env: Record<string, string>
   timeout: number
   builtin: boolean
+  note?: string
+  display_name?: string
 }
 
 export function SystemMcpView() {
@@ -152,7 +154,7 @@ export function SystemMcpView() {
   }
 
   const handleRemove = async (srv: McpServer) => {
-    if (!confirm(`Remove "${srv.name}" from MCP servers?`)) return
+    if (!confirm(`Remove "${srv.display_name || srv.name}" from MCP servers?`)) return
     const res = await fetch(`/api/mcp/servers/${srv.id}`, {
       method: "DELETE",
     })
@@ -249,7 +251,7 @@ export function SystemMcpView() {
                 editing === srv.id ? (
                   <div key={srv.id} className="rounded-md border p-4">
                     <div className="mb-3 flex items-center justify-between">
-                      <span className="text-sm font-medium">{srv.name}</span>
+                      <span className="text-sm font-medium">{srv.display_name || srv.name}</span>
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -376,14 +378,15 @@ export function SystemMcpView() {
                     className="flex items-start justify-between rounded-md border px-4 py-3"
                   >
                     <div className="flex flex-col gap-1">
-                      <span className="text-sm font-medium">{srv.name}</span>
+                      <span className="text-sm font-medium">{srv.display_name || srv.name}</span>
                       <code className="text-xs text-muted-foreground">
-                        {srv.builtin
-                          ? `Managed by ${srv.name} integration settings`
-                          : srv.transport === "http"
-                            ? `HTTP: ${srv.url}`
-                            : `${srv.command || ""} ${(srv.args || []).join(" ")}`}
+                        {srv.transport === "http"
+                          ? `HTTP: ${srv.url}`
+                          : `${srv.command || ""} ${(srv.args || []).join(" ")}`}
                       </code>
+                      {srv.note && (
+                        <span className="text-xs text-amber-500">{srv.note}</span>
+                      )}
                       {srv.auth === "oauth" && (
                         <span
                           className={`text-xs ${oauthStatus[srv.name] ? "text-green-500" : "text-yellow-500"}`}

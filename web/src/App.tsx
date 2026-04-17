@@ -10,14 +10,11 @@ import { SystemSkillsView } from "@/components/system-skills-view"
 import { SystemMcpView } from "@/components/system-mcp-view"
 import { SettingsView } from "@/components/settings-view"
 import { SlackView } from "@/components/slack-view"
-import { GitHubView } from "@/components/github-view"
-import { GWSView } from "@/components/gws-view"
 import { SearchIndexView } from "@/components/search-index-view"
 import { ChatMessageList } from "@/components/chat-message-list"
 import { ErrorNotification, SessionEndedBanner, SystemErrorNotification } from "@/components/error-notification"
 import { ContainerStatusPanel } from "@/components/container-status-panel"
 import { McpStatusPanel } from "@/components/mcp-status-panel"
-import { CliToolsStatusPanel } from "@/components/cli-tools-status-panel"
 import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { Button } from "@/components/ui/button"
@@ -280,8 +277,6 @@ export function App() {
             />
             <Route path="/settings" element={<SettingsView />} />
             <Route path="/settings/slack" element={<SlackView />} />
-            <Route path="/settings/github" element={<GitHubView />} />
-            <Route path="/settings/google-workspace" element={<GWSView />} />
             <Route path="/settings/search-index" element={<SearchIndexView />} />
           </Routes>
       </SidebarInset>
@@ -291,7 +286,6 @@ export function App() {
           <>
             <SkillsStatusPanel agentId={selectedAgentId} agentName={agents.find((a) => a.id === selectedAgentId)?.name} />
             <McpStatusPanel agentId={selectedAgentId} />
-            <CliToolsStatusPanel agentId={selectedAgentId} />
             <ContainerStatusPanel agentId={selectedAgentId} />
           </>
         )}

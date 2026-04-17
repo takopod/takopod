@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -11,6 +12,22 @@ import uuid
 import aiosqlite
 
 logger = logging.getLogger(__name__)
+
+
+async def _check_cli_auth(cli: str) -> str | None:
+    """Check if a CLI tool is authenticated. Returns an error note or None."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            cli, "auth", "status",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            return f"Not authenticated. Run '{cli} auth login' in your terminal."
+    except Exception:
+        return f"Could not verify auth status for {cli}."
+    return None
 
 
 async def seed_builtin_mcp_servers(db: aiosqlite.Connection) -> None:
@@ -23,6 +40,7 @@ async def seed_builtin_mcp_servers(db: aiosqlite.Connection) -> None:
     slack_config = _read_slack_config()
     if slack_config:
         env = {
+            "_display_name": "Slack",
             "SLACK_XOXC_TOKEN": slack_config["xoxc_token"],
             "SLACK_D_COOKIE": slack_config["d_cookie"],
             "MY_MEMBER_ID": slack_config.get("member_id", ""),
@@ -37,20 +55,56 @@ async def seed_builtin_mcp_servers(db: aiosqlite.Connection) -> None:
     else:
         await _remove_builtin(db, "slack")
 
-    if shutil.which("gh"):
-        await _upsert_builtin(
-            db,
-            name="github",
-            command=sys.executable,
-            args=["-m", "integrations.github_mcp"],
-            env={},
-            timeout=360.0,
-        )
-    else:
-        logger.warning("gh CLI not found on host — GitHub MCP server disabled")
-        await _remove_builtin(db, "github")
+    await _seed_cli_integration(
+        db,
+        cli="gh",
+        name="github",
+        display_name="Github",
+        module="integrations.github_mcp",
+        install_hint="brew install gh",
+    )
+
+    await _seed_cli_integration(
+        db,
+        cli="gws",
+        name="gws",
+        display_name="Google Workspace",
+        module="integrations.gws_mcp",
+        install_hint="npm install -g @anthropic-ai/gws",
+    )
 
     await db.commit()
+
+
+async def _seed_cli_integration(
+    db: aiosqlite.Connection,
+    *,
+    cli: str,
+    name: str,
+    display_name: str,
+    module: str,
+    install_hint: str,
+) -> None:
+    """Register a CLI-based MCP server, always — with a status note if unavailable."""
+    env: dict[str, str] = {"_display_name": display_name}
+
+    if not shutil.which(cli):
+        env["_note"] = f"{cli} CLI not installed. Run: {install_hint}"
+        logger.warning("%s CLI not found on host — registering with note", cli)
+    else:
+        auth_note = await _check_cli_auth(cli)
+        if auth_note:
+            env["_note"] = auth_note
+            logger.warning("%s CLI auth issue: %s", cli, auth_note)
+
+    await _upsert_builtin(
+        db,
+        name=name,
+        command=sys.executable,
+        args=["-m", module],
+        env=env,
+        timeout=360.0,
+    )
 
 
 async def _upsert_builtin(

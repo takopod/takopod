@@ -142,6 +142,8 @@ class McpServerResponse(BaseModel):
     env: dict[str, str] = {}
     timeout: float = 30.0
     builtin: bool = False
+    note: str = ""
+    display_name: str = ""
 
 
 class CreateMcpServerRequest(BaseModel):
@@ -275,28 +277,6 @@ class SlackThreadRequest(BaseModel):
     thread_ts: str = Field(..., min_length=1)
     agent_id: str = Field(..., min_length=1)
 
-
-class GitHubAgentToggle(BaseModel):
-    enabled: bool
-
-
-class ExternalToolResponse(BaseModel):
-    id: str
-    name: str
-    config_summary: dict[str, str] = {}
-    builtin: bool = False
-
-
-class ExternalToolToggle(BaseModel):
-    enabled: bool
-
-
-class GWSConfigRequest(BaseModel):
-    credentials_json: str
-
-
-class GWSAgentToggle(BaseModel):
-    enabled: bool
 
 
 # --- Search Index ---
