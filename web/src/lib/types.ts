@@ -34,12 +34,22 @@ export interface SystemErrorFrame {
   fatal: boolean
 }
 
+export interface GhApprovalRequestFrame {
+  type: "gh_approval_request"
+  request_id: string
+  agent_id: string
+  command: string
+  message_id: string
+  timestamp: string
+}
+
 export type ServerFrame =
   | QueueStatusFrame
   | ErrorFrame
   | MessageUpdatedFrame
   | StatusFrame
   | SystemErrorFrame
+  | GhApprovalRequestFrame
 
 export interface ToolCallInfo {
   tool_name: string
@@ -51,6 +61,7 @@ export interface ToolCallInfo {
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool_call"; tool: ToolCallInfo }
+  | { type: "gh_approval"; request_id: string; command: string; status: "pending" | "approved" | "denied" }
 
 export interface ChatMessage {
   id: string

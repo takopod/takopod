@@ -96,6 +96,21 @@ class SystemCommandFrame(BaseModel):
     command: Literal["clear_context", "shutdown"]
 
 
+class GhApprovalRequestFrame(BaseModel):
+    type: Literal["gh_approval_request"] = "gh_approval_request"
+    request_id: str
+    agent_id: str
+    command: str
+    message_id: str
+    timestamp: str
+
+
+class GhApprovalResponseFrame(BaseModel):
+    type: Literal["gh_approval_response"]
+    request_id: str
+    approved: bool
+
+
 class FileEntry(BaseModel):
     name: str
     path: str
@@ -259,10 +274,6 @@ class SlackThreadRequest(BaseModel):
     channel_id: str = Field(..., min_length=1)
     thread_ts: str = Field(..., min_length=1)
     agent_id: str = Field(..., min_length=1)
-
-
-class GitHubConfigRequest(BaseModel):
-    personal_access_token: str
 
 
 class GitHubAgentToggle(BaseModel):

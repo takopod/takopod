@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sys
 import uuid
 
@@ -18,7 +19,6 @@ async def seed_builtin_mcp_servers(db: aiosqlite.Connection) -> None:
     Called at startup and whenever integration settings are saved/deleted.
     """
     from orchestrator.slack_routes import _read_slack_config
-    from orchestrator.github_routes import _read_github_config
 
     slack_config = _read_slack_config()
     if slack_config:
@@ -37,20 +37,17 @@ async def seed_builtin_mcp_servers(db: aiosqlite.Connection) -> None:
     else:
         await _remove_builtin(db, "slack")
 
-    github_config = _read_github_config()
-    if github_config:
-        env = {
-            "GITHUB_PERSONAL_ACCESS_TOKEN": github_config["personal_access_token"],
-            "GITHUB_USERNAME": github_config.get("username", ""),
-        }
+    if shutil.which("gh"):
         await _upsert_builtin(
             db,
             name="github",
             command=sys.executable,
             args=["-m", "integrations.github_mcp"],
-            env=env,
+            env={},
+            timeout=360.0,
         )
     else:
+        logger.warning("gh CLI not found on host — GitHub MCP server disabled")
         await _remove_builtin(db, "github")
 
     await db.commit()
@@ -63,6 +60,7 @@ async def _upsert_builtin(
     command: str,
     args: list[str],
     env: dict[str, str],
+    timeout: float = 30.0,
 ) -> None:
     async with db.execute(
         "SELECT id FROM mcp_servers WHERE name = ?", (name,),
@@ -74,16 +72,17 @@ async def _upsert_builtin(
 
     if row:
         await db.execute(
-            "UPDATE mcp_servers SET command = ?, args = ?, env = ? WHERE id = ?",
-            (command, args_json, env_json, row[0]),
+            "UPDATE mcp_servers SET command = ?, args = ?, env = ?, timeout = ? "
+            "WHERE id = ?",
+            (command, args_json, env_json, timeout, row[0]),
         )
         logger.info("Updated builtin MCP server '%s'", name)
     else:
         server_id = str(uuid.uuid4())
         await db.execute(
-            "INSERT INTO mcp_servers (id, name, command, args, env, builtin) "
-            "VALUES (?, ?, ?, ?, ?, 1)",
-            (server_id, name, command, args_json, env_json),
+            "INSERT INTO mcp_servers (id, name, command, args, env, timeout, builtin) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            (server_id, name, command, args_json, env_json, timeout),
         )
         logger.info("Created builtin MCP server '%s' (id=%s)", name, server_id)
 

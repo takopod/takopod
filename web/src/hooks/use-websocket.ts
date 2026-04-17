@@ -128,6 +128,8 @@ export function useWebSocket(agentId: string | null) {
         clearError()
       } else if (frame.type === "message_updated") {
         fetchMessage(frame.message_id)
+      } else if (frame.type === "gh_approval_request") {
+        fetchMessage(frame.message_id)
       } else if (
         frame.type === "status" &&
         frame.status === "context_cleared"
@@ -269,11 +271,21 @@ export function useWebSocket(agentId: string | null) {
     }
   }, [agentId, loadingOlder, messages])
 
+  const sendApprovalResponse = useCallback((requestId: string, approved: boolean) => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({
+      type: "gh_approval_response",
+      request_id: requestId,
+      approved,
+    }))
+  }, [])
+
   const reconnect = useCallback(() => {
     setSessionEnded(null)
     reconnectAttempt.current = 0
     connect()
   }, [connect])
 
-  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages }
+  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages }
 }

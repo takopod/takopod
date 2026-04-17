@@ -1,141 +1,69 @@
 """GitHub integration API routes.
 
-Global credential management and per-agent enablement toggle.
-Mirrors the Slack integration pattern in slack_routes.py.
+Uses the ``gh`` CLI for authentication — no PAT management needed.
+Provides per-agent enablement toggle.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
-import urllib.error
-import urllib.request
-from pathlib import Path
+import shutil
 
 from fastapi import APIRouter, HTTPException
 
 from orchestrator.db import get_db
-from orchestrator.models import GitHubAgentToggle, GitHubConfigRequest
+from orchestrator.models import GitHubAgentToggle
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-GITHUB_CONFIG_PATH = Path("data/github-config.json")
-
-
-def _read_github_config() -> dict | None:
-    """Read the global GitHub config from disk, or None if not configured."""
-    if not GITHUB_CONFIG_PATH.is_file():
-        return None
-    try:
-        return json.loads(GITHUB_CONFIG_PATH.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def _mask_token(token: str) -> str:
-    """Mask a token, showing only the first 8 and last 4 characters."""
-    if len(token) <= 12:
-        return "****"
-    return f"{token[:8]}...{token[-4:]}"
-
-
-# --- Global GitHub Config ---
-
 
 @router.get("/github/config")
 async def get_github_config():
-    config = _read_github_config()
-    if not config:
-        return {"configured": False}
-    return {
-        "configured": True,
-        "personal_access_token": _mask_token(config.get("personal_access_token", "")),
-    }
-
-
-@router.put("/github/config")
-async def put_github_config(req: GitHubConfigRequest):
-    GITHUB_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    data = req.model_dump()
-
-    # Resolve and cache the GitHub username for this token
-    username = ""
-    try:
-        api_req = urllib.request.Request(
-            "https://api.github.com/user",
-            headers={
-                "Authorization": f"Bearer {data['personal_access_token']}",
-                "Accept": "application/vnd.github+json",
-            },
-        )
-        with urllib.request.urlopen(api_req, timeout=10) as resp:
-            username = json.loads(resp.read().decode()).get("login", "")
-    except Exception:
-        pass
-    data["username"] = username
-
-    GITHUB_CONFIG_PATH.write_text(json.dumps(data, indent=2))
-
-    from orchestrator.mcp_seed import seed_builtin_mcp_servers
-    db = await get_db()
-    await seed_builtin_mcp_servers(db)
-
-    return {
-        "configured": True,
-        "personal_access_token": _mask_token(data["personal_access_token"]),
-        "username": username,
-    }
-
-
-@router.delete("/github/config")
-async def delete_github_config():
-    if GITHUB_CONFIG_PATH.is_file():
-        GITHUB_CONFIG_PATH.unlink()
-
-    from orchestrator.mcp_seed import seed_builtin_mcp_servers
-    db = await get_db()
-    await seed_builtin_mcp_servers(db)
-
-    return {"configured": False}
-
-
-@router.get("/github/status")
-async def get_github_status():
-    """Test the GitHub connection using the stored token."""
-    config = _read_github_config()
-    if not config:
-        return {"connected": False, "error": "No GitHub token configured."}
-
-    token = config.get("personal_access_token", "")
-    if not token:
-        return {"connected": False, "error": "No GitHub token configured."}
+    """Check gh CLI availability and auth status."""
+    if not shutil.which("gh"):
+        return {"configured": False, "gh_installed": False, "error": "gh CLI is not installed."}
 
     try:
-        req = urllib.request.Request(
-            "https://api.github.com/user",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-            },
+        proc = await asyncio.create_subprocess_exec(
+            "gh", "auth", "status",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-            scopes = resp.headers.get("X-OAuth-Scopes", "")
+        stdout, stderr = await proc.communicate()
+        output = (stdout or stderr).decode().strip()
+
+        if proc.returncode != 0:
             return {
-                "connected": True,
-                "username": data.get("login", ""),
-                "scopes": scopes,
+                "configured": False,
+                "gh_installed": True,
+                "error": "Not authenticated. Run 'gh auth login' in your terminal.",
+                "status_output": output,
             }
-    except urllib.error.HTTPError as exc:
+
+        username = ""
         try:
-            detail = json.loads(exc.read().decode()).get("message", exc.reason)
+            proc_json = await asyncio.create_subprocess_exec(
+                "gh", "api", "user", "--jq", ".login",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await asyncio.wait_for(proc_json.communicate(), timeout=10)
+            if proc_json.returncode == 0:
+                username = out.decode().strip()
         except Exception:
-            detail = exc.reason
-        return {"connected": False, "error": f"GitHub API error ({exc.code}): {detail}"}
+            pass
+
+        return {
+            "configured": True,
+            "gh_installed": True,
+            "username": username,
+            "status_output": output,
+        }
     except Exception as exc:
-        return {"connected": False, "error": str(exc)}
+        return {"configured": False, "gh_installed": True, "error": str(exc)}
 
 
 # --- Per-Agent GitHub Toggle ---
@@ -171,15 +99,13 @@ async def put_agent_github(agent_id: str, req: GitHubAgentToggle):
         if not await cur.fetchone():
             raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Look up the github MCP server
     async with db.execute(
         "SELECT id FROM mcp_servers WHERE name = 'github' AND builtin = 1",
     ) as cur:
         srv = await cur.fetchone()
     if not srv:
-        raise HTTPException(status_code=404, detail="GitHub integration not configured")
+        raise HTTPException(status_code=404, detail="GitHub integration not available (is gh CLI installed?)")
 
-    # Upsert into agent_mcp_servers
     await db.execute(
         "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id, enabled) "
         "VALUES (?, ?, ?) "

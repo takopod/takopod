@@ -15,6 +15,7 @@ from orchestrator.db import get_db
 from orchestrator.models import QueueStatusFrame
 
 if typing.TYPE_CHECKING:
+    from orchestrator.gh_approval import GhApprovalManager
     from orchestrator.mcp_manager import McpServerManager
     from orchestrator.ws_manager import WebSocketManager
 
@@ -460,6 +461,8 @@ async def _handle_tool_request(
     agent_id: str,
     request: dict,
     mcp_manager: McpServerManager | None = None,
+    ws_manager: WebSocketManager | None = None,
+    approval_manager: GhApprovalManager | None = None,
 ) -> dict:
     """Dispatch a tool execution request from the worker and return the result."""
     request_id = request.get("request_id", "")
@@ -695,6 +698,46 @@ async def _handle_tool_request(
             server_name = params.get("server_name", "")
             arguments = params.get("arguments", {})
 
+            # Permission gate for gh CLI tool
+            if server_name == "github" and tool_name == "gh":
+                from orchestrator.gh_permissions import GhPermission, classify_gh_command
+
+                command = arguments.get("command", "")
+                permission, matched = classify_gh_command(command)
+
+                if permission == GhPermission.DENIED:
+                    return {
+                        "request_id": request_id,
+                        "status": "ok",
+                        "data": {
+                            "content": [{"type": "text", "text": f"Command not allowed: '{matched}' is not in the approved command list."}],
+                            "isError": True,
+                        },
+                    }
+
+                if permission == GhPermission.NEEDS_APPROVAL:
+                    if not approval_manager or not ws_manager:
+                        return {
+                            "request_id": request_id,
+                            "status": "ok",
+                            "data": {
+                                "content": [{"type": "text", "text": f"Command requires approval but no approval channel available: gh {command}"}],
+                                "isError": True,
+                            },
+                        }
+                    approved = await approval_manager.request_approval(
+                        request_id, agent_id, command, ws_manager,
+                    )
+                    if not approved:
+                        return {
+                            "request_id": request_id,
+                            "status": "ok",
+                            "data": {
+                                "content": [{"type": "text", "text": f"User denied execution of: gh {command}"}],
+                                "isError": False,
+                            },
+                        }
+
             if not mcp_manager:
                 return {
                     "request_id": request_id,
@@ -792,10 +835,14 @@ async def _handle_request_background(
     request: dict,
     response_path: Path,
     mcp_manager: McpServerManager | None,
+    ws_manager: WebSocketManager | None = None,
+    approval_manager: GhApprovalManager | None = None,
 ) -> None:
     """Handle a tool request from the worker in the background."""
     try:
-        result = await _handle_tool_request(agent_id, request, mcp_manager)
+        result = await _handle_tool_request(
+            agent_id, request, mcp_manager, ws_manager, approval_manager,
+        )
         atomic_write(response_path, json.dumps(result).encode())
     except Exception:
         logger.exception("Background request handler failed for agent %s", agent_id)
@@ -861,6 +908,7 @@ async def _polling_loop(
     host_dir: Path,
     ws_mgr: WebSocketManager,
     mcp_manager: McpServerManager | None = None,
+    approval_manager: GhApprovalManager | None = None,
 ) -> None:
     input_path = host_dir / "input.json"
     output_path = host_dir / "output.json"
@@ -954,7 +1002,8 @@ async def _polling_loop(
                     if request:
                         pending_request = asyncio.create_task(
                             _handle_request_background(
-                                agent_id, request, response_path, mcp_manager,
+                                agent_id, request, response_path,
+                                mcp_manager, ws_mgr, approval_manager,
                             ),
                             name=f"req-{agent_id[:8]}",
                         )
@@ -973,8 +1022,9 @@ def start_polling_loop(
     host_dir: Path,
     ws_mgr: WebSocketManager,
     mcp_manager: McpServerManager | None = None,
+    approval_manager: GhApprovalManager | None = None,
 ) -> asyncio.Task:
     return asyncio.create_task(
-        _polling_loop(agent_id, host_dir, ws_mgr, mcp_manager),
+        _polling_loop(agent_id, host_dir, ws_mgr, mcp_manager, approval_manager),
         name=f"poll-{agent_id[:8]}",
     )

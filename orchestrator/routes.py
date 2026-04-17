@@ -50,6 +50,7 @@ from orchestrator.models import (
     CreateSkillRequest,
     ErrorFrame,
     ExternalToolResponse,
+    GhApprovalResponseFrame,
     ExternalToolToggle,
     FileEntry,
     McpServerResponse,
@@ -70,6 +71,7 @@ from orchestrator.models import (
     UpdateSkillRequest,
     UserMessageFrame,
 )
+from orchestrator.gh_approval import GhApprovalManager
 from orchestrator.settings import get_all_settings, get_setting, set_setting
 from orchestrator.slack_routes import router as slack_router
 from orchestrator.github_routes import router as github_router
@@ -147,6 +149,7 @@ class WorkerState:
 # Keyed by agent_id — one worker per agent
 _active_workers: dict[str, WorkerState] = {}
 _workers_lock = asyncio.Lock()
+_gh_approval_manager = GhApprovalManager()
 
 
 async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager | None:
@@ -169,9 +172,6 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
     for row in rows:
         name = row[0]
         env = json.loads(row[6])
-        # Inject runtime env vars for builtin servers
-        if name == "github":
-            env["AGENT_WORKSPACE_HOST_DIR"] = str(host_dir)
         servers[name] = {
             "command": row[2],
             "args": json.loads(row[3]),
@@ -2223,7 +2223,7 @@ async def _ensure_worker(agent_id: str, ws: WebSocket) -> None:
                 worker.ws_manager.attach(ws)
                 worker.polling_task = start_polling_loop(
                     agent_id, worker.host_dir, worker.ws_manager,
-                    worker.mcp_manager,
+                    worker.mcp_manager, _gh_approval_manager,
                 )
                 worker.monitor_task = asyncio.create_task(
                     _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
@@ -2259,7 +2259,7 @@ async def _ensure_worker(agent_id: str, ws: WebSocket) -> None:
             host_dir=host_dir,
             ws_manager=ws_mgr,
             mcp_manager=mcp_mgr,
-            polling_task=start_polling_loop(agent_id, host_dir, ws_mgr, mcp_mgr),
+            polling_task=start_polling_loop(agent_id, host_dir, ws_mgr, mcp_mgr, _gh_approval_manager),
         )
         _active_workers[agent_id] = worker
         worker.monitor_task = asyncio.create_task(
@@ -2282,6 +2282,8 @@ async def _cleanup_agent(agent_id: str) -> None:
             worker.monitor_task = None
             worker.ws_manager.detach()
             container_record_id = worker.container_record_id
+
+    _gh_approval_manager.cancel_all_for_agent(agent_id)
 
     # Cancel outside lock (monitor acquires lock)
     await _cancel_task(old_polling)
@@ -2311,6 +2313,7 @@ async def ensure_worker_headless(agent_id: str) -> None:
             if worker.polling_task is None or worker.polling_task.done():
                 worker.polling_task = start_polling_loop(
                     agent_id, worker.host_dir, worker.ws_manager,
+                    approval_manager=_gh_approval_manager,
                 )
             return
 
@@ -2332,7 +2335,7 @@ async def ensure_worker_headless(agent_id: str) -> None:
             host_dir=host_dir,
             ws_manager=ws_mgr,
             mcp_manager=mcp_mgr,
-            polling_task=start_polling_loop(agent_id, host_dir, ws_mgr, mcp_mgr),
+            polling_task=start_polling_loop(agent_id, host_dir, ws_mgr, mcp_mgr, _gh_approval_manager),
         )
         _active_workers[agent_id] = worker
         worker.monitor_task = asyncio.create_task(
@@ -2393,6 +2396,7 @@ async def _respawn_worker(agent_id: str) -> None:
             worker.mcp_manager = mcp_mgr
             worker.polling_task = start_polling_loop(
                 agent_id, host_dir, worker.ws_manager, mcp_mgr,
+                _gh_approval_manager,
             )
             worker.monitor_task = asyncio.create_task(
                 _monitor_worker(agent_id), name=f"monitor-{agent_id[:8]}",
@@ -2640,6 +2644,14 @@ async def websocket_endpoint(ws: WebSocket):
             except json.JSONDecodeError:
                 error = ErrorFrame(code="QUEUE_FULL")
                 await ws.send_text(error.model_dump_json())
+                continue
+
+            if data.get("type") == "gh_approval_response":
+                try:
+                    frame = GhApprovalResponseFrame.model_validate(data)
+                    _gh_approval_manager.resolve(frame.request_id, frame.approved)
+                except ValidationError:
+                    pass
                 continue
 
             if data.get("type") == "system_command":

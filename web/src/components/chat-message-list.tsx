@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { ChatMessage, ToolCallInfo } from "@/lib/types"
-import { ChevronDown, ChevronRight, Clock, FileIcon, ImageIcon, Terminal } from "lucide-react"
+import type { ChatMessage, ContentBlock, ToolCallInfo } from "@/lib/types"
+import { Check, ChevronDown, ChevronRight, Clock, FileIcon, ImageIcon, Shield, Terminal, X } from "lucide-react"
 
 function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   const [open, setOpen] = useState(false)
@@ -59,6 +59,65 @@ function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   )
 }
 
+function GhApprovalBlock({
+  block,
+  onRespond,
+}: {
+  block: Extract<ContentBlock, { type: "gh_approval" }>
+  onRespond?: (requestId: string, approved: boolean) => void
+}) {
+  const [clicked, setClicked] = useState(false)
+  const isPending = block.status === "pending" && !clicked
+  const isApproved = block.status === "approved"
+  const isDenied = block.status === "denied"
+
+  const handleRespond = (approved: boolean) => {
+    setClicked(true)
+    onRespond?.(block.request_id, approved)
+  }
+
+  return (
+    <div className="mt-1.5 rounded border border-amber-500/30 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs">
+      <div className="flex items-center gap-1.5 mb-1.5 font-medium text-amber-700 dark:text-amber-400">
+        <Shield className="size-3" />
+        GitHub Command Approval
+      </div>
+      <code className="block bg-background/50 px-2 py-1 rounded text-[11px] mb-2">
+        gh {block.command}
+      </code>
+      <div className="flex gap-2">
+        {isPending ? (
+          <>
+            <button
+              onClick={() => handleRespond(true)}
+              className="inline-flex items-center gap-1 rounded bg-green-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-green-700 transition-colors"
+            >
+              <Check className="size-3" />
+              Approve
+            </button>
+            <button
+              onClick={() => handleRespond(false)}
+              className="inline-flex items-center gap-1 rounded border border-red-400 px-2.5 py-1 text-[11px] font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+            >
+              <X className="size-3" />
+              Deny
+            </button>
+          </>
+        ) : clicked && !isApproved && !isDenied ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground animate-pulse">
+            Waiting for response...
+          </span>
+        ) : (
+          <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${isApproved ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+            {isApproved ? <Check className="size-3" /> : <X className="size-3" />}
+            {isApproved ? "Approved" : isDenied ? "Denied" : "Timed out"}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function isImageFile(path: string) {
   return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path)
 }
@@ -91,6 +150,7 @@ interface ChatMessageListProps {
   hasOlderMessages?: boolean
   loadingOlder?: boolean
   onLoadOlder?: () => void
+  onApprovalRespond?: (requestId: string, approved: boolean) => void
 }
 
 export function ChatMessageList({
@@ -98,6 +158,7 @@ export function ChatMessageList({
   hasOlderMessages,
   loadingOlder,
   onLoadOlder,
+  onApprovalRespond,
 }: ChatMessageListProps) {
   const endRef = useRef<HTMLDivElement>(null)
   const prevLastIdRef = useRef<string | null>(null)
@@ -158,6 +219,8 @@ export function ChatMessageList({
                     <div key={i} className="markdown-body">
                       <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{block.text}</Markdown>
                     </div>
+                  ) : block.type === "gh_approval" ? (
+                    <GhApprovalBlock key={block.request_id} block={block} onRespond={onApprovalRespond} />
                   ) : (
                     <ToolCallBlock key={block.tool.tool_call_id} tool={block.tool} />
                   ),
