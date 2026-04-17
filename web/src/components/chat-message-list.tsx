@@ -104,10 +104,11 @@ export function ChatMessageList({
 
   useEffect(() => {
     const lastId = messages.length > 0 ? messages[messages.length - 1].id : null
-    // Only auto-scroll when the last message changes (new message appended),
-    // not when older messages are prepended at the top.
     if (lastId !== prevLastIdRef.current) {
-      endRef.current?.scrollIntoView({ behavior: "smooth" })
+      const isInitialLoad = prevLastIdRef.current === null
+      endRef.current?.scrollIntoView({
+        behavior: isInitialLoad ? "instant" : "smooth",
+      })
     }
     prevLastIdRef.current = lastId
   }, [messages])
