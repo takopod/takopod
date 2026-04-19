@@ -28,6 +28,8 @@ class WebSocketManager:
         return self._ws is not None
 
     def detach(self) -> None:
+        if self._ws is not None:
+            logger.debug("WebSocket detached for agent %s", self.agent_id)
         self._ws = None
 
     async def send(self, text: str) -> None:

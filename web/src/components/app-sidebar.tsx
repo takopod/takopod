@@ -126,10 +126,13 @@ export function AppSidebar({
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
-                isActive={currentPath === "/"}
+                isActive={currentPath.startsWith("/a/")}
                 tooltip="Chat"
               >
-                <Link to="/">
+                <Link to={(() => {
+                  const sel = agents.find((a) => a.id === selectedAgentId)
+                  return sel ? `/a/${encodeURIComponent(sel.name)}` : "/"
+                })()}>
                   <MessageSquare />
                   <span>Chat</span>
                 </Link>

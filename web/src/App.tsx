@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom"
+import { Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatInput } from "@/components/chat-input"
@@ -39,24 +39,29 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 
+function agentUrl(name: string): string {
+  return `/a/${encodeURIComponent(name)}`
+}
+
 export function App() {
   const navigate = useNavigate()
   const location = useLocation()
-  const isAgentRoute = location.pathname === "/" || location.pathname.startsWith("/agents")
+  const isAgentRoute = location.pathname.startsWith("/a/") || location.pathname.startsWith("/agents")
   const [agents, setAgents] = useState<Agent[]>([])
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
-    () => localStorage.getItem("rhclaw:selectedAgentId"),
-  )
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newAgentName, setNewAgentName] = useState("")
 
+  const chatMatch = useMatch("/a/:agentName")
+  const selectedAgent = chatMatch
+    ? agents.find((a) => a.name.toLowerCase() === chatMatch.params.agentName!.toLowerCase())
+    : null
+  const selectedAgentId = selectedAgent?.id ?? null
+
   useEffect(() => {
-    if (selectedAgentId) {
-      localStorage.setItem("rhclaw:selectedAgentId", selectedAgentId)
-    } else {
-      localStorage.removeItem("rhclaw:selectedAgentId")
+    if (selectedAgent) {
+      localStorage.setItem("rhclaw:lastAgent", selectedAgent.name)
     }
-  }, [selectedAgentId])
+  }, [selectedAgent])
 
   const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages } =
     useWebSocket(selectedAgentId)
@@ -64,20 +69,26 @@ export function App() {
   const fetchAgents = useCallback(async () => {
     const res = await fetch("/api/agents")
     if (res.ok) {
-      const data: Agent[] = await res.json()
-      setAgents(data)
-      if (selectedAgentId && !data.some((a) => a.id === selectedAgentId)) {
-        // Stored agent no longer exists — clear stale selection
-        setSelectedAgentId(data.length > 0 ? data[0].id : null)
-      } else if (!selectedAgentId && data.length > 0) {
-        setSelectedAgentId(data[0].id)
-      }
+      setAgents(await res.json())
     }
-  }, [selectedAgentId])
+  }, [])
 
   useEffect(() => {
     fetchAgents()
   }, [fetchAgents])
+
+  useEffect(() => {
+    if (agents.length === 0) return
+    if (location.pathname === "/") {
+      const lastName = localStorage.getItem("rhclaw:lastAgent")
+      const target = agents.find((a) => a.name === lastName) ?? agents[0]
+      if (target) navigate(agentUrl(target.name), { replace: true })
+    } else if (chatMatch && !selectedAgent) {
+      const lastName = localStorage.getItem("rhclaw:lastAgent")
+      const target = agents.find((a) => a.name === lastName) ?? agents[0]
+      navigate(target ? agentUrl(target.name) : "/", { replace: true })
+    }
+  }, [agents, location.pathname, chatMatch, selectedAgent, navigate])
 
   const openCreateDialog = () => {
     setNewAgentName("")
@@ -95,27 +106,31 @@ export function App() {
     if (res.ok) {
       const agent: Agent = await res.json()
       setAgents((prev) => [agent, ...prev])
-      setSelectedAgentId(agent.id)
       setShowCreateDialog(false)
-      navigate("/")
+      navigate(agentUrl(agent.name))
     }
   }
 
   const handleSelectAgentFromView = (id: string) => {
-    setSelectedAgentId(id)
-    navigate("/")
+    const agent = agents.find((a) => a.id === id)
+    if (agent) navigate(agentUrl(agent.name))
   }
 
   const handleDeleteAgent = async (id: string, deleteWorkDir?: boolean) => {
     const url = deleteWorkDir ? `/api/agents/${id}?delete_work_dir=true` : `/api/agents/${id}`
     const res = await fetch(url, { method: "DELETE" })
     if (res.ok) {
-      setAgents((prev) => prev.filter((a) => a.id !== id))
+      const remaining = agents.filter((a) => a.id !== id)
+      setAgents(remaining)
       if (selectedAgentId === id) {
-        const remaining = agents.filter((a) => a.id !== id)
-        setSelectedAgentId(remaining.length > 0 ? remaining[0].id : null)
+        if (remaining.length > 0) {
+          navigate(agentUrl(remaining[0].name))
+        } else {
+          navigate("/")
+        }
+      } else {
+        navigate("/agents")
       }
-      navigate("/agents")
     }
   }
 
@@ -128,8 +143,8 @@ export function App() {
           if (value === "__create__") {
             openCreateDialog()
           } else {
-            setSelectedAgentId(value)
-            navigate("/")
+            const agent = agents.find((a) => a.id === value)
+            if (agent) navigate(agentUrl(agent.name))
           }
         }}
       />
@@ -139,9 +154,17 @@ export function App() {
             <Route
               path="/"
               element={
+                <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                  <p className="text-sm">Select an agent or create one to get started.</p>
+                </div>
+              }
+            />
+            <Route
+              path="/a/:agentName"
+              element={
                 !selectedAgentId ? (
                   <div className="flex flex-1 items-center justify-center text-muted-foreground">
-                    <p className="text-sm">Select an agent or create one to get started.</p>
+                    <p className="text-sm">Loading...</p>
                   </div>
                 ) : (
                   <>
@@ -149,8 +172,8 @@ export function App() {
                       <SidebarTrigger className="-ml-1" />
                       <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
                       <span className="text-sm font-medium truncate flex items-center gap-1.5">
-                        <AgentIcon name={agents.find((a) => a.id === selectedAgentId)?.icon ?? ""} className="size-4" />
-                        {agents.find((a) => a.id === selectedAgentId)?.name}
+                        <AgentIcon name={selectedAgent?.icon ?? ""} className="size-4" />
+                        {selectedAgent?.name}
                       </span>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -159,11 +182,11 @@ export function App() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="start">
-                          <DropdownMenuCheckboxItem checked={true} onClick={() => navigate("/")}>
+                          <DropdownMenuCheckboxItem checked={true} onClick={() => navigate(agentUrl(selectedAgent!.name))}>
                             <MessageSquare className="mr-2 size-3.5" />
                             Chat
                           </DropdownMenuCheckboxItem>
-                          <DropdownMenuCheckboxItem checked={false} onClick={() => navigate(`/agents/${agents.find((a) => a.id === selectedAgentId)?.name ?? selectedAgentId}`)} className="whitespace-nowrap">
+                          <DropdownMenuCheckboxItem checked={false} onClick={() => navigate(`/agents/${selectedAgent!.name}`)} className="whitespace-nowrap">
                             <Settings className="mr-2 size-3.5" />
                             Agent Settings
                           </DropdownMenuCheckboxItem>
@@ -197,7 +220,7 @@ export function App() {
                       messages.some((m) => m.status === "streaming") && (
                       <div className="flex items-center gap-2 border-t px-4 py-1.5 text-xs text-muted-foreground">
                         <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-                        {agents.find((a) => a.id === selectedAgentId)?.name ?? "Agent"} is typing...
+                        {selectedAgent?.name ?? "Agent"} is typing...
                       </div>
                     )}
                     <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} />

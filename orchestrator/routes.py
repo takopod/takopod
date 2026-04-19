@@ -2133,26 +2133,20 @@ async def _ensure_worker(agent_id: str, ws: WebSocket) -> None:
 
 
 async def _cleanup_agent(agent_id: str) -> None:
-    """Detach WebSocket resources on disconnect. Container keeps running."""
-    old_polling = None
-    old_monitor = None
+    """Detach WebSocket resources on disconnect. Container keeps running.
+
+    Keeps the polling loop and monitor task alive so in-flight worker
+    responses are still read from output.json and stored in the DB.
+    """
     container_record_id = None
 
     async with _workers_lock:
         worker = _active_workers.get(agent_id)
         if worker:
-            old_polling = worker.polling_task
-            old_monitor = worker.monitor_task
-            worker.polling_task = None
-            worker.monitor_task = None
             worker.ws_manager.detach()
             container_record_id = worker.container_record_id
 
     _gh_approval_manager.cancel_all_for_agent(agent_id)
-
-    # Cancel outside lock (monitor acquires lock)
-    await _cancel_task(old_polling)
-    await _cancel_task(old_monitor)
 
     if container_record_id:
         # Mark container as idle — reaper will kill after timeout
