@@ -2494,6 +2494,38 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.close()
             return
 
+    # Push current state immediately so the client is in sync on every
+    # connect/reconnect — no separate HTTP fetch needed.
+    async with _workers_lock:
+        worker = _active_workers.get(agent_id)
+        if worker:
+            worker.ws_manager.attach(ws)
+
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, role, content, created_at, metadata, status "
+        "FROM messages "
+        "WHERE agent_id = ? AND visibility = 'visible' "
+        "ORDER BY created_at DESC LIMIT 100",
+        (agent_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    sync_frame = {
+        "type": "messages_sync",
+        "messages": [
+            {
+                "id": r[0], "role": r[1], "content": r[2],
+                "created_at": r[3], "metadata": r[4], "status": r[5],
+            }
+            for r in reversed(rows)
+        ],
+    }
+    await ws.send_text(json.dumps(sync_frame))
+
+    counts = await get_queue_counts(agent_id)
+    await ws.send_text(QueueStatusFrame(**counts).model_dump_json())
+
     try:
         while True:
             raw = await ws.receive_text()

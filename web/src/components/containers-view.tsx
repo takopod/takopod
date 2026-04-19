@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
-import { ArrowLeft, FileText, RefreshCw, Trash2, X } from "lucide-react"
+import { ArrowLeft, FileText, RefreshCw, Trash2 } from "lucide-react"
 
 interface Container {
   id: string
@@ -31,10 +31,7 @@ const ACTIVE_STATUSES = new Set(["running", "starting", "idle"])
 export function ContainersView() {
   const [containers, setContainers] = useState<Container[]>([])
   const [loading, setLoading] = useState(false)
-  const [logsContainerId, setLogsContainerId] = useState<string | null>(null)
-  const [logsContent, setLogsContent] = useState("")
-  const [logsLoading, setLogsLoading] = useState(false)
-  const [logsName, setLogsName] = useState("")
+  const navigate = useNavigate()
 
   const fetchContainers = useCallback(async () => {
     setLoading(true)
@@ -53,69 +50,17 @@ export function ContainersView() {
     if (!confirm("Kill this container?")) return
     const res = await fetch(`/api/containers/${id}`, { method: "DELETE" })
     if (res.ok) {
-      if (logsContainerId === id) setLogsContainerId(null)
       fetchContainers()
     }
   }
 
-  const handleViewLogs = async (c: Container) => {
-    setLogsContainerId(c.id)
-    setLogsName(c.agent_name ?? c.agent_id.slice(0, 8))
-    setLogsLoading(true)
-    const res = await fetch(`/api/containers/${c.id}/logs?tail=200`)
-    if (res.ok) {
-      setLogsContent(await res.text())
-    } else {
-      setLogsContent("Failed to fetch logs.")
-    }
-    setLogsLoading(false)
-  }
-
-  const handleRefreshLogs = async () => {
-    if (!logsContainerId) return
-    setLogsLoading(true)
-    const res = await fetch(`/api/containers/${logsContainerId}/logs?tail=200`)
-    if (res.ok) {
-      setLogsContent(await res.text())
-    }
-    setLogsLoading(false)
+  const handleViewLogs = (c: Container) => {
+    const name = `rhclaw-${c.agent_id.slice(0, 8)}`
+    navigate(`/settings/containers/${name}/logs`)
   }
 
   const active = containers.filter((c) => ACTIVE_STATUSES.has(c.status))
   const stopped = containers.filter((c) => !ACTIVE_STATUSES.has(c.status))
-
-  if (logsContainerId) {
-    return (
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b px-4 py-2">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setLogsContainerId(null)}
-            >
-              <X className="size-4" />
-            </Button>
-            <span className="text-sm font-medium">Logs: {logsName}</span>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefreshLogs}
-            disabled={logsLoading}
-          >
-            <RefreshCw className={`mr-1.5 size-3.5 ${logsLoading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
-        <div className="flex-1 overflow-auto bg-muted/30">
-          <pre className="whitespace-pre-wrap break-all p-4 font-mono text-xs leading-relaxed text-muted-foreground select-text">
-            {logsLoading ? "Loading..." : logsContent || "No logs available."}
-          </pre>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">

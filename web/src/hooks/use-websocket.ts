@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type {
   ChatMessage,
   ErrorFrame,
+  MessagesSyncFrame,
   QueueStatusFrame,
   ServerFrame,
   SystemErrorFrame,
@@ -126,6 +127,9 @@ export function useWebSocket(agentId: string | null) {
       } else if (frame.type === "error") {
         setError(frame)
         clearError()
+      } else if (frame.type === "messages_sync") {
+        const synced = (frame as MessagesSyncFrame).messages.map(parseMessage)
+        setMessages(synced)
       } else if (frame.type === "message_updated") {
         if (frame.message) {
           const parsed = parseMessage(frame.message)
@@ -196,16 +200,8 @@ export function useWebSocket(agentId: string | null) {
       wsRef.current = null
     }
 
-    // Load message history from the API
     setMessages([])
     setQueueStatus({ type: "queue_status", queued: 0, in_flight: 0 })
-
-    fetch(`/api/agents/${agentId}/messages`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((history: ApiMessage[]) => {
-        setMessages(history.map(parseMessage))
-      })
-      .catch(() => {})
 
     reconnectAttempt.current = 0
     connect()

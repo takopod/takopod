@@ -51,6 +51,18 @@ export interface GhApprovalRequestFrame {
   timestamp: string
 }
 
+export interface MessagesSyncFrame {
+  type: "messages_sync"
+  messages: {
+    id: string
+    role: string
+    content: string
+    created_at: string
+    metadata?: string
+    status?: string
+  }[]
+}
+
 export type ServerFrame =
   | QueueStatusFrame
   | ErrorFrame
@@ -58,6 +70,7 @@ export type ServerFrame =
   | StatusFrame
   | SystemErrorFrame
   | GhApprovalRequestFrame
+  | MessagesSyncFrame
 
 export interface ToolCallInfo {
   tool_name: string
