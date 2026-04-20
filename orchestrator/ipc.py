@@ -238,7 +238,7 @@ async def _db_append_token(row_id: str, content: str) -> None:
             (current_content + content, json.dumps(meta), row_id),
         )
         await db.commit()
-    except (SqliteError, json.JSONDecodeError):
+    except (SqliteError, KeyError, TypeError):
         logger.exception("Failed to append token to %s", row_id)
 
 
@@ -257,7 +257,7 @@ async def _db_append_block(row_id: str, block: dict) -> None:
             (json.dumps(meta), row_id),
         )
         await db.commit()
-    except (SqliteError, json.JSONDecodeError):
+    except (SqliteError, KeyError, TypeError):
         logger.exception("Failed to append block to %s", row_id)
 
 
@@ -284,7 +284,7 @@ async def _db_update_tool_result(
             (json.dumps(meta), row_id),
         )
         await db.commit()
-    except (SqliteError, json.JSONDecodeError):
+    except (SqliteError, KeyError, TypeError):
         logger.exception("Failed to update tool result in %s", row_id)
 
 
@@ -307,7 +307,7 @@ async def _db_complete(
             (content, json.dumps(meta), row_id),
         )
         await db.commit()
-    except (SqliteError, json.JSONDecodeError):
+    except (SqliteError, KeyError, TypeError):
         logger.exception("Failed to complete message %s", row_id)
 
 
