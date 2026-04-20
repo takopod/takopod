@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from sqlite3 import IntegrityError
+from sqlite3 import Error as SqliteError, IntegrityError
 import typing
 import uuid
 from datetime import datetime, timezone
@@ -214,7 +214,7 @@ async def _db_ensure_row(
             (row_id, agent_id, metadata),
         )
         await db.commit()
-    except Exception:
+    except SqliteError:
         logger.exception("Failed to insert message %s", row_id)
 
 
@@ -238,7 +238,7 @@ async def _db_append_token(row_id: str, content: str) -> None:
             (current_content + content, json.dumps(meta), row_id),
         )
         await db.commit()
-    except Exception:
+    except (SqliteError, json.JSONDecodeError):
         logger.exception("Failed to append token to %s", row_id)
 
 
@@ -257,7 +257,7 @@ async def _db_append_block(row_id: str, block: dict) -> None:
             (json.dumps(meta), row_id),
         )
         await db.commit()
-    except Exception:
+    except (SqliteError, json.JSONDecodeError):
         logger.exception("Failed to append block to %s", row_id)
 
 
@@ -284,7 +284,7 @@ async def _db_update_tool_result(
             (json.dumps(meta), row_id),
         )
         await db.commit()
-    except Exception:
+    except (SqliteError, json.JSONDecodeError):
         logger.exception("Failed to update tool result in %s", row_id)
 
 
@@ -307,7 +307,7 @@ async def _db_complete(
             (content, json.dumps(meta), row_id),
         )
         await db.commit()
-    except Exception:
+    except (SqliteError, json.JSONDecodeError):
         logger.exception("Failed to complete message %s", row_id)
 
 
@@ -358,7 +358,7 @@ async def _process_event(
                 (content, row_id),
             )
             await db.commit()
-        except Exception:
+        except SqliteError:
             logger.exception("Failed to update assistant_message %s", row_id)
 
     elif event_type == "tool_call":
@@ -394,7 +394,7 @@ async def _process_event(
                     (now, event.get("content", ""), task_id),
                 )
                 await db.commit()
-            except Exception:
+            except SqliteError:
                 logger.exception("Failed to update agentic task %s last_result", task_id)
 
         # Post response back to Slack thread
@@ -411,7 +411,7 @@ async def _process_event(
                         name_row = await cur.fetchone()
                     if name_row:
                         agent_name = name_row[0].lower()
-                except Exception:
+                except SqliteError:
                     logger.exception("Failed to look up agent name for Slack reply")
 
                 reply_ts: str | None = None
@@ -435,7 +435,7 @@ async def _process_event(
                         (thread_id, ch, ts, agent_id, reply_ts or ts),
                     )
                     await db.commit()
-                except Exception:
+                except SqliteError:
                     logger.exception("Failed to auto-register slack thread")
 
     elif event_type == "status" and event.get("status") == "done":
@@ -853,7 +853,7 @@ async def _handle_request_background(
         }
         try:
             atomic_write(response_path, json.dumps(error_result).encode())
-        except Exception:
+        except OSError:
             logger.exception("Failed to write error response for agent %s", agent_id)
 
 
@@ -925,7 +925,7 @@ async def _process_output(
                     "metadata": msg_row[4],
                     "status": msg_row[5],
                 }
-        except Exception:
+        except SqliteError:
             logger.exception("Failed to read message %s for WS frame", row_id)
 
         payload: dict[str, typing.Any] = {

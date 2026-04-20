@@ -897,11 +897,13 @@ async def upload_skill_files(
     for f in files:
         if not f.filename:
             continue
-        # Prevent path traversal
+        # Prevent path traversal (absolute paths, .., and symlink tricks)
         rel = Path(f.filename)
-        if ".." in rel.parts:
+        if rel.is_absolute() or ".." in rel.parts:
             raise HTTPException(status_code=400, detail=f"Invalid filename: {f.filename}")
         dest = skill_dir / rel
+        if not dest.resolve().is_relative_to(skill_dir.resolve()):
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {f.filename}")
         dest.parent.mkdir(parents=True, exist_ok=True)
         data = await f.read()
         dest.write_bytes(data)
