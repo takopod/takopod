@@ -20,3 +20,4 @@ data/
 mynotes/
 myagents/
 .DS_Store
+.env
