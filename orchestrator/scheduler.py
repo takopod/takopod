@@ -14,6 +14,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from orchestrator.container_manager import kill_container, spawn_scheduled_container
@@ -25,6 +26,7 @@ from orchestrator.ws_manager import WS_CLOSE_IDLE_TIMEOUT
 logger = logging.getLogger(__name__)
 
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))
+INFLIGHT_HARD_TIMEOUT = int(os.environ.get("INFLIGHT_HARD_TIMEOUT", "600"))
 SCHEDULER_TICK = 10  # seconds between scheduler iterations
 IDLE_REAPER_TICKS = 3  # run idle reaper every N ticks (30s at TICK=10)
 AGENTIC_TASK_TICKS = 3  # poll agentic tasks every N ticks (30s at TICK=10)
@@ -548,6 +550,41 @@ async def _reap_idle_workers() -> None:
 
     for record_id, agent_id in rows:
         container_name = f"rhclaw-{agent_id[:8]}"
+
+        # Skip containers that still have messages being processed,
+        # unless they've been in-flight longer than the hard timeout.
+        async with db.execute(
+            "SELECT COUNT(*), MIN(flushed_at) FROM message_queue "
+            "WHERE agent_id = ? AND status = 'IN-FLIGHT'",
+            (agent_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row and row[0] > 0:
+            oldest_flushed = row[1]
+            if not oldest_flushed:
+                logger.warning(
+                    "In-flight message for %s has no flushed_at, "
+                    "allowing reap",
+                    container_name,
+                )
+            else:
+                flushed_dt = datetime.fromisoformat(
+                    oldest_flushed.replace("Z", "+00:00")
+                )
+                age = (datetime.now(timezone.utc) - flushed_dt).total_seconds()
+                if age < INFLIGHT_HARD_TIMEOUT:
+                    logger.debug(
+                        "Skipping reap of %s: %d in-flight message(s), "
+                        "oldest flushed %ds ago",
+                        container_name, row[0], int(age),
+                    )
+                    continue
+                logger.warning(
+                    "In-flight message for %s exceeded hard timeout "
+                    "(%ds > %ds), proceeding with reap",
+                    container_name, int(age), INFLIGHT_HARD_TIMEOUT,
+                )
+
         reason = "Session ended due to inactivity"
         old_polling = None
         old_monitor = None

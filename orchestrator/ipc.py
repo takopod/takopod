@@ -896,6 +896,17 @@ async def _process_output(
             )
 
     db = await get_db()
+
+    # Update last_activity so the idle reaper knows the worker is alive.
+    # Without this, long-running agent work (many tool calls) looks
+    # "inactive" and the reaper kills the container prematurely.
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    await db.execute(
+        "UPDATE agent_containers SET last_activity = ? "
+        "WHERE agent_id = ? AND status IN ('running', 'idle')",
+        (now, agent_id),
+    )
+    await db.commit()
     for row_id in notified:
         msg_data = None
         try:

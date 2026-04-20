@@ -436,11 +436,11 @@ async def run_query(
                     "seq": seq,
                 })
                 last_emitted_text = current_text
-            sys.stderr.write(
-                f"agent: AssistantMessage seq={seq}\n"
-                f"{full_text_parts[-1] if full_text_parts else ''}\n"
-            )
-            sys.stderr.flush()
+                sys.stderr.write(
+                    f"agent: AssistantMessage seq={seq}\n"
+                    f"{current_text[:200]}\n"
+                )
+                sys.stderr.flush()
 
         elif isinstance(msg, ResultMessage):
             sys.stderr.write("agent: ResultMessage (query complete)\n")
