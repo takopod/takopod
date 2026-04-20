@@ -1512,10 +1512,9 @@ async def get_container_logs(container_id: str, tail: int = 100):
         raise HTTPException(status_code=404, detail="Container not found")
 
     agent_id = row[0]
-    container_name = f"rhclaw-{agent_id[:8]}"
 
     from fastapi.responses import PlainTextResponse
-    logs = await _read_container_log(agent_id, container_name, tail)
+    logs = await _read_container_log(agent_id, tail)
     return PlainTextResponse(logs)
 
 
@@ -1535,12 +1534,12 @@ async def get_container_logs_by_name(container_name: str, tail: int = 100):
         return PlainTextResponse(f"No agent found for container {container_name}")
 
     from fastapi.responses import PlainTextResponse
-    logs = await _read_container_log(row[0], container_name, tail)
+    logs = await _read_container_log(row[0], tail)
     return PlainTextResponse(logs)
 
 
 async def _read_container_log(
-    agent_id: str, container_name: str, tail: int,
+    agent_id: str, tail: int,
 ) -> str:
     """Read the last *tail* lines from a worker log file."""
     db = await get_db()
@@ -1551,9 +1550,11 @@ async def _read_container_log(
     if not row:
         return f"Agent {agent_id} not found"
 
-    log_path = Path(row[0]) / "logs" / f"{container_name}.log"
-    if not log_path.exists():
-        return f"No log file found at {log_path}"
+    logs_dir = Path(row[0]) / "logs"
+    log_files = sorted(logs_dir.glob("worker-*.log"))
+    if not log_files:
+        return f"No log files found in {logs_dir}"
+    log_path = log_files[-1]
 
     try:
         with open(log_path) as f:
@@ -2310,9 +2311,8 @@ async def _monitor_worker(agent_id: str) -> None:
         worker.polling_task = None
 
     # Read crash logs from the worker log file (persists after container removal)
-    container_name = f"rhclaw-{agent_id[:8]}"
     try:
-        crash_logs = await _read_container_log(agent_id, container_name, 50)
+        crash_logs = await _read_container_log(agent_id, 50)
         if crash_logs and not crash_logs.startswith("No log file"):
             logger.error(
                 "Container logs for crashed agent %s:\n%s",

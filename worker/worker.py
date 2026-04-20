@@ -428,11 +428,16 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 async def main() -> None:
     global _conn, _continuation_summary
 
-    # Redirect stderr to a log file in /workspace/logs/{container_name}.log
-    container_name = os.environ.get("CONTAINER_NAME", "worker")
     logs_dir = WORKSPACE / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(logs_dir / f"{container_name}.log", "w")
+
+    # Prune old log files, keep last 9 (+ the new one = 10)
+    old_logs = sorted(logs_dir.glob("worker-*.log"))
+    for stale in old_logs[:-9]:
+        stale.unlink(missing_ok=True)
+
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    log_file = open(logs_dir / f"worker-{timestamp}.log", "w")
     sys.stderr = log_file
 
     sys.stderr.write("worker: starting, connecting to database\n")
