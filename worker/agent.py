@@ -6,6 +6,7 @@ persisted via the worker's emit() callback for the orchestrator to consume.
 
 import asyncio
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +32,7 @@ from claude_agent_sdk import (
 from worker.tools import (
     TOOL_NAMES as BUILTIN_TOOL_NAMES,
     create_mcp_proxy_servers,
+    create_memory_server,
     create_schedule_server,
     create_slack_thread_server,
 )
@@ -290,6 +292,7 @@ async def run_query(
     content: str,
     session_id: str | None,
     emit: Emit,
+    conn: sqlite3.Connection | None = None,
     retrieved_context: str | None = None,
     memory_context: str | None = None,
     continuation_summary: str | None = None,
@@ -355,10 +358,16 @@ async def run_query(
     mcp_proxy_servers = create_mcp_proxy_servers()
     builtin_tools, permission_mode = _load_tool_config()
 
+    memory_server = None
+    if conn is not None:
+        memory_server = create_memory_server(conn)
+
     mcp_servers: dict[str, Any] = {
         "schedule": schedule_server,
         "slack_thread": slack_thread_server,
     }
+    if memory_server is not None:
+        mcp_servers["memory"] = memory_server
     mcp_proxy_tool_names: list[str] = []
     for server_name, proxy_server, proxy_tool_names in mcp_proxy_servers:
         mcp_servers[server_name] = proxy_server

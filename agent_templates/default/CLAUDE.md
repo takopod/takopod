@@ -24,6 +24,17 @@ Created: <timestamp>
 - [x] Completed step
 ```
 
+## Memory
+
+You have memory tools to store, search, and manage persistent facts across sessions. Always prefer these tools over writing to files for storing facts and preferences.
+
+- When the user says "remember X" or shares a preference, decision, or key fact, use `memory_store` with a descriptive key, the value, and an appropriate category (preference, project, decision, entity, config, general).
+- When you need to recall something from a previous session that is not in your current context, use `memory_search` with a targeted query.
+- When the user says a previously stored fact is no longer true, or asks you to forget something, use `memory_delete` to remove it.
+- When the user corrects a fact (e.g., "actually my timezone is PST, not EST"), use `memory_store` with the same key and the new value. The old value is automatically superseded.
+
+Do not store trivial or transient information. Store facts that should persist across sessions: user preferences, project decisions, entity names, configuration choices.
+
 ## Learning
 
 When you succeed at a task after multiple attempts, corrections, or discoveries:

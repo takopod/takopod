@@ -380,6 +380,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
     try:
         new_session_id, _usage, response_text = await run_query(
             message_id, content, _session_id, emit,
+            conn=conn,
             retrieved_context=retrieved_context,
             memory_context=memory_context,
             continuation_summary=_continuation_summary,
