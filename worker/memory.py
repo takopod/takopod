@@ -29,31 +29,21 @@ SUMMARIZE_TIMEOUT = 45  # seconds
 MAX_CONTINUATION_FILES = 3  # compact when a 4th file would be created
 
 SUMMARIZE_SYSTEM_PROMPT = (
-    "You are a session summarizer. Produce a summary of the following "
-    "conversation in two sections.\n\n"
-    "## Facts\n"
-    "Extract key facts as a JSON array. Each fact is an object with three fields:\n"
-    '- "key": snake_case identifier (e.g., "user_name", "project_framework")\n'
-    '- "value": the fact value as a string\n'
-    '- "category": one of "preference", "project", "decision", "entity", "config", "general"\n\n'
-    "Example:\n"
-    '```json\n'
-    '[{"key": "user_name", "value": "Shaon", "category": "preference"},\n'
-    ' {"key": "project_framework", "value": "FastAPI + React", "category": "project"}]\n'
-    '```\n\n'
-    "Only include facts that are explicitly stated or clearly implied. "
-    "Do not speculate. If no facts are extractable, output an empty array `[]`.\n\n"
-    "## Summary\n"
-    "A concise narrative summary focusing on:\n"
+    "You are a session summarizer. Produce a concise narrative summary of the "
+    "following conversation.\n\n"
+    "Focus on:\n"
     "- What the user asked for or wanted to accomplish\n"
     "- Decisions made and conclusions reached\n"
+    "- Key entities, preferences, and facts mentioned\n"
     "- Unresolved questions or next steps\n\n"
+    "Only include facts that are explicitly stated or clearly implied. "
+    "Do not speculate.\n\n"
     "Important: Do NOT include specific tool results, search results, or "
     "intermediate findings as facts. For example, if a search returned results "
     "from a specific channel, do not record that channel as the definitive "
     "source -- the search may have been incomplete. Summarize the user's intent "
     "and what was or wasn't resolved, not the raw data returned by tools.\n\n"
-    "Output only the two sections, no preamble."
+    "Output only the summary, no preamble, no JSON blocks."
 )
 
 def _normalize_fact_key(key: str) -> str:
@@ -77,6 +67,42 @@ _JSON_ARRAY_PATTERN = re.compile(
 _VALID_CATEGORIES = frozenset({
     "preference", "project", "decision", "entity", "config", "general",
 })
+
+# ---------------------------------------------------------------------------
+# Facts block stripping — safety net for memory file writes
+# ---------------------------------------------------------------------------
+
+_FACTS_BLOCK_PATTERN = re.compile(
+    r"## Facts\s*\n+"          # header
+    r"```(?:json)?\s*\n"      # opening fence
+    r".*?"                     # JSON content
+    r"\n\s*```"                # closing fence
+    r"\s*\n*",                 # trailing whitespace
+    re.DOTALL,
+)
+
+_FACTS_BARE_PATTERN = re.compile(
+    r"## Facts\s*\n+"          # header
+    r".*?"                     # non-fenced content
+    r"(?=\n## |\Z)",           # up to next ## header or end of string
+    re.DOTALL,
+)
+
+
+def _strip_facts_block(text: str) -> str:
+    """Remove ## Facts + fenced JSON block from summary text.
+
+    Tries the fenced code block pattern first (matches existing memory file
+    format). Falls back to a bare header pattern that strips everything from
+    ``## Facts`` to the next ``##`` header or end of string.
+    """
+    result = _FACTS_BLOCK_PATTERN.sub("", text)
+    if result == text:
+        # Fenced pattern did not match — try bare header fallback
+        result = _FACTS_BARE_PATTERN.sub("", text)
+    if result != text:
+        return result.strip()
+    return text
 
 
 def parse_facts_json(text: str) -> list[dict]:
@@ -368,18 +394,10 @@ def strip_retrieved_context(text: str) -> str:
 
 COMPACT_SYSTEM_PROMPT = (
     "You are a memory compactor. The following contains multiple session summaries "
-    "from the same day. Distill them into a single coherent document with two sections.\n\n"
-    "## Facts\n"
-    "Merge all facts from the sessions into a single JSON array. Deduplicate by key "
-    "(keep the value from the latest session if keys conflict). Each fact is an object:\n"
-    '- "key": snake_case identifier\n'
-    '- "value": the fact value as a string\n'
-    '- "category": one of "preference", "project", "decision", "entity", "config", "general"\n\n'
-    "If there are no facts in any session, output an empty array `[]`.\n\n"
-    "## Summary\n"
-    "A single narrative summary preserving key decisions, topics discussed, "
-    "and unresolved questions. Remove redundancy.\n\n"
-    "Output only the two sections, no preamble."
+    "from the same day. Distill them into a single coherent narrative summary.\n\n"
+    "Preserve key decisions, topics discussed, entities mentioned, and "
+    "unresolved questions. Remove redundancy.\n\n"
+    "Output only the summary, no preamble, no JSON blocks."
 )
 
 
@@ -512,10 +530,30 @@ async def compact_memory_files(
     if not distilled:
         return None
 
-    # Write the single compacted file
+    # 1. Extract facts from the RAW distilled output (before stripping).
+    #    Note: store_facts() calls conn.commit() internally, so facts are
+    #    committed before the file write below. This is acceptable -- facts
+    #    are content-correct regardless of file write success.
+    try:
+        parsed_facts = parse_facts_json(distilled)
+        if parsed_facts:
+            store_facts(conn, parsed_facts, source=f"compaction:{date}")
+    except Exception as e:
+        sys.stderr.write(f"memory: fact storage after compaction failed: {e}\n")
+        sys.stderr.flush()
+
+    # 2. Strip facts block from distilled output before writing to disk
+    clean_distilled = _strip_facts_block(distilled)
+    if len(clean_distilled) < len(distilled):
+        sys.stderr.write(
+            f"memory: stripped {len(distilled) - len(clean_distilled)} chars of facts JSON\n"
+        )
+        sys.stderr.flush()
+
+    # 3. Write clean content to disk
     canonical_path = f"memory/{date}.md"
     abs_canonical = WORKSPACE / canonical_path
-    abs_canonical.write_text(f"## Compacted Memory — {date}\n\n{distilled}\n")
+    abs_canonical.write_text(f"## Compacted Memory — {date}\n\n{clean_distilled}\n")
 
     # Delete continuation files and their search indexes
     from worker.search import delete_memory_index, index_memory_file, index_memory_vectors
@@ -537,23 +575,14 @@ async def compact_memory_files(
     )
     conn.commit()
 
-    # Index the compacted file
+    # 4. Index the clean content (no facts JSON in FTS/vec)
     compacted_content = abs_canonical.read_text()
     index_memory_file(conn, canonical_path, compacted_content)
     await index_memory_vectors(conn, canonical_path, compacted_content)
 
-    # Extract and store facts from the compacted output into the DB
-    try:
-        parsed_facts = parse_facts_json(distilled)
-        if parsed_facts:
-            store_facts(conn, parsed_facts, source=f"compaction:{date}")
-    except Exception as e:
-        sys.stderr.write(f"memory: fact storage after compaction failed: {e}\n")
-        sys.stderr.flush()
-
     sys.stderr.write(
         f"memory: compacted {len(paths)} files into {canonical_path} "
-        f"({len(distilled)} chars)\n"
+        f"({len(clean_distilled)} chars)\n"
     )
     sys.stderr.flush()
     return canonical_path
@@ -597,8 +626,26 @@ def write_memory_file(
     """
     today = time.strftime("%Y-%m-%d", time.gmtime())
 
-    # Format the entry
-    entry = f"## Session: {session_filepath}\n\n{summary}\n\n---\n"
+    # 1. Extract facts from the RAW summary (before stripping)
+    try:
+        parsed_facts = parse_facts_json(summary)
+        if parsed_facts:
+            session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+            store_facts(conn, parsed_facts, source=f"session:{session_ref}")
+    except Exception as e:
+        sys.stderr.write(f"memory: fact storage after write failed: {e}\n")
+        sys.stderr.flush()
+
+    # 2. Strip facts block from summary before writing to disk
+    clean_summary = _strip_facts_block(summary)
+    if len(clean_summary) < len(summary):
+        sys.stderr.write(
+            f"memory: stripped {len(summary) - len(clean_summary)} chars of facts JSON\n"
+        )
+        sys.stderr.flush()
+
+    # Format the entry with clean (facts-free) summary
+    entry = f"## Session: {session_filepath}\n\n{clean_summary}\n\n---\n"
     needs_compaction = False
 
     try:
@@ -632,7 +679,7 @@ def write_memory_file(
 
         abs_path = WORKSPACE / rel_path
 
-        # Write or append
+        # 3. Write clean summary to disk
         if abs_path.is_file():
             with open(abs_path, "a") as f:
                 f.write("\n" + entry)
@@ -650,20 +697,10 @@ def write_memory_file(
         )
         conn.commit()
 
-        # Index into memory_fts for search retrieval
+        # 4. Index the clean content (no facts JSON in FTS/vec)
         from worker.search import index_memory_file
         file_content = abs_path.read_text()
         index_memory_file(conn, rel_path, file_content)
-
-        # Extract and store facts from the summary into the DB
-        try:
-            parsed_facts = parse_facts_json(summary)
-            if parsed_facts:
-                session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                store_facts(conn, parsed_facts, source=f"session:{session_ref}")
-        except Exception as e:
-            sys.stderr.write(f"memory: fact storage after write failed: {e}\n")
-            sys.stderr.flush()
 
         sys.stderr.write(f"memory: wrote summary to {rel_path}\n")
         sys.stderr.flush()

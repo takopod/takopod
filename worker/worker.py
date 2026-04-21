@@ -467,6 +467,14 @@ async def main() -> None:
         )
         sys.stderr.flush()
 
+    # One-time migration: import markdown-embedded facts into DB (P7)
+    try:
+        from worker.memory import migrate_markdown_facts_to_db
+        migrate_markdown_facts_to_db(conn)
+    except Exception as e:
+        sys.stderr.write(f"worker: markdown facts migration failed: {e}\n")
+        sys.stderr.flush()
+
     # Backfill memory search index if empty but memory files exist on disk
     try:
         fts_count = conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
@@ -502,14 +510,6 @@ async def main() -> None:
             sys.stderr.flush()
     except Exception as e:
         sys.stderr.write(f"worker: index pruning failed: {e}\n")
-        sys.stderr.flush()
-
-    # One-time migration: import markdown-embedded facts into DB (P7)
-    try:
-        from worker.memory import migrate_markdown_facts_to_db
-        migrate_markdown_facts_to_db(conn)
-    except Exception as e:
-        sys.stderr.write(f"worker: markdown facts migration failed: {e}\n")
         sys.stderr.flush()
 
     # Restore conversation context from previous session if available
