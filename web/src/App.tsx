@@ -59,7 +59,7 @@ export function App() {
 
   useEffect(() => {
     if (selectedAgent) {
-      localStorage.setItem("rhclaw:lastAgent", selectedAgent.name)
+      localStorage.setItem("takopod:lastAgent", selectedAgent.name)
     }
   }, [selectedAgent])
 
@@ -80,11 +80,11 @@ export function App() {
   useEffect(() => {
     if (agents.length === 0) return
     if (location.pathname === "/") {
-      const lastName = localStorage.getItem("rhclaw:lastAgent")
+      const lastName = localStorage.getItem("takopod:lastAgent")
       const target = agents.find((a) => a.name === lastName) ?? agents[0]
       if (target) navigate(agentUrl(target.name), { replace: true })
     } else if (chatMatch && !selectedAgent) {
-      const lastName = localStorage.getItem("rhclaw:lastAgent")
+      const lastName = localStorage.getItem("takopod:lastAgent")
       const target = agents.find((a) => a.name === lastName) ?? agents[0]
       navigate(target ? agentUrl(target.name) : "/", { replace: true })
     }

@@ -28,7 +28,7 @@ async def boot_recovery() -> None:
     # Step 1: Discover all managed containers (running or stopped)
     proc = await asyncio.create_subprocess_exec(
         PODMAN, "ps", "-a",
-        "--filter", "label=rhclaw.managed=true",
+        "--filter", "label=takopod.managed=true",
         "-q",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

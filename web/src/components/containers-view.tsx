@@ -55,7 +55,7 @@ export function ContainersView() {
   }
 
   const handleViewLogs = (c: Container) => {
-    const name = `rhclaw-${c.agent_id.slice(0, 8)}`
+    const name = `takopod-${c.agent_id.slice(0, 8)}`
     navigate(`/settings/containers/${name}/logs`)
   }
 

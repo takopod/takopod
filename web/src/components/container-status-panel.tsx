@@ -23,7 +23,7 @@ export function ContainerStatusPanel({
   const [killing, setKilling] = useState(false)
   const [container, setContainer] = useState<ContainerInfo | null>(null)
 
-  const containerName = `rhclaw-${agentId.slice(0, 8)}`
+  const containerName = `takopod-${agentId.slice(0, 8)}`
 
   useEffect(() => {
     let cancelled = false

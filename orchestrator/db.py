@@ -2,7 +2,7 @@ from pathlib import Path
 
 import aiosqlite
 
-DB_PATH = Path("data/rhclaw.db")
+DB_PATH = Path("data/takopod.db")
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 _db: aiosqlite.Connection | None = None

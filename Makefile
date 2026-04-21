@@ -7,7 +7,7 @@ install:
 	cd web && npm install
 
 build-worker:
-	/opt/podman/bin/podman build -t rhclaw-worker -f worker/Containerfile worker/
+	/opt/podman/bin/podman build -t takopod-worker -f worker/Containerfile worker/
 
 setup-ollama:
 	/opt/podman/bin/podman pull ollama/ollama:latest
@@ -17,7 +17,7 @@ setup-ollama:
 
 start-ollama:
 	/opt/podman/bin/podman rm -f ollama 2>/dev/null || true
-	/opt/podman/bin/podman run -d --name ollama --network rhclaw-internal --memory 4g --cpus 2 --label rhclaw.role=ollama -v ollama-models:/root/.ollama:Z ollama/ollama:latest
+	/opt/podman/bin/podman run -d --name ollama --network takopod-internal --memory 4g --cpus 2 --label takopod.role=ollama -v ollama-models:/root/.ollama:Z ollama/ollama:latest
 
 stop-ollama:
 	/opt/podman/bin/podman stop -t 10 ollama 2>/dev/null || true

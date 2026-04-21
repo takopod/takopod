@@ -1,4 +1,4 @@
-"""Slack MCP server for rhclaw.
+"""Slack MCP server for takopod.
 
 Provides tools to read Slack channels and send messages to yourself.
 Runs on the host (orchestrator) side — credentials never enter worker containers.
@@ -290,13 +290,13 @@ async def send_note_to_self(message: str) -> str:
     try:
         dm = client.conversations_open(users=[MY_MEMBER_ID])
         channel_id = dm["channel"]["id"]
-        prefixed = f"[rhclaw]: {message}"
+        prefixed = f"[takopod]: {message}"
         response = client.chat_postMessage(
             channel=channel_id,
             text=prefixed,
             unfurl_links=False,
             unfurl_media=False,
-            metadata={"event_type": "rhclaw_note", "event_payload": {}},
+            metadata={"event_type": "takopod_note", "event_payload": {}},
         )
         return f"Sent to yourself! (Timestamp: {response['ts']})"
     except SlackApiError as e:

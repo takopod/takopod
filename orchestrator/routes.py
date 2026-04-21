@@ -327,7 +327,7 @@ async def delete_agent(agent_id: str, delete_work_dir: bool = False):
         await _cancel_task(old_monitor)
         if worker.mcp_manager:
             await worker.mcp_manager.stop()
-        container_name = f"rhclaw-{agent_id[:8]}"
+        container_name = f"takopod-{agent_id[:8]}"
         await kill_container(container_name)
 
     # Delete all related data, then the agent row itself.
@@ -1520,9 +1520,9 @@ async def get_container_logs(container_id: str, tail: int = 100):
 
 @router.get("/containers/name/{container_name}/logs")
 async def get_container_logs_by_name(container_name: str, tail: int = 100):
-    # Resolve agent_id from container name (rhclaw-{agent_id[:8]} or rhclaw-task-{agent_id[:8]})
+    # Resolve agent_id from container name (takopod-{agent_id[:8]} or takopod-task-{agent_id[:8]})
     db = await get_db()
-    prefix = container_name.replace("rhclaw-task-", "").replace("rhclaw-", "")
+    prefix = container_name.replace("takopod-task-", "").replace("takopod-", "")
     async with db.execute(
         "SELECT id, host_dir FROM agents WHERE id LIKE ?",
         (f"{prefix}%",),
@@ -1578,7 +1578,7 @@ async def delete_container(container_id: str):
     record_id, agent_id, status = row
 
     if status in ("running", "idle", "starting"):
-        container_name = f"rhclaw-{agent_id[:8]}"
+        container_name = f"takopod-{agent_id[:8]}"
         await kill_container(container_name)
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -1813,7 +1813,7 @@ async def kill_agent(agent_id: str):
         raise HTTPException(status_code=404, detail="No active container for agent")
 
     record_id = row[0]
-    container_name = f"rhclaw-{agent_id[:8]}"
+    container_name = f"takopod-{agent_id[:8]}"
     graceful = False
 
     async with _workers_lock:
@@ -2247,7 +2247,7 @@ async def _respawn_worker(agent_id: str) -> None:
             # Verify worker still exists (could have been cleaned up)
             if _active_workers.get(agent_id) is not worker:
                 # Worker was replaced/removed — kill the container we just spawned
-                container_name = f"rhclaw-{agent_id[:8]}"
+                container_name = f"takopod-{agent_id[:8]}"
                 await kill_container(container_name)
                 if mcp_mgr:
                     await mcp_mgr.stop()
@@ -2448,7 +2448,7 @@ async def graceful_shutdown(timeout: int = 30) -> None:
         )
         for agent_id, worker in workers:
             if worker.process.returncode is None:
-                container_name = f"rhclaw-{agent_id[:8]}"
+                container_name = f"takopod-{agent_id[:8]}"
                 await kill_container(container_name)
 
     # Cancel tasks, stop MCP servers, and finalize DB state

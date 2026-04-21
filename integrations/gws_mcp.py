@@ -1,4 +1,4 @@
-"""Google Workspace MCP server for rhclaw.
+"""Google Workspace MCP server for takopod.
 
 Exposes a single ``gws`` tool that runs Google Workspace CLI commands on the
 host.  All commands are auto-approved — no permission tiers.

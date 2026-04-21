@@ -1,5 +1,5 @@
 [project]
-name = "rhclaw"
+name = "takopod"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-rhclaw = "orchestrator.cli:main"
+takopod = "orchestrator.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,4 +1,4 @@
-# rhclaw — Architecture
+# takopod — Architecture
 
 ## 1. System Architecture
 
@@ -72,12 +72,12 @@ This protocol is critical for data integrity and must never be bypassed for any 
 
 ### Resource Constraints
 
-- `--network rhclaw-internal` — shared Podman network for outbound internet access and Ollama DNS resolution (`ollama:11434`). Does not expose host-local services.
+- `--network takopod-internal` — shared Podman network for outbound internet access and Ollama DNS resolution (`ollama:11434`). Does not expose host-local services.
 - `--memory 2g`, `--cpus 2`, `--pids-limit 256`
 - `--tmpfs /tmp:rw,size=512m`, `--tmpfs /var/tmp:rw,size=64m`
 - `-v <host_dir>:/workspace:Z` — agent workspace bind mount
 - `-v ~/.config/gcloud:/root/.config/gcloud:ro,Z` — Vertex AI credentials (read-only)
-- Labels: `rhclaw.managed=true`, `rhclaw.agent_id=<id>` — used for boot recovery container discovery
+- Labels: `takopod.managed=true`, `takopod.agent_id=<id>` — used for boot recovery container discovery
 
 ### Security & Blast Radius Isolation
 
@@ -94,7 +94,7 @@ Worker agents can fetch arbitrary external URLs via the Claude Agent SDK's `WebS
 
 ### Embedding Service (Ollama)
 
-The Ollama container is a long-lived singleton on the `rhclaw-internal` network. Workers call `POST http://ollama:11434/api/embed` for embedding generation. It uses a named Podman volume (`ollama-models`) for persistent model storage. It has no access to any agent's workspace — it receives text and returns vectors.
+The Ollama container is a long-lived singleton on the `takopod-internal` network. Workers call `POST http://ollama:11434/api/embed` for embedding generation. It uses a named Podman volume (`ollama-models`) for persistent model storage. It has no access to any agent's workspace — it receives text and returns vectors.
 
 Ollama must be started manually (`make start-ollama`) before the orchestrator. The orchestrator checks Ollama health but does not auto-start it.
 
@@ -219,13 +219,13 @@ On session end (UI disconnect or "Clear Context"), the worker summarizes the ses
 
 On startup, before accepting connections, the orchestrator reconciles state. Order matters — containers must be killed before files are touched.
 
-1. Discover all containers with label `rhclaw.managed=true`.
+1. Discover all containers with label `takopod.managed=true`.
 2. Force-remove all discovered containers.
 3. Re-queue `IN-FLIGHT` messages as `QUEUED`.
 4. Delete stale IPC files (`input.json`, `output.json`, `request.json`, `response.json`) from all agent workspaces.
 5. Reset all active container records to `stopped`.
 6. Mark pending/running scheduled tasks as `failed`.
-7. Ensure the `rhclaw-internal` Podman network exists.
+7. Ensure the `takopod-internal` Podman network exists.
 8. Seed `always_enabled` builtin skills to all agents.
 
 Workers deduplicate by `message_id` (via `processed_messages` table) to handle at-least-once delivery after recovery.

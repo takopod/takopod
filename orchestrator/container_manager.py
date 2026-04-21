@@ -12,8 +12,8 @@ from orchestrator.db import get_db
 logger = logging.getLogger(__name__)
 
 PODMAN = "/opt/podman/bin/podman"
-NETWORK = "rhclaw-internal"
-IMAGE = "rhclaw-worker"
+NETWORK = "takopod-internal"
+IMAGE = "takopod-worker"
 AGENTS_DIR = Path("data/agents")
 SEED_DIR = Path("agent_templates/default")
 
@@ -298,7 +298,7 @@ async def spawn_container(
     )
     await db.commit()
 
-    container_name = f"rhclaw-{agent_id[:8]}"
+    container_name = f"takopod-{agent_id[:8]}"
 
     # Kill any orphaned container with the same name (e.g., left over
     # after an orchestrator restart / uvicorn --reload).
@@ -308,8 +308,8 @@ async def spawn_container(
         PODMAN, "run",
         "--name", container_name,
         "--network", NETWORK,
-        "--label", "rhclaw.managed=true",
-        "--label", f"rhclaw.agent_id={agent_id}",
+        "--label", "takopod.managed=true",
+        "--label", f"takopod.agent_id={agent_id}",
         "--memory", container_memory,
         "--cpus", container_cpus,
         "--pids-limit", "256",
@@ -378,16 +378,16 @@ async def spawn_scheduled_container(
     )
     await db.commit()
 
-    container_name = f"rhclaw-task-{agent_id[:8]}"
+    container_name = f"takopod-task-{agent_id[:8]}"
     await _run([PODMAN, "rm", "-f", container_name], check=False)
 
     cmd = [
         PODMAN, "run",
         "--name", container_name,
         "--network", NETWORK,
-        "--label", "rhclaw.managed=true",
-        "--label", f"rhclaw.agent_id={agent_id}",
-        "--label", f"rhclaw.task_id={task_id}",
+        "--label", "takopod.managed=true",
+        "--label", f"takopod.agent_id={agent_id}",
+        "--label", f"takopod.task_id={task_id}",
         "--memory", container_memory,
         "--cpus", container_cpus,
         "--pids-limit", "256",

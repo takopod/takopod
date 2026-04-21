@@ -137,7 +137,7 @@ async def _run_scheduled_task(
     record_id = None
     process = None
     host_dir = None
-    container_name = f"rhclaw-task-{agent_id[:8]}"
+    container_name = f"takopod-task-{agent_id[:8]}"
 
     try:
         record_id, process, host_dir = await spawn_scheduled_container(agent_id, task_id)
@@ -500,7 +500,7 @@ async def _check_task_timeouts() -> None:
     ]
 
     for info in timed_out:
-        container_name = f"rhclaw-task-{info.agent_id[:8]}"
+        container_name = f"takopod-task-{info.agent_id[:8]}"
         logger.warning(
             "Scheduled task %s timed out after %ds, killing container %s",
             info.task_id[:8], info.timeout_seconds, container_name,
@@ -549,7 +549,7 @@ async def _reap_idle_workers() -> None:
         rows = await cur.fetchall()
 
     for record_id, agent_id in rows:
-        container_name = f"rhclaw-{agent_id[:8]}"
+        container_name = f"takopod-{agent_id[:8]}"
 
         # Skip containers that still have messages being processed,
         # unless they've been in-flight longer than the hard timeout.

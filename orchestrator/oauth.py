@@ -128,7 +128,7 @@ class OAuthFlowManager:
             server_url=server_url,
             client_metadata=OAuthClientMetadata(
                 redirect_uris=[REDIRECT_URI],
-                client_name="rhclaw",
+                client_name="takopod",
                 grant_types=["authorization_code", "refresh_token"],
                 response_types=["code"],
             ),
@@ -222,7 +222,7 @@ def get_oauth_provider(
         server_url=server_url,
         client_metadata=OAuthClientMetadata(
             redirect_uris=[REDIRECT_URI],
-            client_name="rhclaw",
+            client_name="takopod",
             grant_types=["authorization_code", "refresh_token"],
             response_types=["code"],
         ),

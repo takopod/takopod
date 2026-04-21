@@ -1,4 +1,4 @@
-# rhclaw
+# takopod
 
 A multi-agent AI platform where each agent runs in an isolated Podman container with persistent memory, file workspace, and real-time streaming chat. Agents are powered by Claude (via Vertex AI) and can be extended with MCP servers and integrations.
 
@@ -54,7 +54,7 @@ nvm use 22
 
 Used for running agent containers and the Ollama embedding service.
 
-- **macOS**: Install [Podman Desktop](https://podman-desktop.io/) — this installs the Podman CLI to `/opt/podman/bin/podman`, which is the path rhclaw expects.
+- **macOS**: Install [Podman Desktop](https://podman-desktop.io/) — this installs the Podman CLI to `/opt/podman/bin/podman`, which is the path takopod expects.
 - **Linux**: Install via your package manager (`sudo apt install podman` / `sudo dnf install podman`). You may need to symlink or update the path — the Makefile currently hardcodes `/opt/podman/bin/podman`.
 
 After installing, initialize and start the Podman machine (macOS only):
@@ -108,7 +108,7 @@ make
 
 This runs three targets in sequence:
 - `make install` — `uv sync` (creates `.venv/` and installs Python deps) + `npm install` in `web/`
-- `make build-worker` — builds the `rhclaw-worker` Podman image from `worker/Containerfile`
+- `make build-worker` — builds the `takopod-worker` Podman image from `worker/Containerfile`
 - `make web-ui` — runs `npm run build` in `web/`
 
 3. Set up the Ollama embedding service (optional but recommended):
@@ -127,27 +127,27 @@ This pulls the Ollama container image and downloads the `nomic-embed-text` model
 make start-ollama
 ```
 
-This starts the Ollama container on the `rhclaw-internal` Podman network with 4 GB memory and 2 CPUs. The network is created automatically by the orchestrator on first start.
+This starts the Ollama container on the `takopod-internal` Podman network with 4 GB memory and 2 CPUs. The network is created automatically by the orchestrator on first start.
 
-### Start rhclaw
+### Start takopod
 
 ```bash
 source .venv/bin/activate
-rhclaw start
+takopod start
 ```
 
-The service runs on `http://localhost:8000` by default. Logs are written to `data/rhclaw.log`.
+The service runs on `http://localhost:8000` by default. Logs are written to `data/takopod.log`.
 
 Options:
 
 ```bash
-rhclaw start --host 127.0.0.1 --port 9000
+takopod start --host 127.0.0.1 --port 9000
 ```
 
 ### Check status
 
 ```bash
-rhclaw status
+takopod status
 ```
 
 Shows the running PID, schema version, and managed container count.
@@ -155,7 +155,7 @@ Shows the running PID, schema version, and managed container count.
 ### Stop
 
 ```bash
-rhclaw stop
+takopod stop
 ```
 
 To stop Ollama separately:
@@ -198,7 +198,7 @@ Once added, enable the server per-agent from the agent's MCP panel.
 uvx mcp-atlassian
 ```
 
-2. In the rhclaw UI, go to System MCP and add a server:
+2. In the takopod UI, go to System MCP and add a server:
    - **Name**: `jira`
    - **Transport**: `stdio`
    - **Command**: `uvx mcp-atlassian --jira-url https://your-org.atlassian.net --jira-username your@email.com --jira-token YOUR_API_TOKEN`

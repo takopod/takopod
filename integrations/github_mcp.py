@@ -1,4 +1,4 @@
-"""GitHub MCP server for rhclaw.
+"""GitHub MCP server for takopod.
 
 Exposes a single ``gh`` tool that runs GitHub CLI commands on the host.
 Permission enforcement (approved / needs-approval / denied) lives in the

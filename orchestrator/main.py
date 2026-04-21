@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI):
     await disconnect()
 
 
-app = FastAPI(title="rhclaw", lifespan=lifespan)
+app = FastAPI(title="takopod", lifespan=lifespan)
 app.include_router(router)
 app.include_router(oauth_router)
 

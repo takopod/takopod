@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**rhclaw** is a multi-agent AI platform where each agent runs in an isolated Podman container with persistent memory, file workspace, and real-time streaming chat. See `ARCHITECTURE.md` for how the system works.
+**takopod** is a multi-agent AI platform where each agent runs in an isolated Podman container with persistent memory, file workspace, and real-time streaming chat. See `ARCHITECTURE.md` for how the system works.
 
 ## Tech Stack
 
@@ -30,13 +30,13 @@ make dev              # Builds worker image, then runs uvicorn on localhost:8000
 
 # Ollama embedding service (must be running before orchestrator)
 make setup-ollama     # One-time: pull image + nomic-embed-text model
-make start-ollama     # Start Ollama container on rhclaw-internal network
+make start-ollama     # Start Ollama container on takopod-internal network
 make stop-ollama      # Stop + remove Ollama container
 
 # Production mode
 source .venv/bin/activate
-rhclaw start [--host 127.0.0.1] [--port 9000]
-rhclaw stop
+takopod start [--host 127.0.0.1] [--port 9000]
+takopod stop
 ```
 
 ### Frontend development
