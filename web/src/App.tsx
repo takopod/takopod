@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { AppSidebar } from "@/components/app-sidebar"
@@ -43,13 +43,23 @@ function agentUrl(name: string): string {
   return `/a/${encodeURIComponent(name)}`
 }
 
+function agentSettingsUrl(name: string): string {
+  return `/a/${encodeURIComponent(name)}/settings`
+}
+
 export function App() {
   const navigate = useNavigate()
   const location = useLocation()
-  const isAgentRoute = location.pathname.startsWith("/a/") || location.pathname.startsWith("/agents")
+  const isAgentRoute = location.pathname.startsWith("/a/")
   const [agents, setAgents] = useState<Agent[]>([])
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newAgentName, setNewAgentName] = useState("")
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => {
+    const saved = localStorage.getItem("takopod:rightPanelWidth")
+    return saved ? Number(saved) : 208
+  })
+  const resizingRef = useRef(false)
+  const startWidthRef = useRef(rightPanelWidth)
 
   const chatMatch = useMatch("/a/:agentName")
   const selectedAgent = chatMatch
@@ -90,6 +100,37 @@ export function App() {
     }
   }, [agents, location.pathname, chatMatch, selectedAgent, navigate])
 
+  const startResize = useCallback((e: React.MouseEvent) => {
+    if (resizingRef.current) return
+    e.preventDefault()
+    resizingRef.current = true
+    const startX = e.clientX
+    startWidthRef.current = rightPanelWidth
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const delta = startX - ev.clientX
+      const newWidth = Math.min(Math.max(startWidthRef.current + delta, 120), 480)
+      setRightPanelWidth(newWidth)
+    }
+
+    const onMouseUp = () => {
+      resizingRef.current = false
+      document.removeEventListener("mousemove", onMouseMove)
+      document.removeEventListener("mouseup", onMouseUp)
+      document.body.style.cursor = ""
+      document.body.style.userSelect = ""
+      setRightPanelWidth((w) => {
+        localStorage.setItem("takopod:rightPanelWidth", String(w))
+        return w
+      })
+    }
+
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("mouseup", onMouseUp)
+  }, [rightPanelWidth])
+
   const openCreateDialog = () => {
     setNewAgentName("")
     setShowCreateDialog(true)
@@ -129,13 +170,13 @@ export function App() {
           navigate("/")
         }
       } else {
-        navigate("/agents")
+        navigate("/")
       }
     }
   }
 
   return (
-    <SidebarProvider>
+    <SidebarProvider className="h-svh overflow-hidden">
       <AppSidebar
         agents={agents}
         selectedAgentId={selectedAgentId}
@@ -167,7 +208,7 @@ export function App() {
                     <p className="text-sm">Loading...</p>
                   </div>
                 ) : (
-                  <>
+                  <div className="flex flex-1 flex-col min-h-0">
                     <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
                       <SidebarTrigger className="-ml-1" />
                       <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
@@ -186,7 +227,7 @@ export function App() {
                             <MessageSquare className="mr-2 size-3.5" />
                             Chat
                           </DropdownMenuCheckboxItem>
-                          <DropdownMenuCheckboxItem checked={false} onClick={() => navigate(`/agents/${selectedAgent!.name}`)} className="whitespace-nowrap">
+                          <DropdownMenuCheckboxItem checked={false} onClick={() => navigate(agentSettingsUrl(selectedAgent!.name))} className="whitespace-nowrap">
                             <Settings className="mr-2 size-3.5" />
                             Agent Settings
                           </DropdownMenuCheckboxItem>
@@ -224,12 +265,12 @@ export function App() {
                       </div>
                     )}
                     <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} />
-                  </>
+                  </div>
                 )
               }
             />
             <Route
-              path="/agents"
+              path="/a/:agentName/settings"
               element={
                 <AgentsView
                   agents={agents}
@@ -239,7 +280,7 @@ export function App() {
               }
             />
             <Route
-              path="/agents/:agentName"
+              path="/a/:agentName/settings/skills/*"
               element={
                 <AgentsView
                   agents={agents}
@@ -249,7 +290,7 @@ export function App() {
               }
             />
             <Route
-              path="/agents/:agentName/skills/*"
+              path="/a/:agentName/settings/files/*"
               element={
                 <AgentsView
                   agents={agents}
@@ -259,7 +300,7 @@ export function App() {
               }
             />
             <Route
-              path="/agents/:agentName/files/*"
+              path="/a/:agentName/settings/:file"
               element={
                 <AgentsView
                   agents={agents}
@@ -268,22 +309,8 @@ export function App() {
                 />
               }
             />
-            <Route
-              path="/agents/:agentName/:file"
-              element={
-                <AgentsView
-                  agents={agents}
-                  onSelectAgent={handleSelectAgentFromView}
-                  onDeleteAgent={handleDeleteAgent}
-                />
-              }
-            />
-            <Route
-              path="/schedules"
-              element={<SchedulesView />}
-            />
-            <Route path="/skills" element={<SystemSkillsView />} />
-            <Route path="/mcp" element={<SystemMcpView />} />
+            <Route path="/settings" element={<SettingsView />} />
+            <Route path="/settings/slack" element={<SlackView />} />
             <Route
               path="/settings/containers"
               element={<ContainersView />}
@@ -298,20 +325,30 @@ export function App() {
                 <QueueStatusPanel status={queueStatus} connected={connected} />
               }
             />
-            <Route path="/settings" element={<SettingsView />} />
-            <Route path="/settings/slack" element={<SlackView />} />
             <Route path="/settings/search-index" element={<SearchIndexView />} />
+            <Route path="/settings/skills" element={<SystemSkillsView />} />
+            <Route path="/settings/mcp" element={<SystemMcpView />} />
+            <Route path="/settings/schedules" element={<SchedulesView />} />
           </Routes>
       </SidebarInset>
 
-      <aside className="w-52 shrink-0 border-l sticky top-0 h-svh overflow-y-auto">
-        {selectedAgentId && isAgentRoute && (
-          <>
-            <SkillsStatusPanel agentId={selectedAgentId} agentName={agents.find((a) => a.id === selectedAgentId)?.name} />
-            <McpStatusPanel agentId={selectedAgentId} />
-            <ContainerStatusPanel agentId={selectedAgentId} />
-          </>
-        )}
+      <aside
+        className="shrink-0 sticky top-0 h-svh overflow-y-auto flex"
+        style={{ width: rightPanelWidth }}
+      >
+        <div
+          className="w-1 shrink-0 cursor-col-resize border-l hover:bg-primary/20 active:bg-primary/30 transition-colors"
+          onMouseDown={startResize}
+        />
+        <div className="flex-1 min-w-0 overflow-y-auto">
+          {selectedAgentId && isAgentRoute && (
+            <>
+              <SkillsStatusPanel agentId={selectedAgentId} agentName={agents.find((a) => a.id === selectedAgentId)?.name} />
+              <McpStatusPanel agentId={selectedAgentId} />
+              <ContainerStatusPanel agentId={selectedAgentId} />
+            </>
+          )}
+        </div>
       </aside>
 
       {showCreateDialog && (

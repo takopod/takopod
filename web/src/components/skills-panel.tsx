@@ -47,7 +47,7 @@ interface SkillDraftDetail {
 
 export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: string; agentName?: string; initialPath?: string }) {
   const navigate = useNavigate()
-  const basePath = `/agents/${agentName ?? agentId}/skills`
+  const basePath = `/a/${encodeURIComponent(agentName ?? agentId)}/settings/skills`
   // Parse initialPath: "draft/deploy-to-aws" or "skill/git-workflow"
   const pathParts = initialPath?.split("/") ?? []
   const viewType = pathParts[0] === "draft" || pathParts[0] === "skill" ? pathParts[0] : null
@@ -415,7 +415,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => navigate(`/agents/${agentName ?? agentId}`)}
+          onClick={() => navigate(`/a/${encodeURIComponent(agentName ?? agentId)}/settings`)}
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -498,7 +498,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {available.length === 0
                         ? <>No skills available. Add skills in the global{" "}
-                            <Link to="/skills" className="underline">System Skills</Link>{" "}
+                            <Link to="/settings/skills" className="underline">System Skills</Link>{" "}
                             settings.</>
                         : "No matching skills."}
                     </p>

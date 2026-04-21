@@ -21,7 +21,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
   const [openFile, setOpenFile] = useState<string | null>(null)
   const [currentPath, setCurrentPath] = useState("")
 
-  const basePath = `/agents/${agentName ?? agentId}/files`
+  const basePath = `/a/${encodeURIComponent(agentName ?? agentId)}/settings/files`
 
   const IDENTITY_FILES = new Set(["CLAUDE.md", "SOUL.md", "MEMORY.md"])
   const dirty = content !== originalContent
@@ -178,7 +178,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={currentPath ? goUp : () => navigate(`/agents/${agentName ?? agentId}`)}
+          onClick={currentPath ? goUp : () => navigate(`/a/${encodeURIComponent(agentName ?? agentId)}/settings`)}
         >
           <ArrowLeft className="size-4" />
         </Button>

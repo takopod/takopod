@@ -71,7 +71,7 @@ export function SkillsStatusPanel({ agentId, agentName }: { agentId: string; age
       )}
       {draftCount > 0 && (
         <Link
-          to={`/agents/${agentName ?? agentId}/skills`}
+          to={`/a/${encodeURIComponent(agentName ?? agentId)}/settings/skills`}
           className="text-[10px] text-amber-600 hover:underline cursor-pointer"
         >
           {draftCount} {draftCount === 1 ? "draft" : "drafts"} pending review

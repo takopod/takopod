@@ -182,7 +182,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => navigate(`/agents/${agentName}`)}
+          onClick={() => navigate(`/a/${encodeURIComponent(agentName!)}/settings`)}
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -216,7 +216,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {available.length === 0
                         ? <>No servers available. Configure them in the global{" "}
-                            <Link to="/mcp" className="underline">MCP Servers</Link>{" "}
+                            <Link to="/settings/mcp" className="underline">MCP Servers</Link>{" "}
                             settings.</>
                         : "No matching servers."}
                     </p>
@@ -443,8 +443,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
   const [showDeleteModal, setShowDeleteModal] = useState(false)
 
   const location = useLocation()
-  const pathAfterAgent = agentName ? location.pathname.split(`/agents/${agentName}/`)[1] ?? "" : ""
-  // /agents/:name/files/* matched → file browser with optional deep path
+  const pathAfterAgent = agentName ? location.pathname.split(`/a/${encodeURIComponent(agentName)}/settings/`)[1] ?? "" : ""
   const showFileBrowser = file === "files" || (fileSplat !== undefined && !pathAfterAgent.startsWith("skills"))
   const showMcpConfig = file === "mcp"
   const showSkills = file === "skills" || pathAfterAgent.startsWith("skills")
@@ -563,7 +562,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => navigate(`/agents/${agentName}/${f}`)}>
+                              <DropdownMenuItem onClick={() => navigate(`/a/${encodeURIComponent(agentName!)}/settings/${f}`)}>
                                 <Pencil className="mr-2 size-3.5" />
                                 Edit
                               </DropdownMenuItem>
@@ -583,7 +582,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                 Tools & Extensions
               </h3>
               <div className="grid grid-cols-2 gap-4">
-                <Link to={`/agents/${agentName}/mcp`} className="block">
+                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/mcp`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -598,7 +597,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                   </Card>
                 </Link>
 
-                <Link to={`/agents/${agentName}/skills`} className="block">
+                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/skills`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -622,7 +621,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                 Files
               </h3>
               <div className="grid grid-cols-2 gap-4">
-                <Link to={`/agents/${agentName}/files?dir=memory`} className="block">
+                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/files/memory`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -637,7 +636,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
                   </Card>
                 </Link>
 
-                <Link to={`/agents/${agentName}/files`} className="block">
+                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/files`} className="block">
                   <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -742,7 +741,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => navigate(`/agents/${agentName}`)}
+              onClick={() => navigate(`/a/${encodeURIComponent(agentName!)}/settings`)}
             >
               <ArrowLeft className="size-4" />
             </Button>
