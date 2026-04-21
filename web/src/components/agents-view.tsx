@@ -296,19 +296,18 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                         <span className="text-xs text-amber-500">{srv.note}</span>
                       )}
                     </div>
-                    {srv.builtin ? (
+                    {srv.builtin && (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                         BUILTIN
                       </span>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => handleRemove(srv.id)}
-                      >
-                        <X className="size-3.5" />
-                      </Button>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleRemove(srv.id)}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
                   </div>
                 ))}
               </div>

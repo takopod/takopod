@@ -405,6 +405,7 @@ async def _process_event(
                 # Look up agent name for the [bot:name] prefix
                 agent_name = ""
                 try:
+                    db = await get_db()
                     async with db.execute(
                         "SELECT name FROM agents WHERE id = ?", (agent_id,),
                     ) as cur:
