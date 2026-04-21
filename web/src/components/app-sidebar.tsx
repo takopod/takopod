@@ -61,12 +61,11 @@ export function AppSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <div className="cursor-default">
-                <div className="flex flex-1 items-center overflow-hidden">
-                  <img
-                    src={theme === "dark" ? "/logo-full-dark.png" : "/logo-full-light.png"}
-                    alt="takopod"
-                    className="h-8 object-contain object-left"
-                  />
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg overflow-hidden">
+                  <img src="/logo.png" alt="takopod" className="size-8 object-cover" />
+                </div>
+                <div className="flex flex-1 items-center">
+                  <img src="/logo-text.png" alt="takopod" className="h-3.5 dark:invert" />
                 </div>
                 <Button
                   variant="ghost"
