@@ -17,6 +17,7 @@ import { ContainerStatusPanel } from "@/components/container-status-panel"
 import { McpStatusPanel } from "@/components/mcp-status-panel"
 import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
+import { FileBrowserPanel } from "@/components/file-browser-panel"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket"
@@ -346,6 +347,8 @@ export function App() {
               <SkillsStatusPanel agentId={selectedAgentId} agentName={agents.find((a) => a.id === selectedAgentId)?.name} />
               <McpStatusPanel agentId={selectedAgentId} />
               <ContainerStatusPanel agentId={selectedAgentId} />
+              <div className="border-t" />
+              <FileBrowserPanel agentId={selectedAgentId} agentName={selectedAgent?.name ?? ""} />
             </>
           )}
         </div>
