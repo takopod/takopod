@@ -6,7 +6,7 @@ interface SkillSummary {
   name: string
   description: string
   builtin: boolean
-  enabled: boolean
+  always_enabled: boolean
 }
 
 export function SkillsStatusPanel({ agentId, agentName }: { agentId: string; agentName?: string }) {
@@ -57,11 +57,7 @@ export function SkillsStatusPanel({ agentId, agentName }: { agentId: string; age
         skills.map((skill) => (
           <div key={skill.id} className="flex items-center gap-2 py-0.5">
             <span
-              className={`inline-block size-1.5 shrink-0 rounded-full ${
-                skill.enabled
-                  ? "bg-green-500"
-                  : "bg-muted-foreground/40"
-              }`}
+              className="inline-block size-1.5 shrink-0 rounded-full bg-green-500"
             />
             <span className="text-xs text-muted-foreground truncate">
               {skill.name}
