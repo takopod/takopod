@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { FileEditor } from "@/components/file-editor"
-import { ArrowLeft, Pencil, Plus, Search, Square, X } from "lucide-react"
+import { ArrowLeft, Pencil, Plus, Search, Square, Trash2, X } from "lucide-react"
 
 interface RegistrySkill {
   id: string
@@ -373,17 +373,38 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                 </Button>
               </>
             ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setDraftEditContent(selected.content)
-                  setDraftEditing(true)
-                }}
-              >
-                <Pencil className="mr-1.5 size-3" />
-                Edit
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDraftEditContent(selected.content)
+                    setDraftEditing(true)
+                  }}
+                >
+                  <Pencil className="mr-1.5 size-3" />
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive ml-auto"
+                  onClick={async () => {
+                    if (!confirm(`Delete custom skill "${selected.name}"?`)) return
+                    const res = await fetch(`/api/agents/${agentId}/skills/${selected.id}`, {
+                      method: "DELETE",
+                    })
+                    if (res.ok) {
+                      setSelected(null)
+                      navigate(basePath)
+                      fetchCustomSkills()
+                    }
+                  }}
+                >
+                  <Trash2 className="mr-1.5 size-3" />
+                  Delete
+                </Button>
+              </>
             )}
           </div>
         )}
