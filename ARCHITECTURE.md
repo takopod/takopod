@@ -128,10 +128,10 @@ The Slack integration includes a polling loop that monitors configured threads a
 
 Skills are markdown instruction files that guide agent behavior — they are not executable tools. Two tiers exist:
 
-- **Builtin registry skills** — stored in the project's `skills/` directory. Some are marked `always_enabled` in their YAML frontmatter and cannot be disabled. Boot recovery force-seeds these to all agents.
+- **Builtin registry skills** — stored in the project's `skills/` directory. Some are marked `always_enabled` in their YAML frontmatter and cannot be removed. Boot recovery seeds these to all agents.
 - **Agent-created skills** — created by the agent or user, stored in the workspace.
 
-Skills are synced per-agent based on enablement state in the `agent_skills` table. Enabled skills are copied to `/workspace/.claude/skills/`. When the skills directory is non-empty, the SDK's `Skill` tool is added to the agent's allowed tools, letting the agent read and apply skill instructions.
+Skills are synced per-agent based on membership in the `agent_skills` table (presence = active). Active skills are copied to `/workspace/.claude/skills/`. Agents draft new skills to `/workspace/skill-drafts/` for user approval. When the skills directory is non-empty, the SDK's `Skill` tool is added to the agent's allowed tools, letting the agent read and apply skill instructions.
 
 ## 5. Memory System
 

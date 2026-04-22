@@ -52,10 +52,8 @@ from orchestrator.models import (
     GhApprovalResponseFrame,
     FileEntry,
     McpServerResponse,
-    McpServerToggle,
     QueueStatusFrame,
     RegistrySkillSummary,
-    RegistrySkillToggle,
     ScheduleResponse,
     SkillDetail,
     SkillDraftDetail,
@@ -154,7 +152,7 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
         "ms.env, ms.timeout "
         "FROM mcp_servers ms "
         "JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
-        "WHERE ams.agent_id = ? AND ams.enabled = 1",
+        "WHERE ams.agent_id = ?",
         (agent_id,),
     ) as cur:
         rows = await cur.fetchall()
@@ -509,7 +507,7 @@ async def get_agent_mcp(agent_id: str):
     # Servers added to this agent
     async with db.execute(
         "SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.url, "
-        "ms.auth, ms.env, ms.timeout, ms.builtin, ams.enabled "
+        "ms.auth, ms.env, ms.timeout, ms.builtin "
         "FROM mcp_servers ms JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
         "WHERE ams.agent_id = ? ORDER BY ms.builtin DESC, ms.name",
         (agent_id,),
@@ -517,10 +515,7 @@ async def get_agent_mcp(agent_id: str):
         added_rows = await cur.fetchall()
 
     added_ids = {r[0] for r in added_rows}
-    servers = []
-    for r in added_rows:
-        srv = _row_to_mcp_server(r)
-        servers.append({**srv.model_dump(), "enabled": bool(r[10])})
+    servers = [_row_to_mcp_server(r).model_dump() for r in added_rows]
 
     # Available servers not yet added to this agent
     async with db.execute(
@@ -539,7 +534,7 @@ async def get_agent_mcp(agent_id: str):
 
 @router.post("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
 async def add_mcp_server_to_agent(agent_id: str, mcp_server_id: str):
-    """Add an MCP server to this agent (disabled by default)."""
+    """Add an MCP server to this agent."""
     await _resolve_agent_path(agent_id)
     db = await get_db()
 
@@ -551,35 +546,14 @@ async def add_mcp_server_to_agent(agent_id: str, mcp_server_id: str):
 
     try:
         await db.execute(
-            "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id, enabled) VALUES (?, ?, 0)",
+            "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id) VALUES (?, ?)",
             (agent_id, mcp_server_id),
         )
         await db.commit()
     except Exception:
         raise HTTPException(status_code=409, detail="Server already added to this agent")
 
-    return {"mcp_server_id": mcp_server_id, "enabled": False}
-
-
-@router.put("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
-async def toggle_agent_mcp_server(agent_id: str, mcp_server_id: str, req: McpServerToggle):
-    """Enable or disable an MCP server for this agent."""
-    await _resolve_agent_path(agent_id)
-    db = await get_db()
-
-    async with db.execute(
-        "SELECT agent_id FROM agent_mcp_servers WHERE agent_id = ? AND mcp_server_id = ?",
-        (agent_id, mcp_server_id),
-    ) as cur:
-        if not await cur.fetchone():
-            raise HTTPException(status_code=404, detail="Server not added to this agent")
-
-    await db.execute(
-        "UPDATE agent_mcp_servers SET enabled = ? WHERE agent_id = ? AND mcp_server_id = ?",
-        (1 if req.enabled else 0, agent_id, mcp_server_id),
-    )
-    await db.commit()
-    return {"mcp_server_id": mcp_server_id, "enabled": req.enabled}
+    return {"status": "ok", "mcp_server_id": mcp_server_id}
 
 
 @router.delete("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
@@ -674,7 +648,7 @@ def _skills_dir(host_dir: Path) -> Path:
 
 
 def _skill_drafts_dir(host_dir: Path) -> Path:
-    return host_dir / ".claude" / "skill-drafts"
+    return host_dir / "skill-drafts"
 
 
 def _collect_supporting_files(skill_dir: Path) -> list[str]:
@@ -958,13 +932,12 @@ async def list_registry_skills(agent_id: str):
     await _resolve_agent_path(agent_id)
     db = await get_db()
 
-    # Get agent's enabled/disabled state for each skill
     async with db.execute(
-        "SELECT skill_id, enabled FROM agent_skills WHERE agent_id = ?",
+        "SELECT skill_id FROM agent_skills WHERE agent_id = ?",
         (agent_id,),
     ) as cur:
         rows = await cur.fetchall()
-    agent_state = {row[0]: bool(row[1]) for row in rows}
+    added_ids = {row[0] for row in rows}
 
     added: list[dict] = []
     available: list[dict] = []
@@ -972,64 +945,30 @@ async def list_registry_skills(agent_id: str):
         content = skill_path.read_text()
         name, desc, always_on = _parse_skill_frontmatter(content)
         builtin = _is_builtin_skill(skill_id)
-        if always_on:
-            enabled = True
-        else:
-            enabled = agent_state.get(skill_id, False)
         summary = RegistrySkillSummary(
             id=skill_id,
             name=name or skill_id,
             description=desc,
             builtin=builtin,
-            enabled=enabled,
             always_enabled=always_on,
         )
-        if skill_id in agent_state or always_on:
+        if skill_id in added_ids or always_on:
             added.append(summary.model_dump())
         else:
             available.append(summary.model_dump())
     return {"skills": added, "available": available}
 
 
-@router.put("/agents/{agent_id}/registry-skills/{skill_id}")
-async def toggle_registry_skill(
-    agent_id: str, skill_id: str, req: RegistrySkillToggle,
-):
-    """Enable or disable a registry skill for an agent."""
-    if not req.enabled and _is_always_enabled_skill(skill_id):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Skill '{skill_id}' cannot be disabled.",
-        )
-
-    host_dir, _ = await _resolve_agent_path(agent_id)
-    db = await get_db()
-
-    await db.execute(
-        "INSERT INTO agent_skills (agent_id, skill_id, enabled) VALUES (?, ?, ?) "
-        "ON CONFLICT(agent_id, skill_id) DO UPDATE SET enabled = excluded.enabled",
-        (agent_id, skill_id, 1 if req.enabled else 0),
-    )
-    await db.commit()
-
-    # Sync workspace immediately
-    await sync_agent_skills(agent_id, host_dir)
-
-    return {"status": "ok", "skill_id": skill_id, "enabled": req.enabled}
-
-
 @router.post("/agents/{agent_id}/registry-skills/{skill_id}")
 async def add_registry_skill(agent_id: str, skill_id: str):
-    """Add a system skill to this agent (disabled by default)."""
+    """Add a system skill to this agent."""
     host_dir, _ = await _resolve_agent_path(agent_id)
 
-    # Verify skill exists in the system registry
     system_ids = {sid for sid, _, _ in _list_system_skills()}
     if skill_id not in system_ids:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
 
     db = await get_db()
-    # Check if already added
     async with db.execute(
         "SELECT 1 FROM agent_skills WHERE agent_id = ? AND skill_id = ?",
         (agent_id, skill_id),
@@ -1040,12 +979,12 @@ async def add_registry_skill(agent_id: str, skill_id: str):
             )
 
     await db.execute(
-        "INSERT INTO agent_skills (agent_id, skill_id, enabled) VALUES (?, ?, 0)",
+        "INSERT INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
         (agent_id, skill_id),
     )
     await db.commit()
     await sync_agent_skills(agent_id, host_dir)
-    return {"skill_id": skill_id, "enabled": False}
+    return {"status": "ok", "skill_id": skill_id}
 
 
 @router.delete("/agents/{agent_id}/registry-skills/{skill_id}")
@@ -1184,12 +1123,12 @@ async def get_system_skill(skill_id: str) -> SkillDetail:
 
 
 async def _propagate_skill_to_agents(skill_id: str) -> None:
-    """Re-sync a registry skill to all agents that have it enabled."""
+    """Re-sync a registry skill to all agents that have it."""
     db = await get_db()
     async with db.execute(
         "SELECT a.id, a.host_dir FROM agents a "
         "JOIN agent_skills s ON s.agent_id = a.id "
-        "WHERE s.skill_id = ? AND s.enabled = 1 AND a.status = 'active'",
+        "WHERE s.skill_id = ? AND a.status = 'active'",
         (skill_id,),
     ) as cur:
         rows = await cur.fetchall()
@@ -1243,8 +1182,7 @@ async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
         agents = await cur.fetchall()
     for agent_id, host_dir in agents:
         await db.execute(
-            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id, enabled) "
-            "VALUES (?, ?, 1)",
+            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
             (agent_id, req.name),
         )
     await db.commit()

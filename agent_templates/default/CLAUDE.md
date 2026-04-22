@@ -51,7 +51,7 @@ Do not record obvious things. Only record what surprised you, what took multiple
 When you complete a complex task that required significant trial and error, offer to save it as a reusable skill:
 
 1. Ask the user: "I figured out how to [task]. Want me to save this as a skill for next time?"
-2. If yes, check if `/workspace/.claude/skill-drafts/<skill-name>/` already exists. If so, confirm overwrite.
+2. If yes, check if `/workspace/skill-drafts/<skill-name>/` already exists. If so, confirm overwrite.
 3. Create the directory and write a SKILL.md with this format:
 
    ```

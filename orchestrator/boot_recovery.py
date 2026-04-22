@@ -101,8 +101,7 @@ async def boot_recovery() -> None:
     for (agent_id,) in agent_rows:
         for skill_id in builtin_skill_ids:
             cursor = await db.execute(
-                "INSERT INTO agent_skills (agent_id, skill_id, enabled) "
-                "VALUES (?, ?, 1) ON CONFLICT(agent_id, skill_id) DO NOTHING",
+                "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
                 (agent_id, skill_id),
             )
             skills_seeded += cursor.rowcount

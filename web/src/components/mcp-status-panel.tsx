@@ -2,7 +2,6 @@ import { useEffect, useState } from "react"
 
 interface McpServer {
   name: string
-  enabled: boolean
   note?: string
   display_name?: string
 }
@@ -63,7 +62,7 @@ export function McpStatusPanel({ agentId }: { agentId: string }) {
     ...servers,
     ...(status?.servers ?? [])
       .filter((s) => !configNames.has(s.name))
-      .map((s) => ({ name: s.name, enabled: true })),
+      .map((s) => ({ name: s.name })),
   ]
 
   return (
@@ -84,9 +83,7 @@ export function McpStatusPanel({ agentId }: { agentId: string }) {
               className={`inline-block size-1.5 shrink-0 rounded-full ${
                 srv.note
                   ? "bg-amber-500"
-                  : srv.enabled
-                    ? "bg-green-500"
-                    : "bg-muted-foreground/40"
+                  : "bg-green-500"
               }`}
             />
             <span className="text-xs text-muted-foreground truncate">

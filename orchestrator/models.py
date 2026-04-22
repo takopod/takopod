@@ -175,10 +175,6 @@ class UpdateMcpServerRequest(BaseModel):
     timeout: float | None = None
 
 
-class McpServerToggle(BaseModel):
-    enabled: bool
-
-
 class ToolConfigRequest(BaseModel):
     builtin: list[str]
     permission_mode: str = "acceptEdits"
@@ -226,12 +222,7 @@ class RegistrySkillSummary(BaseModel):
     name: str
     description: str
     builtin: bool = False
-    enabled: bool = True
     always_enabled: bool = False
-
-
-class RegistrySkillToggle(BaseModel):
-    enabled: bool
 
 
 class ScheduleResponse(BaseModel):

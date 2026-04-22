@@ -132,13 +132,13 @@ async def get_agent_slack(agent_id: str):
             raise HTTPException(status_code=404, detail="Agent not found")
 
     async with db.execute(
-        "SELECT ams.enabled FROM agent_mcp_servers ams "
+        "SELECT 1 FROM agent_mcp_servers ams "
         "JOIN mcp_servers ms ON ms.id = ams.mcp_server_id "
         "WHERE ams.agent_id = ? AND ms.name = 'slack'",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
-    return {"enabled": bool(row[0]) if row else False}
+    return {"enabled": row is not None}
 
 
 @router.put("/agents/{agent_id}/slack")
@@ -159,13 +159,16 @@ async def put_agent_slack(agent_id: str, req: SlackAgentToggle):
     if not srv:
         raise HTTPException(status_code=404, detail="Slack integration not configured")
 
-    # Upsert into agent_mcp_servers
-    await db.execute(
-        "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id, enabled) "
-        "VALUES (?, ?, ?) "
-        "ON CONFLICT(agent_id, mcp_server_id) DO UPDATE SET enabled = excluded.enabled",
-        (agent_id, srv[0], 1 if req.enabled else 0),
-    )
+    if req.enabled:
+        await db.execute(
+            "INSERT OR IGNORE INTO agent_mcp_servers (agent_id, mcp_server_id) VALUES (?, ?)",
+            (agent_id, srv[0]),
+        )
+    else:
+        await db.execute(
+            "DELETE FROM agent_mcp_servers WHERE agent_id = ? AND mcp_server_id = ?",
+            (agent_id, srv[0]),
+        )
     await db.commit()
     return {"enabled": req.enabled}
 

@@ -6,6 +6,7 @@ persisted via the worker's emit() callback for the orchestrator to consume.
 
 import asyncio
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -345,6 +346,8 @@ async def run_query(
             f"{output_str}\n"
         )
         sys.stderr.flush()
+        if tool_name in ("Write", "Edit", "Bash"):
+            os.sync()
         emit({
             "type": "tool_result",
             "tool_call_id": tool_use_id,
@@ -375,7 +378,7 @@ async def run_query(
 
     # Check if skills exist to enable the Skill tool
     skills_dir = WORKSPACE / ".claude" / "skills"
-    has_skills = skills_dir.is_dir() and any(skills_dir.iterdir())
+    has_skills = skills_dir.is_dir() and any(p.is_dir() for p in skills_dir.iterdir())
 
     allowed = [*builtin_tools, *BUILTIN_TOOL_NAMES, *mcp_proxy_tool_names]
     if has_skills:

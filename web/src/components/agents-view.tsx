@@ -55,7 +55,6 @@ const IDENTITY_FILES = [
 interface McpServer {
   id: string
   name: string
-  enabled?: boolean
   builtin?: boolean
   transport?: "stdio" | "http"
   command?: string
@@ -85,7 +84,6 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
   const [available, setAvailable] = useState<McpServer[]>([])
   const [availableLoaded, setAvailableLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [toggling, setToggling] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [searchFocused, setSearchFocused] = useState(false)
   const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
@@ -132,21 +130,6 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
   useEffect(() => {
     fetchServers()
   }, [fetchServers])
-
-  const handleToggle = async (id: string, enabled: boolean) => {
-    setToggling(id)
-    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
-    })
-    if (res.ok) {
-      setServers((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, enabled } : s)),
-      )
-    }
-    setToggling(null)
-  }
 
   const handleAdd = async (id: string) => {
     const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
@@ -267,20 +250,6 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                     key={srv.name}
                     className="flex items-center gap-3 rounded-md border px-4 py-2.5"
                   >
-                    <button
-                      type="button"
-                      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        srv.enabled ? "bg-primary" : "bg-input"
-                      } ${toggling === srv.id ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                      disabled={toggling === srv.id}
-                      onClick={() => handleToggle(srv.id, !srv.enabled)}
-                    >
-                      <span
-                        className={`pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-                          srv.enabled ? "translate-x-4" : "translate-x-0"
-                        }`}
-                      />
-                    </button>
                     <div className="flex flex-1 flex-col gap-0.5">
                       <McpServerLabel srv={srv} />
                       {srv.auth === "oauth" && (
