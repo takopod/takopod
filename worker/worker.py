@@ -152,21 +152,24 @@ def _persist_session_history() -> None:
     atomic_write(SESSION_HISTORY_PATH, json.dumps(data).encode())
 
 
-def _load_session_history() -> str | None:
+def _load_session_history() -> tuple[list[tuple[str, str]], str | None]:
+    """Load session history, returning raw entries and formatted summary."""
     if not SESSION_HISTORY_PATH.is_file():
-        return None
+        return [], None
     try:
-        entries = json.loads(SESSION_HISTORY_PATH.read_text())
-        if not entries:
-            return None
+        raw = json.loads(SESSION_HISTORY_PATH.read_text())
+        if not raw:
+            return [], None
+        entries = []
         lines = []
-        for entry in entries:
+        for entry in raw:
             role = entry.get("role", "unknown")
             content = entry.get("content", "")
+            entries.append((role, content))
             lines.append(f"[{role}]: {content}")
-        return "\n\n".join(lines)
+        return entries, "\n\n".join(lines)
     except (json.JSONDecodeError, OSError):
-        return None
+        return [], None
 
 
 async def _split_session(conn) -> None:
@@ -513,11 +516,16 @@ async def main() -> None:
         sys.stderr.write(f"worker: index pruning failed: {e}\n")
         sys.stderr.flush()
 
-    # Restore conversation context from previous session if available
-    history = _load_session_history()
-    if history:
-        _continuation_summary = history
-        sys.stderr.write("worker: loaded session history as continuation context\n")
+    # Restore conversation context from previous session if available.
+    # Pre-populate _session_transcript so old entries survive the next persist.
+    history_entries, history_summary = _load_session_history()
+    if history_entries:
+        _session_transcript = history_entries
+        _continuation_summary = history_summary
+        sys.stderr.write(
+            f"worker: loaded {len(history_entries)} session history entries "
+            "as continuation context\n"
+        )
         sys.stderr.flush()
 
     sys.stderr.write("worker: ready, polling for input.json\n")
