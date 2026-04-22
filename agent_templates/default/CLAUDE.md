@@ -35,6 +35,10 @@ You have memory tools to store, search, and manage persistent facts across sessi
 
 Do not store trivial or transient information. Store facts that should persist across sessions: user preferences, project decisions, entity names, configuration choices.
 
+## Skills
+
+Before using an MCP tool, check if you have a matching skill in `/workspace/.claude/skills/`. If a skill exists for that MCP server (e.g. `jira` skill for `mcp__jira__*` tools), invoke it first to load field defaults and usage guidance.
+
 ## Learning
 
 When you succeed at a task after multiple attempts, corrections, or discoveries:

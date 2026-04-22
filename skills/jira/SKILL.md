@@ -5,6 +5,10 @@ description: Use Jira MCP tools to manage issues, search with JQL, and track pro
 
 Use your `mcp__jira__*` tools to interact with Jira.
 
+## Default fields
+
+Read `defaults.json` in this skill directory for the default `fields` parameter to use with `jira_search` and `jira_get_issue`. Always use these defaults unless the user explicitly requests different fields. The `url` field must always be included — it provides the link to each issue.
+
 ## Available operations
 
 - **Issues**: create, update, transition, comment, assign, link
