@@ -771,7 +771,7 @@ async def list_skill_drafts(agent_id: str) -> list[SkillDraftSummary]:
         skill_md = d / "SKILL.md"
         if not skill_md.is_file():
             continue
-        name, desc = _parse_skill_frontmatter(skill_md.read_text())
+        name, desc, _ = _parse_skill_frontmatter(skill_md.read_text())
         result.append(SkillDraftSummary(
             id=d.name,
             name=name or d.name,
@@ -848,7 +848,7 @@ async def update_skill_draft(
     if not skill_md.is_file():
         raise HTTPException(status_code=404, detail="Draft not found")
     skill_md.write_text(req.content)
-    parsed_name, desc = _parse_skill_frontmatter(req.content)
+    parsed_name, desc, _ = _parse_skill_frontmatter(req.content)
     return SkillDraftDetail(
         id=name,
         name=parsed_name or name,
