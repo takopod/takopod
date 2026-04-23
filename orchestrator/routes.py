@@ -815,10 +815,7 @@ async def approve_skill_draft(agent_id: str, name: str):
     skills_dir = _skills_dir(host_dir)
     target_dir = skills_dir / name
     if target_dir.exists():
-        raise HTTPException(
-            status_code=409,
-            detail=f"Skill '{name}' already exists. Rename or delete the existing skill first.",
-        )
+        shutil.rmtree(target_dir)
     skills_dir.mkdir(parents=True, exist_ok=True)
     try:
         shutil.move(str(draft_dir), str(target_dir))
