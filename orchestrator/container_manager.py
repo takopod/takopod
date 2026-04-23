@@ -41,6 +41,23 @@ async def _run(cmd: list[str], check: bool = True) -> asyncio.subprocess.Process
     return proc
 
 
+def _claude_auth_args() -> list[str]:
+    """Return podman args for Claude auth.
+
+    Prefers subscription OAuth (CLAUDE_CODE_OAUTH_TOKEN) if set, else falls
+    back to Vertex AI via mounted gcloud credentials.
+    """
+    oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if oauth_token:
+        return ["-e", f"CLAUDE_CODE_OAUTH_TOKEN={oauth_token}"]
+    return [
+        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
+        "-e", "CLAUDE_CODE_USE_VERTEX=1",
+        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
+        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+    ]
+
+
 async def ensure_network() -> None:
     proc = await asyncio.create_subprocess_exec(
         PODMAN, "network", "exists", NETWORK,
@@ -296,10 +313,7 @@ async def spawn_container(
         "--tmpfs", "/tmp:rw,size=512m",
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
-        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
-        "-e", "CLAUDE_CODE_USE_VERTEX=1",
-        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
-        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+        *_claude_auth_args(),
         "-e", f"OLLAMA_ENABLED={ollama_enabled}",
     ]
 
@@ -374,10 +388,7 @@ async def spawn_scheduled_container(
         "--tmpfs", "/tmp:rw,size=512m",
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
-        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
-        "-e", "CLAUDE_CODE_USE_VERTEX=1",
-        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
-        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+        *_claude_auth_args(),
         "-e", "OLLAMA_ENABLED=false",
     ]
 
