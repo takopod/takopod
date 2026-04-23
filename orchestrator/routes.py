@@ -173,6 +173,9 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
             "timeout": row[7],
         }
 
+    if "github" in servers:
+        servers["github"].setdefault("env", {})["TAKOPOD_WORKSPACE"] = str(host_dir)
+
     manager = McpServerManager()
     await manager.start({"mcpServers": servers})
 

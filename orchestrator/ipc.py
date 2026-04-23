@@ -739,6 +739,31 @@ async def _handle_tool_request(
                             },
                         }
 
+            # Permission gate for git_push tool
+            if server_name == "github" and tool_name == "git_push":
+                if not approval_manager or not ws_manager:
+                    return {
+                        "request_id": request_id,
+                        "status": "ok",
+                        "data": {
+                            "content": [{"type": "text", "text": "git_push requires approval but no approval channel available"}],
+                            "isError": True,
+                        },
+                    }
+                desc = f"git push {arguments.get('repo_path', '')} → {arguments.get('remote', 'origin')} {arguments.get('branch', '(current)')}"
+                approved = await approval_manager.request_approval(
+                    request_id, agent_id, desc, ws_manager,
+                )
+                if not approved:
+                    return {
+                        "request_id": request_id,
+                        "status": "ok",
+                        "data": {
+                            "content": [{"type": "text", "text": f"User denied: {desc}"}],
+                            "isError": False,
+                        },
+                    }
+
             if not mcp_manager:
                 return {
                     "request_id": request_id,
