@@ -39,6 +39,14 @@ create_schedule_schema = {
                 "type": "string",
                 "description": "For file_watch triggers: directory within /workspace to watch (e.g., 'inbox'). Must be a relative path within the workspace.",
             },
+            "base_interval_minutes": {
+                "type": "integer",
+                "description": "Enable idle backoff: base (fastest) polling interval in minutes. When the task finds no activity, the interval doubles up to max_interval_minutes. Call signal_activity to reset.",
+            },
+            "max_interval_minutes": {
+                "type": "integer",
+                "description": "Maximum polling interval in minutes when idle backoff is active (e.g., 360 for 6 hours). Required when base_interval_minutes is set.",
+            },
         },
         "required": ["prompt"],
     },
@@ -94,6 +102,14 @@ update_schedule_schema = {
                 "items": {"type": "string"},
                 "description": "New list of allowed tools.",
             },
+            "base_interval_minutes": {
+                "type": "integer",
+                "description": "Enable idle backoff: base (fastest) polling interval in minutes. Set to 0 to disable backoff.",
+            },
+            "max_interval_minutes": {
+                "type": "integer",
+                "description": "Maximum polling interval in minutes when idle backoff is active.",
+            },
         },
         "required": ["task_id"],
     },
@@ -135,8 +151,31 @@ resume_schedule_schema = {
     },
 }
 
+signal_activity_schema = {
+    "name": "signal_activity",
+    "description": (
+        "Signal that meaningful activity was detected during a scheduled task "
+        "execution. Resets the polling interval back to the base rate so the "
+        "next check happens sooner. Only useful for tasks with idle backoff "
+        "enabled (base_interval_minutes and max_interval_minutes set). "
+        "Call this when you find new comments, CI failures, status changes, "
+        "or anything worth following up on quickly."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "The scheduled task ID to reset. Auto-detected when running inside a scheduled task.",
+            },
+        },
+        "required": [],
+    },
+}
+
 all_schemas = [
     create_schedule_schema, list_schedules_schema, get_schedule_schema,
     update_schedule_schema, delete_schedule_schema,
     pause_schedule_schema, resume_schedule_schema,
+    signal_activity_schema,
 ]

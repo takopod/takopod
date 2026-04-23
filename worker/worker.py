@@ -45,6 +45,11 @@ _session_transcript: list[tuple[str, str]] = []
 # In-memory buffer for events waiting to be flushed to output.json.
 _pending_events: list[dict[str, Any]] = []
 
+# Agentic task ID for the currently executing scheduled message.
+# Set when processing a user_message with an agentic_task_id field,
+# read by the signal_activity tool to auto-detect the task.
+_current_agentic_task_id: str | None = None
+
 # Module-level DB connection, set in main().
 _conn = None
 
@@ -236,7 +241,7 @@ async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
 
 
 async def process_message(msg: dict[str, Any], conn) -> None:
-    global _session_id, _orch_session_id, _continuation_summary, _session_transcript
+    global _session_id, _orch_session_id, _continuation_summary, _session_transcript, _current_agentic_task_id
     msg_type = msg.get("type")
 
     if msg_type == "system_command":
@@ -304,6 +309,8 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         sys.stderr.write(f"worker: skipping duplicate message {message_id}\n")
         sys.stderr.flush()
         return
+
+    _current_agentic_task_id = msg.get("agentic_task_id")
 
     content = msg.get("content", "")
     attachments: list[str] = msg.get("attachments", [])

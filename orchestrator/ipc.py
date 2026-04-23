@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # Set when flushing a scheduled task message, cleared on complete event.
 _inflight_source: dict[str, dict] = {}
 
+# Agentic task IDs that called signal_activity during the current execution.
+# Checked by the scheduler after task completion to decide whether to backoff.
+_activity_signaled: set[str] = set()
+
 
 async def queue_message(
     agent_id: str,
@@ -429,11 +433,13 @@ async def _process_event(
                 # doesn't re-fetch the entire thread history.
                 try:
                     thread_id = str(uuid.uuid4())
+                    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                     await db.execute(
                         "INSERT OR IGNORE INTO slack_active_threads "
-                        "(id, channel_id, thread_ts, agent_id, last_ts) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (thread_id, ch, ts, agent_id, reply_ts or ts),
+                        "(id, channel_id, thread_ts, agent_id, last_ts, "
+                        "last_activity_at, poll_interval) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 10)",
+                        (thread_id, ch, ts, agent_id, reply_ts or ts, now),
                     )
                     await db.commit()
                 except SqliteError:
@@ -500,13 +506,25 @@ async def _handle_tool_request(
                 interval_minutes = max(int(params.get("interval_minutes", 60)), 5)
                 interval_seconds = interval_minutes * 60
 
+            base_interval = None
+            max_interval = None
+            if params.get("base_interval_minutes") and params.get("max_interval_minutes"):
+                base_interval = max(int(params["base_interval_minutes"]), 5) * 60
+                max_interval = max(int(params["max_interval_minutes"]), 5) * 60
+                if base_interval >= max_interval:
+                    return {"request_id": request_id, "status": "error", "error": "base_interval_minutes must be less than max_interval_minutes"}
+                if interval_seconds:
+                    interval_seconds = base_interval
+
             await db.execute(
                 "INSERT INTO agentic_tasks "
                 "(id, agent_id, prompt, allowed_tools, interval_seconds, "
-                "trigger_type, trigger_config, trigger_secret) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "trigger_type, trigger_config, trigger_secret, "
+                "base_interval_seconds, max_interval_seconds) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (task_id, agent_id, prompt, allowed_tools, interval_seconds,
-                 trigger_type, json.dumps(trigger_config), trigger_secret),
+                 trigger_type, json.dumps(trigger_config), trigger_secret,
+                 base_interval, max_interval),
             )
             await db.commit()
             logger.info("Created agentic task %s (%s) for agent %s", task_id[:8], trigger_type, agent_id[:8])
@@ -587,6 +605,27 @@ async def _handle_tool_request(
             if "allowed_tools" in params:
                 updates.append("allowed_tools = ?")
                 values.append(json.dumps(params["allowed_tools"]))
+            if "base_interval_minutes" in params:
+                val = params["base_interval_minutes"]
+                if val and int(val) > 0:
+                    updates.append("base_interval_seconds = ?")
+                    values.append(max(int(val), 5) * 60)
+                else:
+                    updates.append("base_interval_seconds = NULL")
+            if "max_interval_minutes" in params:
+                val = params["max_interval_minutes"]
+                if val and int(val) > 0:
+                    updates.append("max_interval_seconds = ?")
+                    values.append(max(int(val), 5) * 60)
+                else:
+                    updates.append("max_interval_seconds = NULL")
+            if (params.get("base_interval_minutes") and params.get("max_interval_minutes")
+                    and int(params["base_interval_minutes"]) > 0
+                    and int(params["max_interval_minutes"]) > 0):
+                base = max(int(params["base_interval_minutes"]), 5) * 60
+                mx = max(int(params["max_interval_minutes"]), 5) * 60
+                if base >= mx:
+                    return {"request_id": request_id, "status": "error", "error": "base_interval_minutes must be less than max_interval_minutes"}
             if not updates:
                 return {"request_id": request_id, "status": "error", "error": "No fields to update"}
             values.append(task_id)
@@ -627,18 +666,59 @@ async def _handle_tool_request(
                 return {"request_id": request_id, "status": "error", "error": "Schedule not found or not paused"}
             return {"request_id": request_id, "status": "ok", "data": {"task_id": task_id, "status": "active"}}
 
+        elif action == "signal_activity":
+            task_id = params.get("task_id")
+            if task_id:
+                cursor = await db.execute(
+                    "UPDATE agentic_tasks "
+                    "SET interval_seconds = base_interval_seconds "
+                    "WHERE id = ? AND agent_id = ? AND status = 'active' "
+                    "AND base_interval_seconds IS NOT NULL",
+                    (task_id, agent_id),
+                )
+                await db.commit()
+                if cursor.rowcount > 0:
+                    _activity_signaled.add(task_id)
+                return {
+                    "request_id": request_id, "status": "ok",
+                    "data": {"task_id": task_id, "reset": cursor.rowcount > 0},
+                }
+            else:
+                cursor = await db.execute(
+                    "UPDATE agentic_tasks "
+                    "SET interval_seconds = base_interval_seconds "
+                    "WHERE agent_id = ? AND status = 'active' "
+                    "AND base_interval_seconds IS NOT NULL",
+                    (agent_id,),
+                )
+                await db.commit()
+                async with db.execute(
+                    "SELECT id FROM agentic_tasks "
+                    "WHERE agent_id = ? AND status = 'active' "
+                    "AND base_interval_seconds IS NOT NULL",
+                    (agent_id,),
+                ) as cur:
+                    for row in await cur.fetchall():
+                        _activity_signaled.add(row[0])
+                return {
+                    "request_id": request_id, "status": "ok",
+                    "data": {"reset_count": cursor.rowcount},
+                }
+
         elif action == "register_slack_thread":
             channel_id = params.get("channel_id", "")
             thread_ts = params.get("thread_ts", "")
             if not channel_id or not thread_ts:
                 return {"request_id": request_id, "status": "error", "error": "channel_id and thread_ts are required"}
             row_id = str(uuid.uuid4())
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             try:
                 await db.execute(
                     "INSERT INTO slack_active_threads "
-                    "(id, channel_id, thread_ts, agent_id, last_ts) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (row_id, channel_id, thread_ts, agent_id, thread_ts),
+                    "(id, channel_id, thread_ts, agent_id, last_ts, "
+                    "last_activity_at, poll_interval) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 10)",
+                    (row_id, channel_id, thread_ts, agent_id, thread_ts, now),
                 )
                 await db.commit()
             except IntegrityError:

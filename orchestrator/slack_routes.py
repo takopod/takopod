@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import ssl
+import time
 from pathlib import Path
 from sqlite3 import IntegrityError
 
@@ -366,12 +367,14 @@ async def add_active_thread(req: SlackThreadRequest):
             raise HTTPException(status_code=404, detail="Agent not found")
 
     row_id = str(uuid.uuid4())
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
         await db.execute(
             "INSERT INTO slack_active_threads "
-            "(id, channel_id, thread_ts, agent_id, last_ts) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (row_id, req.channel_id, req.thread_ts, req.agent_id, req.thread_ts),
+            "(id, channel_id, thread_ts, agent_id, last_ts, "
+            "last_activity_at, poll_interval) "
+            "VALUES (?, ?, ?, ?, ?, ?, 10)",
+            (row_id, req.channel_id, req.thread_ts, req.agent_id, req.thread_ts, now),
         )
         await db.commit()
     except IntegrityError:
