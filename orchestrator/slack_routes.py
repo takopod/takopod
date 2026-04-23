@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 from pathlib import Path
 from sqlite3 import IntegrityError
 
+import certifi
 from fastapi import APIRouter, HTTPException
 
 from orchestrator.db import get_db
@@ -29,6 +31,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SLACK_CONFIG_PATH = Path("data/slack-config.json")
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context using certifi's CA bundle."""
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    return ctx
 
 
 def _read_slack_config() -> dict | None:
@@ -107,6 +115,7 @@ async def get_slack_status():
         client = WebClient(
             token=config["xoxc_token"],
             headers={"Cookie": f"d={config['d_cookie']}"},
+            ssl=_get_ssl_context(),
         )
         response = client.auth_test()
         return {
@@ -284,6 +293,7 @@ async def list_slack_channels():
     client = WebClient(
         token=config["xoxc_token"],
         headers={"Cookie": f"d={config['d_cookie']}"},
+        ssl=_get_ssl_context(),
     )
     try:
         response = await asyncio.to_thread(
