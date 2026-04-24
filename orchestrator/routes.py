@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import time
 import uuid
@@ -34,6 +35,7 @@ from orchestrator.container_manager import (
 from orchestrator.mcp_manager import McpServerManager
 from orchestrator.db import get_db
 from orchestrator.ipc import (
+    _get_initial_snapshot,
     atomic_write,
     get_queue_counts,
     queue_message,
@@ -52,10 +54,9 @@ from orchestrator.models import (
     GhApprovalResponseFrame,
     FileEntry,
     McpServerResponse,
-    McpServerToggle,
     QueueStatusFrame,
     RegistrySkillSummary,
-    RegistrySkillToggle,
+    ScheduleCreateRequest,
     ScheduleResponse,
     SkillDetail,
     SkillDraftDetail,
@@ -154,7 +155,7 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
         "ms.env, ms.timeout "
         "FROM mcp_servers ms "
         "JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
-        "WHERE ams.agent_id = ? AND ams.enabled = 1",
+        "WHERE ams.agent_id = ?",
         (agent_id,),
     ) as cur:
         rows = await cur.fetchall()
@@ -174,6 +175,9 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
             "env": env,
             "timeout": row[7],
         }
+
+    if "github" in servers:
+        servers["github"].setdefault("env", {})["TAKOPOD_WORKSPACE"] = str(host_dir)
 
     manager = McpServerManager()
     await manager.start({"mcpServers": servers})
@@ -242,6 +246,12 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
         created_at=row[4], container_memory=row[5], container_cpus=row[6],
         model=row[7],
     )
+
+
+@router.get("/models")
+async def list_models():
+    from orchestrator.model_registry import get_model_options
+    return get_model_options()
 
 
 @router.get("/agents")
@@ -516,7 +526,7 @@ async def get_agent_mcp(agent_id: str):
     # Servers added to this agent
     async with db.execute(
         "SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.url, "
-        "ms.auth, ms.env, ms.timeout, ms.builtin, ams.enabled "
+        "ms.auth, ms.env, ms.timeout, ms.builtin "
         "FROM mcp_servers ms JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
         "WHERE ams.agent_id = ? ORDER BY ms.builtin DESC, ms.name",
         (agent_id,),
@@ -524,10 +534,7 @@ async def get_agent_mcp(agent_id: str):
         added_rows = await cur.fetchall()
 
     added_ids = {r[0] for r in added_rows}
-    servers = []
-    for r in added_rows:
-        srv = _row_to_mcp_server(r)
-        servers.append({**srv.model_dump(), "enabled": bool(r[10])})
+    servers = [_row_to_mcp_server(r).model_dump() for r in added_rows]
 
     # Available servers not yet added to this agent
     async with db.execute(
@@ -546,7 +553,7 @@ async def get_agent_mcp(agent_id: str):
 
 @router.post("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
 async def add_mcp_server_to_agent(agent_id: str, mcp_server_id: str):
-    """Add an MCP server to this agent (disabled by default)."""
+    """Add an MCP server to this agent."""
     await _resolve_agent_path(agent_id)
     db = await get_db()
 
@@ -558,35 +565,14 @@ async def add_mcp_server_to_agent(agent_id: str, mcp_server_id: str):
 
     try:
         await db.execute(
-            "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id, enabled) VALUES (?, ?, 0)",
+            "INSERT INTO agent_mcp_servers (agent_id, mcp_server_id) VALUES (?, ?)",
             (agent_id, mcp_server_id),
         )
         await db.commit()
     except Exception:
         raise HTTPException(status_code=409, detail="Server already added to this agent")
 
-    return {"mcp_server_id": mcp_server_id, "enabled": False}
-
-
-@router.put("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
-async def toggle_agent_mcp_server(agent_id: str, mcp_server_id: str, req: McpServerToggle):
-    """Enable or disable an MCP server for this agent."""
-    await _resolve_agent_path(agent_id)
-    db = await get_db()
-
-    async with db.execute(
-        "SELECT agent_id FROM agent_mcp_servers WHERE agent_id = ? AND mcp_server_id = ?",
-        (agent_id, mcp_server_id),
-    ) as cur:
-        if not await cur.fetchone():
-            raise HTTPException(status_code=404, detail="Server not added to this agent")
-
-    await db.execute(
-        "UPDATE agent_mcp_servers SET enabled = ? WHERE agent_id = ? AND mcp_server_id = ?",
-        (1 if req.enabled else 0, agent_id, mcp_server_id),
-    )
-    await db.commit()
-    return {"mcp_server_id": mcp_server_id, "enabled": req.enabled}
+    return {"status": "ok", "mcp_server_id": mcp_server_id}
 
 
 @router.delete("/agents/{agent_id}/mcp/servers/{mcp_server_id}")
@@ -681,7 +667,7 @@ def _skills_dir(host_dir: Path) -> Path:
 
 
 def _skill_drafts_dir(host_dir: Path) -> Path:
-    return host_dir / ".claude" / "skill-drafts"
+    return host_dir / "skill-drafts"
 
 
 def _collect_supporting_files(skill_dir: Path) -> list[str]:
@@ -804,7 +790,7 @@ async def list_skill_drafts(agent_id: str) -> list[SkillDraftSummary]:
         skill_md = d / "SKILL.md"
         if not skill_md.is_file():
             continue
-        name, desc = _parse_skill_frontmatter(skill_md.read_text())
+        name, desc, _ = _parse_skill_frontmatter(skill_md.read_text())
         result.append(SkillDraftSummary(
             id=d.name,
             name=name or d.name,
@@ -845,10 +831,7 @@ async def approve_skill_draft(agent_id: str, name: str):
     skills_dir = _skills_dir(host_dir)
     target_dir = skills_dir / name
     if target_dir.exists():
-        raise HTTPException(
-            status_code=409,
-            detail=f"Skill '{name}' already exists. Rename or delete the existing skill first.",
-        )
+        shutil.rmtree(target_dir)
     skills_dir.mkdir(parents=True, exist_ok=True)
     try:
         shutil.move(str(draft_dir), str(target_dir))
@@ -881,7 +864,7 @@ async def update_skill_draft(
     if not skill_md.is_file():
         raise HTTPException(status_code=404, detail="Draft not found")
     skill_md.write_text(req.content)
-    parsed_name, desc = _parse_skill_frontmatter(req.content)
+    parsed_name, desc, _ = _parse_skill_frontmatter(req.content)
     return SkillDraftDetail(
         id=name,
         name=parsed_name or name,
@@ -965,13 +948,12 @@ async def list_registry_skills(agent_id: str):
     await _resolve_agent_path(agent_id)
     db = await get_db()
 
-    # Get agent's enabled/disabled state for each skill
     async with db.execute(
-        "SELECT skill_id, enabled FROM agent_skills WHERE agent_id = ?",
+        "SELECT skill_id FROM agent_skills WHERE agent_id = ?",
         (agent_id,),
     ) as cur:
         rows = await cur.fetchall()
-    agent_state = {row[0]: bool(row[1]) for row in rows}
+    added_ids = {row[0] for row in rows}
 
     added: list[dict] = []
     available: list[dict] = []
@@ -979,64 +961,30 @@ async def list_registry_skills(agent_id: str):
         content = skill_path.read_text()
         name, desc, always_on = _parse_skill_frontmatter(content)
         builtin = _is_builtin_skill(skill_id)
-        if always_on:
-            enabled = True
-        else:
-            enabled = agent_state.get(skill_id, False)
         summary = RegistrySkillSummary(
             id=skill_id,
             name=name or skill_id,
             description=desc,
             builtin=builtin,
-            enabled=enabled,
             always_enabled=always_on,
         )
-        if skill_id in agent_state or always_on:
+        if skill_id in added_ids or always_on:
             added.append(summary.model_dump())
         else:
             available.append(summary.model_dump())
     return {"skills": added, "available": available}
 
 
-@router.put("/agents/{agent_id}/registry-skills/{skill_id}")
-async def toggle_registry_skill(
-    agent_id: str, skill_id: str, req: RegistrySkillToggle,
-):
-    """Enable or disable a registry skill for an agent."""
-    if not req.enabled and _is_always_enabled_skill(skill_id):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Skill '{skill_id}' cannot be disabled.",
-        )
-
-    host_dir, _ = await _resolve_agent_path(agent_id)
-    db = await get_db()
-
-    await db.execute(
-        "INSERT INTO agent_skills (agent_id, skill_id, enabled) VALUES (?, ?, ?) "
-        "ON CONFLICT(agent_id, skill_id) DO UPDATE SET enabled = excluded.enabled",
-        (agent_id, skill_id, 1 if req.enabled else 0),
-    )
-    await db.commit()
-
-    # Sync workspace immediately
-    await sync_agent_skills(agent_id, host_dir)
-
-    return {"status": "ok", "skill_id": skill_id, "enabled": req.enabled}
-
-
 @router.post("/agents/{agent_id}/registry-skills/{skill_id}")
 async def add_registry_skill(agent_id: str, skill_id: str):
-    """Add a system skill to this agent (disabled by default)."""
+    """Add a system skill to this agent."""
     host_dir, _ = await _resolve_agent_path(agent_id)
 
-    # Verify skill exists in the system registry
     system_ids = {sid for sid, _, _ in _list_system_skills()}
     if skill_id not in system_ids:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
 
     db = await get_db()
-    # Check if already added
     async with db.execute(
         "SELECT 1 FROM agent_skills WHERE agent_id = ? AND skill_id = ?",
         (agent_id, skill_id),
@@ -1047,12 +995,12 @@ async def add_registry_skill(agent_id: str, skill_id: str):
             )
 
     await db.execute(
-        "INSERT INTO agent_skills (agent_id, skill_id, enabled) VALUES (?, ?, 0)",
+        "INSERT INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
         (agent_id, skill_id),
     )
     await db.commit()
     await sync_agent_skills(agent_id, host_dir)
-    return {"skill_id": skill_id, "enabled": False}
+    return {"status": "ok", "skill_id": skill_id}
 
 
 @router.delete("/agents/{agent_id}/registry-skills/{skill_id}")
@@ -1191,12 +1139,12 @@ async def get_system_skill(skill_id: str) -> SkillDetail:
 
 
 async def _propagate_skill_to_agents(skill_id: str) -> None:
-    """Re-sync a registry skill to all agents that have it enabled."""
+    """Re-sync a registry skill to all agents that have it."""
     db = await get_db()
     async with db.execute(
         "SELECT a.id, a.host_dir FROM agents a "
         "JOIN agent_skills s ON s.agent_id = a.id "
-        "WHERE s.skill_id = ? AND s.enabled = 1 AND a.status = 'active'",
+        "WHERE s.skill_id = ? AND a.status = 'active'",
         (skill_id,),
     ) as cur:
         rows = await cur.fetchall()
@@ -1250,8 +1198,7 @@ async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
         agents = await cur.fetchall()
     for agent_id, host_dir in agents:
         await db.execute(
-            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id, enabled) "
-            "VALUES (?, ?, 1)",
+            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
             (agent_id, req.name),
         )
     await db.commit()
@@ -1619,8 +1566,9 @@ async def delete_container(container_id: str):
 async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     db = await get_db()
     query = (
-        "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
-        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, t.created_at "
+        "SELECT t.id, t.agent_id, a.name, t.prompt, "
+        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
+        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
     )
@@ -1636,9 +1584,10 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     return [
         ScheduleResponse(
             id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
-            prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
-            interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
-            status=r[8], created_at=r[9],
+            prompt=r[3],
+            interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
+            status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
+            base_interval_seconds=r[10], max_interval_seconds=r[11],
         )
         for r in rows
     ]
@@ -1648,8 +1597,9 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
 async def get_schedule(task_id: str) -> ScheduleResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
-        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, t.created_at "
+        "SELECT t.id, t.agent_id, a.name, t.prompt, "
+        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
+        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
         "WHERE t.id = ?",
@@ -1661,10 +1611,71 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
 
     return ScheduleResponse(
         id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
-        prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
-        interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
-        status=r[8], created_at=r[9],
+        prompt=r[3],
+        interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
+        status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
+        base_interval_seconds=r[10], max_interval_seconds=r[11],
     )
+
+
+@router.post("/schedules")
+async def create_schedule(body: ScheduleCreateRequest):
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT id FROM agents WHERE id = ?", (body.agent_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    task_id = str(uuid.uuid4())
+    trigger_config: dict = {}
+    trigger_secret = None
+
+    if body.trigger_type == "file_watch":
+        if not body.watch_dir:
+            raise HTTPException(status_code=400, detail="watch_dir required for file_watch trigger")
+        if ".." in body.watch_dir or body.watch_dir.startswith("/"):
+            raise HTTPException(status_code=400, detail="watch_dir must be a relative path within workspace")
+        initial_snapshot = await _get_initial_snapshot(body.agent_id, body.watch_dir)
+        trigger_config = {"watch_dir": body.watch_dir, "last_snapshot": initial_snapshot}
+        interval_seconds = 0
+    elif body.trigger_type == "webhook":
+        interval_seconds = 0
+        trigger_secret = secrets.token_urlsafe(24)
+    else:
+        if not body.interval_minutes:
+            raise HTTPException(status_code=400, detail="interval_minutes is required for interval triggers")
+        interval_seconds = body.interval_minutes * 60
+
+    base_interval = None
+    max_interval = None
+    if body.base_interval_minutes and body.max_interval_minutes:
+        base_interval = body.base_interval_minutes * 60
+        max_interval = body.max_interval_minutes * 60
+        if base_interval >= max_interval:
+            raise HTTPException(status_code=400, detail="base_interval_minutes must be less than max_interval_minutes")
+        if interval_seconds:
+            interval_seconds = base_interval
+
+    await db.execute(
+        "INSERT INTO agentic_tasks "
+        "(id, agent_id, prompt, interval_seconds, "
+        "trigger_type, trigger_config, trigger_secret, "
+        "base_interval_seconds, max_interval_seconds) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (task_id, body.agent_id, body.prompt,
+         interval_seconds, body.trigger_type, json.dumps(trigger_config),
+         trigger_secret, base_interval, max_interval),
+    )
+    await db.commit()
+
+    result = await get_schedule(task_id)
+    data = result.model_dump()
+    if body.trigger_type == "webhook":
+        data["webhook_url"] = f"/api/agents/{body.agent_id}/trigger/{task_id}"
+        data["webhook_secret"] = trigger_secret
+    return data
 
 
 @router.post("/schedules/{task_id}/pause")
@@ -1709,11 +1720,10 @@ async def update_schedule(task_id: str, request: Request):
     body = await request.json()
     updates = []
     params = []
-    for field in ("prompt", "agent_id", "allowed_tools", "interval_seconds"):
+    for field in ("prompt", "agent_id", "interval_seconds",
+                   "base_interval_seconds", "max_interval_seconds"):
         if field in body:
             value = body[field]
-            if field == "allowed_tools":
-                value = json.dumps(value)
             updates.append(f"{field} = ?")
             params.append(value)
     if not updates:
@@ -2049,13 +2059,19 @@ def _check_rate_limit(agent_id: str) -> float | None:
 
 async def _store_message(agent_id: str, frame: UserMessageFrame) -> None:
     db = await get_db()
-    metadata = json.dumps({"attachments": frame.attachments}) if frame.attachments else None
+    metadata_dict: dict = {}
+    if frame.attachments:
+        metadata_dict["attachments"] = frame.attachments
+    if frame.model:
+        metadata_dict["model"] = frame.model
+    metadata = json.dumps(metadata_dict) if metadata_dict else None
     await db.execute(
         "INSERT INTO messages (id, agent_id, role, content, metadata) VALUES (?, ?, ?, ?, ?)",
         (frame.message_id, agent_id, "user", frame.content, metadata),
     )
     await db.commit()
-    await queue_message(agent_id, frame.message_id, frame.content, attachments=frame.attachments)
+    await queue_message(agent_id, frame.message_id, frame.content,
+                        attachments=frame.attachments, model=frame.model)
 
 
 async def _send_queue_status(ws: WebSocket, agent_id: str) -> None:
@@ -2552,6 +2568,17 @@ async def websocket_endpoint(ws: WebSocket):
                     _gh_approval_manager.resolve(frame.request_id, frame.approved)
                 except ValidationError:
                     pass
+                continue
+
+            if data.get("type") == "stop_query":
+                async with _workers_lock:
+                    worker = _active_workers.get(agent_id)
+                if worker:
+                    cancel_path = worker.host_dir / "cancel.json"
+                    atomic_write(cancel_path, b'{"cancel": true}')
+                    logger.info(
+                        "stop_query: agent %s", agent_id[:8],
+                    )
                 continue
 
             if data.get("type") == "system_command":

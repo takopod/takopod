@@ -14,6 +14,7 @@ from worker.agent import run_query
 WORKSPACE = Path("/workspace")
 INPUT_PATH = WORKSPACE / "input.json"
 OUTPUT_PATH = WORKSPACE / "output.json"
+CANCEL_PATH = WORKSPACE / "cancel.json"
 SESSION_HISTORY_PATH = WORKSPACE / "session_history.json"
 SETTINGS_PATH = WORKSPACE / ".settings.json"
 POLL_INTERVAL = 0.5
@@ -44,6 +45,11 @@ _session_transcript: list[tuple[str, str]] = []
 
 # In-memory buffer for events waiting to be flushed to output.json.
 _pending_events: list[dict[str, Any]] = []
+
+# Agentic task ID for the currently executing scheduled message.
+# Set when processing a user_message with an agentic_task_id field,
+# read by the signal_activity tool to auto-detect the task.
+_current_agentic_task_id: str | None = None
 
 # Module-level DB connection, set in main().
 _conn = None
@@ -119,6 +125,16 @@ def drain_pending(max_wait: float = 10.0) -> None:
             time.sleep(0.1)
 
 
+async def _cancel_monitor(task: asyncio.Task) -> None:
+    """Poll for cancel.json and cancel the query task when found."""
+    while not task.done():
+        await asyncio.sleep(0.5)
+        if CANCEL_PATH.exists():
+            CANCEL_PATH.unlink(missing_ok=True)
+            task.cancel()
+            return
+
+
 def _is_processed(conn, message_id: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM processed_messages WHERE message_id = ?",
@@ -152,21 +168,24 @@ def _persist_session_history() -> None:
     atomic_write(SESSION_HISTORY_PATH, json.dumps(data).encode())
 
 
-def _load_session_history() -> str | None:
+def _load_session_history() -> tuple[list[tuple[str, str]], str | None]:
+    """Load session history, returning raw entries and formatted summary."""
     if not SESSION_HISTORY_PATH.is_file():
-        return None
+        return [], None
     try:
-        entries = json.loads(SESSION_HISTORY_PATH.read_text())
-        if not entries:
-            return None
+        raw = json.loads(SESSION_HISTORY_PATH.read_text())
+        if not raw:
+            return [], None
+        entries = []
         lines = []
-        for entry in entries:
+        for entry in raw:
             role = entry.get("role", "unknown")
             content = entry.get("content", "")
+            entries.append((role, content))
             lines.append(f"[{role}]: {content}")
-        return "\n\n".join(lines)
+        return entries, "\n\n".join(lines)
     except (json.JSONDecodeError, OSError):
-        return None
+        return [], None
 
 
 async def _split_session(conn) -> None:
@@ -233,7 +252,7 @@ async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
 
 
 async def process_message(msg: dict[str, Any], conn) -> None:
-    global _session_id, _orch_session_id, _continuation_summary, _session_transcript
+    global _session_id, _orch_session_id, _continuation_summary, _session_transcript, _current_agentic_task_id
     msg_type = msg.get("type")
 
     if msg_type == "system_command":
@@ -301,6 +320,8 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         sys.stderr.write(f"worker: skipping duplicate message {message_id}\n")
         sys.stderr.flush()
         return
+
+    _current_agentic_task_id = msg.get("agentic_task_id")
 
     content = msg.get("content", "")
     attachments: list[str] = msg.get("attachments", [])
@@ -377,16 +398,22 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         sys.stderr.flush()
 
     response_text = ""
+    partial_text_ref = [""]
+    model_spec = msg.get("model")
+    query_task = asyncio.create_task(run_query(
+        message_id, content, _session_id, emit,
+        conn=conn,
+        retrieved_context=retrieved_context,
+        memory_context=memory_context,
+        continuation_summary=_continuation_summary,
+        facts_context=facts_context,
+        msg_payload=msg,
+        partial_text_ref=partial_text_ref,
+        model_spec=model_spec,
+    ))
+    monitor_task = asyncio.create_task(_cancel_monitor(query_task))
     try:
-        new_session_id, _usage, response_text = await run_query(
-            message_id, content, _session_id, emit,
-            conn=conn,
-            retrieved_context=retrieved_context,
-            memory_context=memory_context,
-            continuation_summary=_continuation_summary,
-            facts_context=facts_context,
-            msg_payload=msg,
-        )
+        new_session_id, _usage, response_text = await query_task
         _session_id = new_session_id
         # Clear continuation summary after it has been consumed
         _continuation_summary = None
@@ -408,6 +435,26 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             )
             sys.stderr.flush()
             await _split_session(conn)
+    except asyncio.CancelledError:
+        response_text = partial_text_ref[0]
+        stopped_text = (
+            response_text + "\n\n[Generation stopped by user]"
+            if response_text
+            else "[Generation stopped by user]"
+        )
+        sys.stderr.write("worker: query cancelled by user\n")
+        sys.stderr.flush()
+        emit({
+            "type": "complete",
+            "content": stopped_text,
+            "message_id": message_id,
+            "usage": {},
+        })
+        drain_pending()
+        _session_id = None
+        _session_transcript.append(("user", content))
+        _session_transcript.append(("assistant", stopped_text))
+        _persist_session_history()
     except Exception as e:
         sys.stderr.write(f"worker: query error: {e}\n")
         sys.stderr.flush()
@@ -417,6 +464,8 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             "fatal": False,
             "message_id": message_id,
         })
+    finally:
+        monitor_task.cancel()
 
     # Clean up uploaded attachment files — the SDK has already read them
     if attachments:
@@ -451,6 +500,7 @@ async def main() -> None:
     # Clean up stale state from a previous run
     if OUTPUT_PATH.exists():
         os.remove(OUTPUT_PATH)
+    CANCEL_PATH.unlink(missing_ok=True)
     conn.execute("DELETE FROM processed_messages")
     conn.commit()
 
@@ -513,11 +563,16 @@ async def main() -> None:
         sys.stderr.write(f"worker: index pruning failed: {e}\n")
         sys.stderr.flush()
 
-    # Restore conversation context from previous session if available
-    history = _load_session_history()
-    if history:
-        _continuation_summary = history
-        sys.stderr.write("worker: loaded session history as continuation context\n")
+    # Restore conversation context from previous session if available.
+    # Pre-populate _session_transcript so old entries survive the next persist.
+    history_entries, history_summary = _load_session_history()
+    if history_entries:
+        _session_transcript = history_entries
+        _continuation_summary = history_summary
+        sys.stderr.write(
+            f"worker: loaded {len(history_entries)} session history entries "
+            "as continuation context\n"
+        )
         sys.stderr.flush()
 
     sys.stderr.write("worker: ready, polling for input.json\n")
@@ -531,6 +586,7 @@ async def main() -> None:
         flush_responses()
 
         if not INPUT_PATH.exists():
+            CANCEL_PATH.unlink(missing_ok=True)
             continue
 
         try:

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { FileEditor } from "@/components/file-editor"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -29,6 +30,8 @@ export function SystemSkillsView() {
   const [newDesc, setNewDesc] = useState("")
   const [newContent, setNewContent] = useState("")
   const [saving, setSaving] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const fetchSkills = useCallback(async () => {
     const res = await fetch("/api/skills")
@@ -88,9 +91,8 @@ export function SystemSkillsView() {
     setSaving(false)
   }
 
-  const handleReset = async () => {
+  const handleResetConfirm = async () => {
     if (!selected) return
-    if (!confirm(`Reset "${selected.name}" to its default content? This cannot be undone.`)) return
     setSaving(true)
     const res = await fetch(`/api/skills/${selected.id}/reset`, {
       method: "POST",
@@ -104,9 +106,9 @@ export function SystemSkillsView() {
     setSaving(false)
   }
 
-  const handleDelete = async (skillId: string) => {
-    if (!confirm("Delete this system skill? This won't affect existing agents.")) return
-    const res = await fetch(`/api/skills/${skillId}`, {
+  const handleDeleteConfirm = async () => {
+    if (!confirmDeleteId) return
+    const res = await fetch(`/api/skills/${confirmDeleteId}`, {
       method: "DELETE",
     })
     if (res.ok) {
@@ -142,7 +144,7 @@ export function SystemSkillsView() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleReset}
+                onClick={() => setConfirmReset(true)}
                 disabled={saving}
               >
                 <RotateCcw className="mr-1.5 size-3.5" />
@@ -152,7 +154,7 @@ export function SystemSkillsView() {
               <Button
                 variant="destructive"
                 size="sm"
-                onClick={() => handleDelete(selected.id)}
+                onClick={() => setConfirmDeleteId(selected.id)}
               >
                 <Trash2 className="mr-1.5 size-3.5" />
                 Delete
@@ -171,6 +173,24 @@ export function SystemSkillsView() {
         <FileEditor
           value={editContent}
           onChange={(v) => setEditContent(v)}
+        />
+        <ConfirmDialog
+          open={confirmReset}
+          onOpenChange={setConfirmReset}
+          title="Reset skill"
+          description={`Reset "${selected.name}" to its default content? This cannot be undone.`}
+          confirmLabel="Reset"
+          destructive
+          onConfirm={handleResetConfirm}
+        />
+        <ConfirmDialog
+          open={confirmDeleteId !== null}
+          onOpenChange={(open) => { if (!open) setConfirmDeleteId(null) }}
+          title="Delete skill"
+          description="Delete this system skill? This won't affect existing agents."
+          confirmLabel="Delete"
+          destructive
+          onConfirm={handleDeleteConfirm}
         />
       </div>
     )
@@ -243,7 +263,7 @@ export function SystemSkillsView() {
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        onClick={() => handleDelete(skill.id)}
+                        onClick={() => setConfirmDeleteId(skill.id)}
                       >
                         <Trash2 className="size-3.5 text-destructive" />
                       </Button>
@@ -326,6 +346,15 @@ export function SystemSkillsView() {
           )}
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onOpenChange={(open) => { if (!open) setConfirmDeleteId(null) }}
+        title="Delete skill"
+        description="Delete this system skill? This won't affect existing agents."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   )
 }

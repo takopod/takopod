@@ -19,9 +19,16 @@ import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { FileBrowserPanel } from "@/components/file-browser-panel"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket"
-import type { Agent } from "@/lib/types"
+import type { Agent, ModelOption } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -29,7 +36,6 @@ import {
   MessageSquare,
   MoreHorizontal,
   Settings,
-  X,
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 import {
@@ -55,6 +61,8 @@ export function App() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newAgentName, setNewAgentName] = useState("")
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [selectedModel, setSelectedModel] = useState("")
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     const saved = localStorage.getItem("takopod:rightPanelWidth")
     return saved ? Number(saved) : 208
@@ -74,7 +82,7 @@ export function App() {
     }
   }, [selectedAgent])
 
-  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages } =
+  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages } =
     useWebSocket(selectedAgentId)
 
   const fetchAgents = useCallback(async () => {
@@ -87,6 +95,23 @@ export function App() {
   useEffect(() => {
     fetchAgents()
   }, [fetchAgents])
+
+  useEffect(() => {
+    fetch("/api/models").then(r => r.ok ? r.json() : []).then(setModelOptions)
+  }, [])
+
+  useEffect(() => {
+    if (modelOptions.length > 0 && !selectedModel) {
+      const saved = localStorage.getItem("takopod:selectedModel")
+      const valid = modelOptions.find(m => m.value === saved)
+      setSelectedModel(valid?.value ?? modelOptions[0].value)
+    }
+  }, [modelOptions, selectedModel])
+
+  const handleModelChange = useCallback((v: string) => {
+    setSelectedModel(v)
+    localStorage.setItem("takopod:selectedModel", v)
+  }, [])
 
   useEffect(() => {
     if (agents.length === 0) return
@@ -265,7 +290,7 @@ export function App() {
                         {selectedAgent?.name ?? "Agent"} is typing...
                       </div>
                     )}
-                    <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} />
+                    <ChatInput onSend={(content, attachments) => sendMessage(content, attachments, selectedModel || undefined)} onStop={stopQuery} isStreaming={messages.some((m) => m.status === "streaming")} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} modelOptions={modelOptions} selectedModel={selectedModel} onModelChange={handleModelChange} />
                   </div>
                 )
               }
@@ -327,9 +352,9 @@ export function App() {
               }
             />
             <Route path="/settings/search-index" element={<SearchIndexView />} />
-            <Route path="/settings/skills" element={<SystemSkillsView />} />
-            <Route path="/settings/mcp" element={<SystemMcpView />} />
-            <Route path="/settings/schedules" element={<SchedulesView />} />
+            <Route path="/skills" element={<SystemSkillsView />} />
+            <Route path="/mcp" element={<SystemMcpView />} />
+            <Route path="/schedules" element={<SchedulesView />} />
           </Routes>
       </SidebarInset>
 
@@ -354,51 +379,40 @@ export function App() {
         </div>
       </aside>
 
-      {showCreateDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-96 rounded-lg border bg-background p-6 shadow-lg">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-medium">Create Agent</h2>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setShowCreateDialog(false)}
-              >
-                <X className="size-4" />
-              </Button>
-            </div>
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="agent-name" className="text-sm">Name</Label>
-                <Input
-                  id="agent-name"
-                  value={newAgentName}
-                  onChange={(e) => setNewAgentName(e.target.value)}
-                  placeholder="My Agent"
-                  autoFocus
-                  onKeyDown={(e) => e.key === "Enter" && handleCreateAgent()}
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowCreateDialog(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleCreateAgent}
-                  disabled={!newAgentName.trim()}
-                >
-                  Create
-                </Button>
-              </div>
-            </div>
+      <Dialog open={showCreateDialog} onOpenChange={(open) => { if (!open) setShowCreateDialog(false) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Create Agent</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="agent-name" className="text-xs">Name</Label>
+            <Input
+              id="agent-name"
+              value={newAgentName}
+              onChange={(e) => setNewAgentName(e.target.value)}
+              placeholder="My Agent"
+              autoFocus
+              onKeyDown={(e) => e.key === "Enter" && handleCreateAgent()}
+            />
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowCreateDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleCreateAgent}
+              disabled={!newAgentName.trim()}
+            >
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SidebarProvider>
   )
 }

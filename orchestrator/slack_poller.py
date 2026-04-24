@@ -31,6 +31,13 @@ SLACK_MESSAGE_CHAR_LIMIT = 40_000
 MIN_POLL_INTERVAL = 10  # seconds — floor for per-channel intervals
 BACKOFF_STEP = 10  # seconds added per consecutive failure
 
+THREAD_BASE_INTERVAL = 10  # seconds — initial poll interval for threads
+THREAD_MAX_INTERVAL = 21600  # 6 hours — cap after idle backoff
+
+# In-memory last-poll monotonic timestamps per thread row_id.
+# The actual interval is persisted in the DB; this only tracks timing.
+_thread_last_poll: dict[str, float] = {}
+
 
 async def run_slack_poller() -> None:
     """Main polling loop — polls each configured channel on its own interval."""
@@ -265,7 +272,7 @@ async def _poll_active_threads() -> None:
 
     async with db.execute(
         "SELECT t.id, t.channel_id, t.thread_ts, t.agent_id, t.last_ts, "
-        "a.name AS agent_name "
+        "t.poll_interval, a.name AS agent_name "
         "FROM slack_active_threads t "
         "JOIN agents a ON a.id = t.agent_id AND a.status = 'active'",
     ) as cur:
@@ -279,18 +286,42 @@ async def _poll_active_threads() -> None:
         return
 
     config = _read_slack_config()
+    now = asyncio.get_running_loop().time()
+    active_ids: set[str] = set()
 
-    for row_id, channel_id, thread_ts, agent_id, last_ts, agent_name in threads:
+    for row_id, channel_id, thread_ts, agent_id, last_ts, poll_interval, agent_name in threads:
+        active_ids.add(row_id)
+        last = _thread_last_poll.get(row_id, 0)
+        if now - last < poll_interval:
+            continue
         try:
-            await _poll_thread(
+            dispatched = await _poll_thread(
                 client, row_id, channel_id, thread_ts,
                 agent_id, agent_name, last_ts, config,
             )
+            _thread_last_poll[row_id] = now
+            new_interval = (
+                THREAD_BASE_INTERVAL
+                if dispatched
+                else min(poll_interval * 2, THREAD_MAX_INTERVAL)
+            )
+            if new_interval != poll_interval:
+                await db.execute(
+                    "UPDATE slack_active_threads SET poll_interval = ? "
+                    "WHERE id = ?",
+                    (new_interval, row_id),
+                )
+                await db.commit()
         except Exception:
             logger.exception(
                 "Failed to poll thread %s/%s for agent %s",
                 channel_id, thread_ts, agent_name,
             )
+
+    # Clean up timing state for removed threads
+    for rid in list(_thread_last_poll):
+        if rid not in active_ids:
+            del _thread_last_poll[rid]
 
 
 async def _poll_thread(
@@ -302,13 +333,15 @@ async def _poll_thread(
     agent_name: str,
     last_ts: str,
     config: dict | None,
-) -> None:
+) -> bool:
     """Fetch new replies in a thread and dispatch to the agent.
 
     Only replies that mention the agent (``AgentName: message``) are
     dispatched — same mention-matching as channel polling.  When a mention
     is found, the full thread history is fetched and prepended as context
     so the agent can produce an informed response.
+
+    Returns True if any messages were dispatched, False otherwise.
     """
     try:
         response = await asyncio.to_thread(
@@ -323,11 +356,11 @@ async def _poll_thread(
             "Slack API error polling thread %s/%s: %s",
             channel_id, thread_ts, e,
         )
-        return
+        return False
 
     messages = response.get("messages", [])
     if not messages:
-        return
+        return False
 
     highest_ts = last_ts
     agent_map = {agent_name.lower(): agent_id}
@@ -430,6 +463,8 @@ async def _poll_thread(
             (highest_ts, now, row_id),
         )
         await db.commit()
+
+    return bool(to_dispatch)
 
 
 _THREAD_CONTEXT_MAX_MESSAGES = 500

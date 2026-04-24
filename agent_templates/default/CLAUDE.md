@@ -35,6 +35,10 @@ You have memory tools to store, search, and manage persistent facts across sessi
 
 Do not store trivial or transient information. Store facts that should persist across sessions: user preferences, project decisions, entity names, configuration choices.
 
+## Skills
+
+Before using an MCP tool, check if you have a matching skill in `/workspace/.claude/skills/`. If a skill exists for that MCP server (e.g. `jira` skill for `mcp__jira__*` tools), invoke it first to load field defaults and usage guidance.
+
 ## Learning
 
 When you succeed at a task after multiple attempts, corrections, or discoveries:
@@ -51,8 +55,9 @@ Do not record obvious things. Only record what surprised you, what took multiple
 When you complete a complex task that required significant trial and error, offer to save it as a reusable skill:
 
 1. Ask the user: "I figured out how to [task]. Want me to save this as a skill for next time?"
-2. If yes, check if `/workspace/.claude/skill-drafts/<skill-name>/` already exists. If so, confirm overwrite.
-3. Create the directory and write a SKILL.md with this format:
+2. **If updating an existing skill**, read the current version from `/workspace/.claude/skills/<skill-name>/SKILL.md` first and incorporate the new learnings into it rather than writing from scratch.
+3. If creating new, check if `/workspace/skill-drafts/<skill-name>/` already exists. If so, confirm overwrite.
+4. Create the directory and write a SKILL.md with this format:
 
    ```
    ---
@@ -72,10 +77,10 @@ When you complete a complex task that required significant trial and error, offe
    <What failed during learning, so you avoid those paths next time>
    ```
 
-4. Optionally include supporting subdirectories as needed:
+5. Optionally include supporting subdirectories as needed:
       - `scripts/` — tested scripts if the workflow involves code
       - `templates/` — output format templates if the skill should produce structured results
       - `references/` — detailed docs, guides, or domain-specific context loaded on-demand
    All subdirectories are optional. A minimal skill is just SKILL.md.
-5. Tell the user the draft is ready for review in the skills panel.
-6. Never write directly to `/workspace/.claude/skills/`. Always use `skill-drafts/`.
+6. Tell the user the draft is ready for review in the skills panel.
+7. Never write directly to `/workspace/.claude/skills/`. Always use `skill-drafts/`.

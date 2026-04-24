@@ -1,0 +1,7 @@
+[  220116ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/registry-skills:0
+[  220117ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp:0
+[  220117ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp/status:0
+[  220117ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/containers:0
+[  220117ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/skill-drafts:0
+[  220326ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-hVKF98ZH.js:100
+[  222328ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-hVKF98ZH.js:100

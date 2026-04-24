@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 
 import { ArrowLeft, FileText, RefreshCw, Trash2 } from "lucide-react"
 
@@ -31,6 +32,7 @@ const ACTIVE_STATUSES = new Set(["running", "starting", "idle"])
 export function ContainersView() {
   const [containers, setContainers] = useState<Container[]>([])
   const [loading, setLoading] = useState(false)
+  const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
   const navigate = useNavigate()
 
   const fetchContainers = useCallback(async () => {
@@ -46,12 +48,10 @@ export function ContainersView() {
     fetchContainers()
   }, [fetchContainers])
 
-  const handleKill = async (id: string) => {
-    if (!confirm("Kill this container?")) return
-    const res = await fetch(`/api/containers/${id}`, { method: "DELETE" })
-    if (res.ok) {
-      fetchContainers()
-    }
+  const handleKillConfirm = async () => {
+    if (!confirmKillId) return
+    const res = await fetch(`/api/containers/${confirmKillId}`, { method: "DELETE" })
+    if (res.ok) fetchContainers()
   }
 
   const handleViewLogs = (c: Container) => {
@@ -95,7 +95,7 @@ export function ContainersView() {
                     <ContainerCard
                       key={c.id}
                       container={c}
-                      onKill={handleKill}
+                      onKill={(id) => setConfirmKillId(id)}
                       onViewLogs={handleViewLogs}
                     />
                   ))}
@@ -121,6 +121,15 @@ export function ContainersView() {
           </>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmKillId !== null}
+        onOpenChange={(open) => { if (!open) setConfirmKillId(null) }}
+        title="Kill container"
+        description="Kill this container? The agent will need to restart it on the next message."
+        confirmLabel="Kill"
+        destructive
+        onConfirm={handleKillConfirm}
+      />
     </div>
   )
 }

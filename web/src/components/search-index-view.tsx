@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -87,6 +88,8 @@ export function SearchIndexView() {
   const [stats, setStats] = useState<IndexStats | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
   const [rebuildResult, setRebuildResult] = useState<string | null>(null)
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null)
+  const [confirmRebuild, setConfirmRebuild] = useState(false)
 
   const fetchAgents = useCallback(async () => {
     const res = await fetch("/api/agents")
@@ -157,15 +160,14 @@ export function SearchIndexView() {
     setPrevAgent(selectedAgentId)
   }, [selectedAgentId])
 
-  const handleDelete = async (chunkKey: string) => {
-    if (isAllAgents) return
-    if (!confirm("Delete this entry from the search index?")) return
+  const handleDeleteConfirm = async () => {
+    if (isAllAgents || !confirmDeleteKey) return
     const res = await fetch(
-      `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(chunkKey)}`,
+      `/api/agents/${selectedAgentId}/search-index/${encodeURIComponent(confirmDeleteKey)}`,
       { method: "DELETE" },
     )
     if (res.ok) {
-      setResults((prev) => prev.filter((r) => r.chunk_key !== chunkKey))
+      setResults((prev) => prev.filter((r) => r.chunk_key !== confirmDeleteKey))
       fetchStats()
     }
   }
@@ -224,12 +226,6 @@ export function SearchIndexView() {
 
   const handleFullRebuild = async () => {
     if (isAllAgents) return
-    if (
-      !confirm(
-        "Full rebuild will drop and recreate all search indexes from memory files on disk. Continue?",
-      )
-    )
-      return
     setRebuilding(true)
     setRebuildResult(null)
     const res = await fetch(
@@ -350,7 +346,7 @@ export function SearchIndexView() {
               {!isAllAgents && (
                 <Button
                   variant="outline"
-                  onClick={handleFullRebuild}
+                  onClick={() => setConfirmRebuild(true)}
                   disabled={rebuilding}
                 >
                   <RotateCcw
@@ -481,7 +477,7 @@ export function SearchIndexView() {
                                   <Button
                                     variant="destructive"
                                     size="sm"
-                                    onClick={() => handleDelete(entry.chunk_key)}
+                                    onClick={() => setConfirmDeleteKey(entry.chunk_key)}
                                     title="Delete from index"
                                   >
                                     <Trash2 className="size-3.5" />
@@ -529,6 +525,23 @@ export function SearchIndexView() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDeleteKey !== null}
+        onOpenChange={(open) => { if (!open) setConfirmDeleteKey(null) }}
+        title="Delete entry"
+        description="Delete this entry from the search index?"
+        confirmLabel="Delete"
+        destructive
+        onConfirm={handleDeleteConfirm}
+      />
+      <ConfirmDialog
+        open={confirmRebuild}
+        onOpenChange={setConfirmRebuild}
+        title="Full rebuild"
+        description="Full rebuild will drop and recreate all search indexes from memory files on disk. Continue?"
+        confirmLabel="Rebuild"
+        onConfirm={handleFullRebuild}
+      />
     </div>
   )
 }

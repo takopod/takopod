@@ -321,7 +321,7 @@ async def execute_agentic_task(
     allowed_tools: list[str],
 ) -> None:
     """Queue a scheduled task prompt through the normal message path."""
-    from orchestrator.ipc import store_scheduled_message
+    from orchestrator.ipc import _activity_signaled, store_scheduled_message
     from orchestrator.routes import ensure_worker_headless
 
     db = await get_db()
@@ -358,6 +358,40 @@ async def execute_agentic_task(
             pass
     finally:
         _running_agentic.pop(task_id, None)
+        await _apply_backoff(task_id, _activity_signaled)
+
+
+async def _apply_backoff(task_id: str, activity_signaled: set[str]) -> None:
+    """Double the task's interval if backoff is enabled and no activity was signaled."""
+    if task_id in activity_signaled:
+        activity_signaled.discard(task_id)
+        return
+
+    db = await get_db()
+    async with db.execute(
+        "SELECT interval_seconds, base_interval_seconds, max_interval_seconds "
+        "FROM agentic_tasks WHERE id = ?",
+        (task_id,),
+    ) as cur:
+        row = await cur.fetchone()
+
+    if not row:
+        return
+    interval, base, max_interval = row
+    if base is None or max_interval is None:
+        return
+
+    new_interval = min(interval * 2, max_interval)
+    if new_interval != interval:
+        await db.execute(
+            "UPDATE agentic_tasks SET interval_seconds = ? WHERE id = ?",
+            (new_interval, task_id),
+        )
+        await db.commit()
+        logger.info(
+            "Agentic task %s backoff: %ds -> %ds (max %ds)",
+            task_id[:8], interval, new_interval, max_interval,
+        )
 
 
 async def _wait_for_completion(

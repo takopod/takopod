@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { FileEditor } from "@/components/file-editor"
-import { ArrowLeft, Pencil, Plus, Search, Square, X } from "lucide-react"
+import { ArrowLeft, Pencil, Plus, Search, Square, Trash2, X } from "lucide-react"
 
 interface RegistrySkill {
   id: string
   name: string
   description: string
   builtin: boolean
-  enabled: boolean
   always_enabled: boolean
 }
 
@@ -58,7 +58,6 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<SkillDetail | null>(null)
   const [stopping, setStopping] = useState(false)
-  const [toggling, setToggling] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [searchFocused, setSearchFocused] = useState(false)
   const [customSkills, setCustomSkills] = useState<CustomSkill[]>([])
@@ -67,6 +66,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
   const [draftEditing, setDraftEditing] = useState(false)
   const [draftEditContent, setDraftEditContent] = useState("")
   const [draftError, setDraftError] = useState<string | null>(null)
+  const [confirmDeleteSkill, setConfirmDeleteSkill] = useState(false)
 
   const fetchSkills = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/registry-skills`)
@@ -153,21 +153,6 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
     } finally {
       setStopping(false)
     }
-  }
-
-  const handleToggle = async (skillId: string, enabled: boolean) => {
-    setToggling(skillId)
-    const res = await fetch(`/api/agents/${agentId}/registry-skills/${skillId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
-    })
-    if (res.ok) {
-      setSkills((prev) =>
-        prev.map((s) => (s.id === skillId ? { ...s, enabled } : s)),
-      )
-    }
-    setToggling(null)
   }
 
   const handleAdd = async (skillId: string) => {
@@ -331,6 +316,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
   if (selected) {
     const isCustom = !selected.builtin && customSkills.some((s) => s.id === selected.id)
     return (
+    <>
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-3 border-b px-4 py-2">
           <Button
@@ -390,21 +376,51 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                 </Button>
               </>
             ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setDraftEditContent(selected.content)
-                  setDraftEditing(true)
-                }}
-              >
-                <Pencil className="mr-1.5 size-3" />
-                Edit
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDraftEditContent(selected.content)
+                    setDraftEditing(true)
+                  }}
+                >
+                  <Pencil className="mr-1.5 size-3" />
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive ml-auto"
+                  onClick={() => setConfirmDeleteSkill(true)}
+                >
+                  <Trash2 className="mr-1.5 size-3" />
+                  Delete
+                </Button>
+              </>
             )}
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDeleteSkill}
+        onOpenChange={setConfirmDeleteSkill}
+        title="Delete skill"
+        description={`Delete custom skill "${selected.name}"?`}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={async () => {
+          const res = await fetch(`/api/agents/${agentId}/skills/${selected.id}`, {
+            method: "DELETE",
+          })
+          if (res.ok) {
+            setSelected(null)
+            navigate(basePath)
+            fetchCustomSkills()
+          }
+        }}
+      />
+    </>
     )
   }
 
@@ -498,7 +514,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {available.length === 0
                         ? <>No skills available. Add skills in the global{" "}
-                            <Link to="/settings/skills" className="underline">System Skills</Link>{" "}
+                            <Link to="/skills" className="underline">System Skills</Link>{" "}
                             settings.</>
                         : "No matching skills."}
                     </p>
@@ -546,20 +562,6 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                     key={skill.id}
                     className="flex items-center gap-3 rounded-md border px-4 py-2.5"
                   >
-                    <button
-                      type="button"
-                      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        skill.enabled ? "bg-primary" : "bg-input"
-                      } ${toggling === skill.id || skill.always_enabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                      disabled={toggling === skill.id || skill.always_enabled}
-                      onClick={() => handleToggle(skill.id, !skill.enabled)}
-                    >
-                      <span
-                        className={`pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-                          skill.enabled ? "translate-x-4" : "translate-x-0"
-                        }`}
-                      />
-                    </button>
                     <button
                       type="button"
                       className="flex flex-1 flex-col gap-0.5 text-left hover:underline"

@@ -29,6 +29,7 @@ class UserMessageFrame(BaseModel):
     content: str = Field(..., min_length=1, max_length=10_000)
     message_id: str
     attachments: list[str] = []  # relative paths within workspace (e.g. "uploads/abc/file.png")
+    model: str | None = None
 
 
 class QueueStatusFrame(BaseModel):
@@ -96,6 +97,10 @@ class SystemErrorFrame(BaseModel):
 class SystemCommandFrame(BaseModel):
     type: Literal["system_command"]
     command: Literal["clear_context", "shutdown"]
+
+
+class StopQueryFrame(BaseModel):
+    type: Literal["stop_query"]
 
 
 class GhApprovalRequestFrame(BaseModel):
@@ -177,10 +182,6 @@ class UpdateMcpServerRequest(BaseModel):
     timeout: float | None = None
 
 
-class McpServerToggle(BaseModel):
-    enabled: bool
-
-
 class ToolConfigRequest(BaseModel):
     builtin: list[str]
     permission_mode: str = "acceptEdits"
@@ -228,12 +229,7 @@ class RegistrySkillSummary(BaseModel):
     name: str
     description: str
     builtin: bool = False
-    enabled: bool = True
     always_enabled: bool = False
-
-
-class RegistrySkillToggle(BaseModel):
-    enabled: bool
 
 
 class ScheduleResponse(BaseModel):
@@ -241,12 +237,24 @@ class ScheduleResponse(BaseModel):
     agent_id: str
     agent_name: str
     prompt: str
-    allowed_tools: list[str]
     interval_seconds: int
+    trigger_type: str
+    base_interval_seconds: int | None = None
+    max_interval_seconds: int | None = None
     last_executed_at: str | None
     last_result: str | None
     status: str
     created_at: str
+
+
+class ScheduleCreateRequest(BaseModel):
+    agent_id: str
+    prompt: str
+    trigger_type: Literal["interval", "file_watch", "webhook"] = "interval"
+    interval_minutes: int | None = Field(None, ge=5)
+    watch_dir: str | None = None
+    base_interval_minutes: int | None = Field(None, ge=5)
+    max_interval_minutes: int | None = Field(None, ge=5)
 
 
 class SlackConfigRequest(BaseModel):

@@ -1,0 +1,17 @@
+[  308833ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-Cr7p8c7t.js:100
+[  310122ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/registry-skills:0
+[  310123ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp:0
+[  310123ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp/status:0
+[  310123ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/containers:0
+[  310123ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/skill-drafts:0
+[  310839ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-Cr7p8c7t.js:100
+[  314843ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-Cr7p8c7t.js:100
+[  315124ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp:0
+[  315124ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp/status:0
+[  315124ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/containers:0
+[  320122ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/registry-skills:0
+[  320122ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp:0
+[  320122ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp/status:0
+[  320123ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/containers:0
+[  320124ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/skill-drafts:0
+[  322845ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-Cr7p8c7t.js:100

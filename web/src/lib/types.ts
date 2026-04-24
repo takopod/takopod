@@ -3,6 +3,7 @@ export interface UserMessageFrame {
   content: string
   message_id: string
   attachments?: string[]  // relative workspace paths from upload endpoint
+  model?: string
 }
 
 export interface QueueStatusFrame {
@@ -114,4 +115,11 @@ export interface Agent {
   container_memory?: string
   container_cpus?: string
   model?: string | null
+}
+
+export interface ModelOption {
+  value: string
+  label: string
+  model_id: string
+  effort: string
 }

@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -9,16 +18,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import {
   ChevronDown,
   ChevronRight,
+  Copy,
   Pause,
   Pencil,
   Play,
-  RefreshCw,
-  Save,
+  Plus,
   Trash2,
-  X,
 } from "lucide-react"
 
 interface Schedule {
@@ -26,8 +35,10 @@ interface Schedule {
   agent_id: string
   agent_name: string
   prompt: string
-  allowed_tools: string[]
   interval_seconds: number
+  trigger_type: string
+  base_interval_seconds: number | null
+  max_interval_seconds: number | null
   last_executed_at: string | null
   last_result: string | null
   status: string
@@ -39,29 +50,72 @@ interface Agent {
   name: string
 }
 
+interface WebhookInfo {
+  webhook_url: string
+  webhook_secret: string
+}
+
+function formatInterval(seconds: number): string {
+  if (seconds <= 0) return "-"
+  const mins = Math.floor(seconds / 60)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  const rem = mins % 60
+  return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`
+}
+
+function triggerLabel(t: string): string {
+  if (t === "file_watch") return "file watch"
+  return t
+}
+
 export function SchedulesView() {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [editTriggerType, setEditTriggerType] = useState("")
   const [editPrompt, setEditPrompt] = useState("")
   const [editAgentId, setEditAgentId] = useState("")
   const [editInterval, setEditInterval] = useState("")
+  const [editBaseInterval, setEditBaseInterval] = useState("")
+  const [editMaxInterval, setEditMaxInterval] = useState("")
+
+  const [showCreate, setShowCreate] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [createError, setCreateError] = useState("")
+  const [newAgentId, setNewAgentId] = useState("")
+  const [newTriggerType, setNewTriggerType] = useState("interval")
+  const [newPrompt, setNewPrompt] = useState("")
+  const [newIntervalMinutes, setNewIntervalMinutes] = useState("10")
+  const [newWatchDir, setNewWatchDir] = useState("")
+  const [newBaseInterval, setNewBaseInterval] = useState("")
+  const [newMaxInterval, setNewMaxInterval] = useState("")
+  const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const fetchSchedules = useCallback(async () => {
     setLoading(true)
-    const res = await fetch("/api/schedules")
-    if (res.ok) {
-      setSchedules(await res.json())
+    try {
+      const res = await fetch("/api/schedules")
+      if (res.ok) {
+        setSchedules(await res.json())
+      }
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }, [])
 
   const fetchAgents = useCallback(async () => {
-    const res = await fetch("/api/agents")
-    if (res.ok) {
-      setAgents(await res.json())
+    try {
+      const res = await fetch("/api/agents")
+      if (res.ok) {
+        setAgents(await res.json())
+      }
+    } catch {
+      // network error
     }
   }, [])
 
@@ -76,17 +130,20 @@ export function SchedulesView() {
     if (res.ok) fetchSchedules()
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this scheduled task? This cannot be undone.")) return
-    const res = await fetch(`/api/schedules/${id}`, { method: "DELETE" })
+  const handleDeleteConfirm = async () => {
+    if (!confirmDeleteId) return
+    const res = await fetch(`/api/schedules/${confirmDeleteId}`, { method: "DELETE" })
     if (res.ok) fetchSchedules()
   }
 
   const startEditing = (s: Schedule) => {
     setEditingId(s.id)
+    setEditTriggerType(s.trigger_type)
     setEditPrompt(s.prompt)
     setEditAgentId(s.agent_id)
-    setEditInterval(String(s.interval_seconds))
+    setEditInterval(String(Math.floor(s.interval_seconds / 60)))
+    setEditBaseInterval(s.base_interval_seconds ? String(Math.floor(s.base_interval_seconds / 60)) : "")
+    setEditMaxInterval(s.max_interval_seconds ? String(Math.floor(s.max_interval_seconds / 60)) : "")
   }
 
   const cancelEditing = () => {
@@ -94,14 +151,24 @@ export function SchedulesView() {
   }
 
   const saveEditing = async (id: string) => {
+    const body: Record<string, unknown> = {
+      prompt: editPrompt,
+      agent_id: editAgentId,
+    }
+
+    if (editTriggerType === "interval") {
+      body.interval_seconds = (parseInt(editInterval) || 1) * 60
+
+      const base = parseInt(editBaseInterval)
+      const max = parseInt(editMaxInterval)
+      body.base_interval_seconds = !isNaN(base) && base > 0 ? base * 60 : null
+      body.max_interval_seconds = !isNaN(max) && max > 0 ? max * 60 : null
+    }
+
     const res = await fetch(`/api/schedules/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: editPrompt,
-        agent_id: editAgentId,
-        interval_seconds: parseInt(editInterval) || 60,
-      }),
+      body: JSON.stringify(body),
     })
     if (res.ok) {
       setEditingId(null)
@@ -109,197 +176,460 @@ export function SchedulesView() {
     }
   }
 
+  const resetCreateForm = () => {
+    setNewAgentId("")
+    setNewTriggerType("interval")
+    setNewPrompt("")
+    setNewIntervalMinutes("10")
+    setNewWatchDir("")
+    setNewBaseInterval("")
+    setNewMaxInterval("")
+    setWebhookInfo(null)
+    setCreateError("")
+  }
+
+  const closeCreateDialog = () => {
+    setShowCreate(false)
+    resetCreateForm()
+  }
+
+  const handleCreate = async () => {
+    if (!newAgentId || !newPrompt.trim()) return
+    setSaving(true)
+    setCreateError("")
+
+    try {
+      const body: Record<string, unknown> = {
+        agent_id: newAgentId,
+        prompt: newPrompt.trim(),
+        trigger_type: newTriggerType,
+      }
+
+      if (newTriggerType === "interval") {
+        body.interval_minutes = parseInt(newIntervalMinutes) || 10
+      }
+      if (newTriggerType === "file_watch") {
+        body.watch_dir = newWatchDir.trim()
+      }
+
+      const base = parseInt(newBaseInterval)
+      const max = parseInt(newMaxInterval)
+      if (!isNaN(base) && !isNaN(max) && base > 0 && max > 0) {
+        body.base_interval_minutes = base
+        body.max_interval_minutes = max
+      }
+
+      const res = await fetch("/api/schedules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+
+      if (res.ok) {
+        const data = await res.json()
+        if (data.webhook_url && data.webhook_secret) {
+          setWebhookInfo({
+            webhook_url: data.webhook_url,
+            webhook_secret: data.webhook_secret,
+          })
+        } else {
+          closeCreateDialog()
+        }
+        fetchSchedules()
+      } else {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }))
+        setCreateError(err.detail || JSON.stringify(err))
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasPartialBackoff = Boolean(newBaseInterval) !== Boolean(newMaxInterval)
+  const backoffValid =
+    !newBaseInterval ||
+    !newMaxInterval ||
+    parseInt(newBaseInterval) < parseInt(newMaxInterval)
+
+  const canSubmit =
+    newAgentId &&
+    newPrompt.trim() &&
+    (newTriggerType !== "interval" || parseInt(newIntervalMinutes) >= 5) &&
+    (newTriggerType !== "file_watch" || newWatchDir.trim()) &&
+    !hasPartialBackoff &&
+    backoffValid
+
+  const editingSchedule = schedules.find((s) => s.id === editingId)
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b px-4 py-2">
         <span className="text-sm font-medium">Schedules</span>
-        <Button variant="outline" size="sm" onClick={fetchSchedules} disabled={loading}>
-          <RefreshCw className={`mr-1.5 size-3.5 ${loading ? "animate-spin" : ""}`} />
-          Refresh
+        <Button size="sm" onClick={() => setShowCreate(true)}>
+          <Plus className="mr-1.5 size-3.5" />
+          New Schedule
         </Button>
       </div>
-      <div className="flex-1 overflow-auto">
-        {schedules.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground">
-            {loading
-              ? "Loading..."
-              : "No scheduled tasks. Ask an agent to monitor something to get started."}
-          </p>
-        ) : (
-          <table className="w-full table-fixed text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                <th className="w-6 px-1 py-2" />
-                <th className="w-[7%] px-2 py-2">ID</th>
-                <th className="w-[10%] px-2 py-2">Agent</th>
-                <th className="px-2 py-2">Prompt</th>
-                <th className="w-[8%] px-2 py-2">Tools</th>
-                <th className="w-[6%] px-2 py-2">Interval</th>
-                <th className="w-[12%] px-2 py-2">Last Executed</th>
-                <th className="w-[6%] px-2 py-2">Status</th>
-                <th className="w-[12%] px-2 py-2">Created</th>
-                <th className="w-[12%] px-2 py-2">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {schedules.map((s) => (
-                <>
-                  <tr
-                    key={s.id}
-                    className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer"
-                    onClick={() =>
-                      editingId !== s.id &&
-                      setExpandedId(expandedId === s.id ? null : s.id)
-                    }
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="mx-auto max-w-3xl flex flex-col gap-3">
+          {schedules.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              {loading
+                ? "Loading..."
+                : "No scheduled tasks. Click \"New Schedule\" or ask an agent to create one."}
+            </p>
+          )}
+
+          {schedules.map((s) => (
+            <div key={s.id} className="rounded-md border px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-col gap-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium">{s.agent_name}</span>
+                    <Badge variant="outline" className="text-[10px]">
+                      {triggerLabel(s.trigger_type)}
+                    </Badge>
+                    <Badge variant={s.status === "active" ? "default" : "secondary"}>
+                      {s.status}
+                    </Badge>
+                    {s.interval_seconds > 0 && (
+                      <span className="text-xs text-muted-foreground font-mono">
+                        every {formatInterval(s.interval_seconds)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span className="font-mono">{s.id.slice(0, 8)}</span>
+                    {s.last_executed_at && (
+                      <span>last run: {s.last_executed_at}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => startEditing(s)}
                   >
-                    <td className="px-1 py-2 text-muted-foreground">
-                      {s.last_result ? (
-                        expandedId === s.id ? (
-                          <ChevronDown className="size-3.5" />
-                        ) : (
-                          <ChevronRight className="size-3.5" />
-                        )
-                      ) : null}
-                    </td>
-                    <td
-                      className="truncate px-2 py-2 font-mono text-xs text-muted-foreground"
-                      title={s.id}
+                    <Pencil className="size-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => handleToggle(s.id, s.status)}
+                  >
+                    {s.status === "active" ? (
+                      <Pause className="size-3.5" />
+                    ) : (
+                      <Play className="size-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setConfirmDeleteId(s.id)}
+                  >
+                    <Trash2 className="size-3.5 text-destructive" />
+                  </Button>
+                  {s.last_result && (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setExpandedId(expandedId === s.id ? null : s.id)}
                     >
-                      {s.id.slice(0, 8)}
-                    </td>
-                    <td className="truncate px-2 py-2">
-                      {editingId === s.id ? (
-                        <Select value={editAgentId} onValueChange={setEditAgentId}>
-                          <SelectTrigger className="h-7 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {agents.map((a) => (
-                              <SelectItem key={a.id} value={a.id}>
-                                {a.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      {expandedId === s.id ? (
+                        <ChevronDown className="size-3.5" />
                       ) : (
-                        s.agent_name
+                        <ChevronRight className="size-3.5" />
                       )}
-                    </td>
-                    <td className="truncate px-2 py-2" title={s.prompt}>
-                      {editingId === s.id ? (
-                        <Input
-                          value={editPrompt}
-                          onChange={(e) => setEditPrompt(e.target.value)}
-                          className="h-7 text-xs"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <span className="block truncate">{s.prompt}</span>
-                      )}
-                    </td>
-                    <td className="truncate px-2 py-2 font-mono text-xs">
-                      {s.allowed_tools.length > 0
-                        ? s.allowed_tools.join(", ")
-                        : "-"}
-                    </td>
-                    <td className="px-2 py-2 text-right font-mono">
-                      {editingId === s.id ? (
-                        <Input
-                          value={editInterval}
-                          onChange={(e) => setEditInterval(e.target.value)}
-                          className="h-7 w-full text-xs text-right"
-                          type="number"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        s.interval_seconds
-                      )}
-                    </td>
-                    <td className="truncate px-2 py-2 text-xs">
-                      {s.last_executed_at ?? "-"}
-                    </td>
-                    <td className="px-2 py-2">
-                      <Badge
-                        variant={
-                          s.status === "active" ? "default" : "secondary"
-                        }
-                      >
-                        {s.status}
-                      </Badge>
-                    </td>
-                    <td className="truncate px-2 py-2 text-xs">{s.created_at}</td>
-                    <td
-                      className="px-2 py-2"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <div className="flex items-center gap-1">
-                        {editingId === s.id ? (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => saveEditing(s.id)}
-                            >
-                              <Save className="size-3.5" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={cancelEditing}
-                            >
-                              <X className="size-3.5" />
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => startEditing(s)}
-                            >
-                              <Pencil className="size-3.5" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleToggle(s.id, s.status)}
-                            >
-                              {s.status === "active" ? (
-                                <Pause className="size-3.5" />
-                              ) : (
-                                <Play className="size-3.5" />
-                              )}
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => handleDelete(s.id)}
-                            >
-                              <Trash2 className="size-3.5" />
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                  {expandedId === s.id && s.last_result && (
-                    <tr key={`${s.id}-result`} className="border-b bg-muted/20">
-                      <td colSpan={10} className="px-4 py-3">
-                        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
-                          Last Result
-                        </div>
-                        <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                          {s.last_result}
-                        </pre>
-                      </td>
-                    </tr>
+                    </Button>
                   )}
-                </>
-              ))}
-            </tbody>
-          </table>
-        )}
+                </div>
+              </div>
+              {expandedId === s.id && s.last_result && (
+                <div className="mt-3 border-t pt-3">
+                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
+                    Last Result
+                  </div>
+                  <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                    {s.last_result}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
+
+      {/* Create Schedule Dialog */}
+      <Dialog open={showCreate} onOpenChange={(open) => { if (!open) closeCreateDialog() }}>
+        <DialogContent className="sm:max-w-lg">
+          {webhookInfo ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Webhook Created</DialogTitle>
+              </DialogHeader>
+              <p className="text-xs text-muted-foreground">
+                Save the secret now -- it won't be shown again.
+              </p>
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Webhook URL</Label>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 rounded bg-muted px-2 py-1.5 text-xs break-all">
+                      {webhookInfo.webhook_url}
+                    </code>
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      onClick={() => navigator.clipboard.writeText(webhookInfo.webhook_url)}
+                    >
+                      <Copy className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Bearer Token</Label>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 rounded bg-muted px-2 py-1.5 text-xs break-all">
+                      {webhookInfo.webhook_secret}
+                    </code>
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      onClick={() => navigator.clipboard.writeText(webhookInfo.webhook_secret)}
+                    >
+                      <Copy className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button size="sm" onClick={closeCreateDialog}>
+                  Done
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>New Schedule</DialogTitle>
+              </DialogHeader>
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Agent</Label>
+                  <Select value={newAgentId} onValueChange={setNewAgentId}>
+                    <SelectTrigger className="h-9 text-sm">
+                      <SelectValue placeholder="Select agent" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {agents.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Trigger Type</Label>
+                  <Select value={newTriggerType} onValueChange={setNewTriggerType}>
+                    <SelectTrigger className="h-9 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="interval">Interval (recurring)</SelectItem>
+                      <SelectItem value="file_watch">File Watch</SelectItem>
+                      <SelectItem value="webhook">Webhook (HTTP POST)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Prompt</Label>
+                  <Textarea
+                    value={newPrompt}
+                    onChange={(e) => setNewPrompt(e.target.value)}
+                    placeholder="What should the agent do on each trigger?"
+                    className="min-h-20 resize-none text-sm"
+                  />
+                </div>
+
+                {newTriggerType === "interval" && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label className="text-xs">Interval (minutes, min 5)</Label>
+                    <Input
+                      type="number"
+                      min={5}
+                      value={newIntervalMinutes}
+                      onChange={(e) => setNewIntervalMinutes(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                {newTriggerType === "file_watch" && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label className="text-xs">Watch Directory (relative to workspace)</Label>
+                    <Input
+                      value={newWatchDir}
+                      onChange={(e) => setNewWatchDir(e.target.value)}
+                      placeholder="e.g. incoming/"
+                    />
+                  </div>
+                )}
+
+                {newTriggerType === "webhook" && (
+                  <p className="text-xs text-muted-foreground">
+                    A webhook URL and bearer token will be generated after creation.
+                    Payload (up to 5000 chars) is appended to the prompt.
+                  </p>
+                )}
+
+                {newTriggerType === "interval" && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label className="text-xs">Idle Backoff (optional)</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min={5}
+                        value={newBaseInterval}
+                        onChange={(e) => setNewBaseInterval(e.target.value)}
+                        placeholder="Base (min)"
+                        className="flex-1"
+                      />
+                      <span className="text-xs text-muted-foreground">to</span>
+                      <Input
+                        type="number"
+                        min={5}
+                        value={newMaxInterval}
+                        onChange={(e) => setNewMaxInterval(e.target.value)}
+                        placeholder="Max (min)"
+                        className="flex-1"
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      If idle, interval doubles up to max. signal_activity resets to base.
+                    </p>
+                  </div>
+                )}
+
+                {createError && (
+                  <p className="text-xs text-destructive">{createError}</p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" size="sm" onClick={closeCreateDialog}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleCreate}
+                  disabled={!canSubmit || saving}
+                >
+                  {saving ? "Creating..." : "Create"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Schedule Dialog */}
+      {editingSchedule && (
+        <Dialog open onOpenChange={(open) => { if (!open) cancelEditing() }}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <div className="flex items-center gap-2">
+                <DialogTitle>Edit Schedule</DialogTitle>
+                <Badge variant="outline" className="text-[10px]">
+                  {triggerLabel(editingSchedule.trigger_type)}
+                </Badge>
+              </div>
+            </DialogHeader>
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Agent</Label>
+                <Select value={editAgentId} onValueChange={setEditAgentId}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {agents.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Prompt</Label>
+                <Textarea
+                  value={editPrompt}
+                  onChange={(e) => setEditPrompt(e.target.value)}
+                  className="min-h-20 resize-none text-sm"
+                />
+              </div>
+              {editTriggerType === "interval" && (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Interval (minutes, min 5)</Label>
+                  <Input
+                    type="number"
+                    min={5}
+                    value={editInterval}
+                    onChange={(e) => setEditInterval(e.target.value)}
+                  />
+                </div>
+              )}
+              {editTriggerType === "interval" && (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Idle Backoff (optional, minutes)</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      value={editBaseInterval}
+                      onChange={(e) => setEditBaseInterval(e.target.value)}
+                      placeholder="Base"
+                      className="flex-1"
+                    />
+                    <span className="text-xs text-muted-foreground">to</span>
+                    <Input
+                      type="number"
+                      value={editMaxInterval}
+                      onChange={(e) => setEditMaxInterval(e.target.value)}
+                      placeholder="Max"
+                      className="flex-1"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    If idle, interval doubles up to max. signal_activity resets to base.
+                  </p>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" size="sm" onClick={cancelEditing}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => saveEditing(editingSchedule.id)}>
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onOpenChange={(open) => { if (!open) setConfirmDeleteId(null) }}
+        title="Delete schedule"
+        description="Delete this scheduled task? This cannot be undone."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   )
 }

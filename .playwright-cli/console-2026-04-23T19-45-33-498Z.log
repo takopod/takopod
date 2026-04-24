@@ -1,0 +1,5 @@
+[  184054ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-BZKCY-4Q.js:100
+[  185109ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp:0
+[  185109ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/agents/5351913b-e406-4907-854a-eb9439f2e960/mcp/status:0
+[  185109ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/api/containers:0
+[  186056ms] [ERROR] WebSocket connection to 'ws://localhost:8000/api/ws?agent_id=5351913b-e406-4907-854a-eb9439f2e960' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:8000/assets/index-BZKCY-4Q.js:100

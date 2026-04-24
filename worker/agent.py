@@ -19,6 +19,7 @@ from worker.context_budget import (
     get_config,
     log_usage_report,
 )
+from worker.model_config import parse_model_spec
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -299,6 +300,8 @@ async def run_query(
     continuation_summary: str | None = None,
     facts_context: str | None = None,
     msg_payload: dict[str, Any] | None = None,
+    partial_text_ref: list[str] | None = None,
+    model_spec: str | None = None,
 ) -> tuple[str | None, dict[str, Any], str]:
     """Run a query through the Claude Agent SDK.
 
@@ -346,6 +349,8 @@ async def run_query(
             f"{output_str}\n"
         )
         sys.stderr.flush()
+        if tool_name in ("Write", "Edit", "Bash"):
+            os.sync()
         emit({
             "type": "tool_result",
             "tool_call_id": tool_use_id,
@@ -376,7 +381,7 @@ async def run_query(
 
     # Check if skills exist to enable the Skill tool
     skills_dir = WORKSPACE / ".claude" / "skills"
-    has_skills = skills_dir.is_dir() and any(skills_dir.iterdir())
+    has_skills = skills_dir.is_dir() and any(p.is_dir() for p in skills_dir.iterdir())
 
     allowed = [*builtin_tools, *BUILTIN_TOOL_NAMES, *mcp_proxy_tool_names]
     if has_skills:
@@ -395,10 +400,17 @@ async def run_query(
             "PostToolUse": [HookMatcher(matcher=".*", hooks=[on_post_tool])],
         },
     }
-
-    configured_model = os.environ.get("TAKOPOD_MODEL")
-    if configured_model:
-        opts_kwargs["model"] = configured_model
+    # Model priority: model_spec parameter > TAKOPOD_MODEL env var > SDK default
+    if model_spec:
+        model_id, effort = parse_model_spec(model_spec)
+        if model_id:
+            opts_kwargs["model"] = model_id
+        if effort:
+            opts_kwargs["effort"] = effort
+    else:
+        configured_model = os.environ.get("TAKOPOD_MODEL")
+        if configured_model:
+            opts_kwargs["model"] = configured_model
     if session_id:
         opts_kwargs["resume"] = session_id
 
@@ -442,6 +454,8 @@ async def run_query(
                         "seq": seq,
                     })
             current_text = "\n\n".join(full_text_parts)
+            if partial_text_ref is not None:
+                partial_text_ref[0] = current_text
             if current_text != last_emitted_text:
                 emit({
                     "type": "assistant_message",

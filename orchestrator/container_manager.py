@@ -41,6 +41,23 @@ async def _run(cmd: list[str], check: bool = True) -> asyncio.subprocess.Process
     return proc
 
 
+def _claude_auth_args() -> list[str]:
+    """Return podman args for Claude auth.
+
+    Prefers subscription OAuth (CLAUDE_CODE_OAUTH_TOKEN) if set, else falls
+    back to Vertex AI via mounted gcloud credentials.
+    """
+    oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if oauth_token:
+        return ["-e", f"CLAUDE_CODE_OAUTH_TOKEN={oauth_token}"]
+    return [
+        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
+        "-e", "CLAUDE_CODE_USE_VERTEX=1",
+        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
+        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+    ]
+
+
 async def ensure_network() -> None:
     proc = await asyncio.create_subprocess_exec(
         PODMAN, "network", "exists", NETWORK,
@@ -109,19 +126,6 @@ def _scan_skills_dir(sdir: Path) -> list[str]:
     return ids
 
 
-def _list_registry_skill_ids() -> list[str]:
-    """Scan both user and builtin skill directories and return all skill IDs.
-
-    User skills (data/skills/) take precedence over builtin skills (skills/).
-    """
-    seen: set[str] = set()
-    ids: list[str] = []
-    for skill_id in _scan_skills_dir(USER_SKILLS_DIR) + _scan_skills_dir(BUILTIN_SKILLS_DIR):
-        if skill_id not in seen:
-            seen.add(skill_id)
-            ids.append(skill_id)
-    return ids
-
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
 
@@ -154,7 +158,7 @@ def _find_skill_source(skill_id: str) -> Path | None:
 
 
 def _copy_system_skill(skill_id: str, dest_skills: Path) -> None:
-    """Copy a single system skill into an agent's .claude/skills/ directory."""
+    """Copy a single system skill into the destination skills directory."""
     sdir = _find_skill_source(skill_id)
     if not sdir:
         return
@@ -178,39 +182,35 @@ async def seed_agent_skills(agent_id: str) -> None:
         if not _is_always_enabled_skill(skill_id):
             continue
         await db.execute(
-            "INSERT INTO agent_skills (agent_id, skill_id, enabled) "
-            "VALUES (?, ?, 1) ON CONFLICT(agent_id, skill_id) DO NOTHING",
+            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
             (agent_id, skill_id),
         )
     await db.commit()
 
 
 async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:
-    """Sync registry skills into an agent's workspace based on enabled flags.
+    """Sync registry skills into an agent's .claude/skills/ directory.
 
-    - Reads enabled skill IDs from agent_skills table
-    - Removes registry skills that are disabled or no longer in the registry
-    - Copies enabled registry skills from skills/ into .claude/skills/
+    - Reads skill IDs from agent_skills table
+    - Removes registry skills no longer in the registry
+    - Copies active registry skills directly into .claude/skills/
     - Preserves custom (non-registry) agent skills
     """
     db = await get_db()
     dest_skills = host_dir / ".claude" / "skills"
     dest_skills.mkdir(parents=True, exist_ok=True)
 
-    # Get enabled skill IDs from DB
     async with db.execute(
-        "SELECT skill_id FROM agent_skills WHERE agent_id = ? AND enabled = 1",
+        "SELECT skill_id FROM agent_skills WHERE agent_id = ?",
         (agent_id,),
     ) as cur:
         rows = await cur.fetchall()
-    enabled_ids = {row[0] for row in rows}
+    active_ids = {row[0] for row in rows}
 
-    # Only always_enabled builtin skills are force-enabled regardless of DB state
     for sid in _scan_skills_dir(BUILTIN_SKILLS_DIR):
         if _is_always_enabled_skill(sid):
-            enabled_ids.add(sid)
+            active_ids.add(sid)
 
-    # Read current registry manifest (tracks which skills in workspace came from registry)
     manifest_path = dest_skills / REGISTRY_MANIFEST
     previous_registry: set[str] = set()
     if manifest_path.is_file():
@@ -219,20 +219,17 @@ async def sync_agent_skills(agent_id: str, host_dir: Path) -> None:
         except (json.JSONDecodeError, OSError):
             pass
 
-    # Remove registry skills that are no longer enabled
-    for skill_id in previous_registry - enabled_ids:
+    for skill_id in previous_registry - active_ids:
         skill_dir = dest_skills / skill_id
         if skill_dir.is_dir():
             shutil.rmtree(skill_dir)
-            logger.debug("Removed disabled registry skill %s for agent %s", skill_id, agent_id)
+            logger.debug("Removed registry skill %s for agent %s", skill_id, agent_id)
 
-    # Copy/update enabled registry skills
-    for skill_id in enabled_ids:
+    for skill_id in active_ids:
         _copy_system_skill(skill_id, dest_skills)
 
-    # Write updated manifest
-    manifest_path.write_text(json.dumps(sorted(enabled_ids)))
-    logger.debug("Synced %d registry skills for agent %s", len(enabled_ids), agent_id)
+    manifest_path.write_text(json.dumps(sorted(active_ids)))
+    logger.debug("Synced %d registry skills for agent %s", len(active_ids), agent_id)
 
 
 async def write_workspace_settings(host_dir: Path) -> None:
@@ -317,10 +314,7 @@ async def spawn_container(
         "--tmpfs", "/tmp:rw,size=512m",
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
-        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
-        "-e", "CLAUDE_CODE_USE_VERTEX=1",
-        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
-        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+        *_claude_auth_args(),
         "-e", f"OLLAMA_ENABLED={ollama_enabled}",
     ]
 
@@ -399,10 +393,7 @@ async def spawn_scheduled_container(
         "--tmpfs", "/tmp:rw,size=512m",
         "--tmpfs", "/var/tmp:rw,size=64m",
         "-v", f"{host_dir}:/workspace:Z",
-        "-v", f"{Path.home() / '.config/gcloud'}:/root/.config/gcloud:ro,Z",
-        "-e", "CLAUDE_CODE_USE_VERTEX=1",
-        "-e", f"CLOUD_ML_REGION={os.environ.get('GOOGLE_CLOUD_REGION', '')}",
-        "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
+        *_claude_auth_args(),
         "-e", "OLLAMA_ENABLED=false",
     ]
 

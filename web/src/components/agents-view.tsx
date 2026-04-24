@@ -18,6 +18,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { FileBrowser } from "@/components/file-browser"
 import { FileEditor } from "@/components/file-editor"
@@ -41,7 +50,6 @@ import {
   Settings,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 
@@ -63,7 +71,6 @@ const IDENTITY_FILES = [
 interface McpServer {
   id: string
   name: string
-  enabled?: boolean
   builtin?: boolean
   transport?: "stdio" | "http"
   command?: string
@@ -93,10 +100,10 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
   const [available, setAvailable] = useState<McpServer[]>([])
   const [availableLoaded, setAvailableLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [toggling, setToggling] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [searchFocused, setSearchFocused] = useState(false)
   const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
 
   const fetchServers = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/mcp`)
@@ -141,21 +148,6 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
     fetchServers()
   }, [fetchServers])
 
-  const handleToggle = async (id: string, enabled: boolean) => {
-    setToggling(id)
-    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
-    })
-    if (res.ok) {
-      setServers((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, enabled } : s)),
-      )
-    }
-    setToggling(null)
-  }
-
   const handleAdd = async (id: string) => {
     const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
       method: "POST",
@@ -168,8 +160,9 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
     }
   }
 
-  const handleRemove = async (id: string) => {
-    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
+  const handleRemoveConfirm = async () => {
+    if (!confirmRemoveId) return
+    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${confirmRemoveId}`, {
       method: "DELETE",
     })
     if (res.ok) {
@@ -224,7 +217,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {available.length === 0
                         ? <>No servers available. Configure them in the global{" "}
-                            <Link to="/settings/mcp" className="underline">MCP Servers</Link>{" "}
+                            <Link to="/mcp" className="underline">MCP Servers</Link>{" "}
                             settings.</>
                         : "No matching servers."}
                     </p>
@@ -275,20 +268,6 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                     key={srv.name}
                     className="flex items-center gap-3 rounded-md border px-4 py-2.5"
                   >
-                    <button
-                      type="button"
-                      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        srv.enabled ? "bg-primary" : "bg-input"
-                      } ${toggling === srv.id ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                      disabled={toggling === srv.id}
-                      onClick={() => handleToggle(srv.id, !srv.enabled)}
-                    >
-                      <span
-                        className={`pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-                          srv.enabled ? "translate-x-4" : "translate-x-0"
-                        }`}
-                      />
-                    </button>
                     <div className="flex flex-1 flex-col gap-0.5">
                       <McpServerLabel srv={srv} />
                       {srv.auth === "oauth" && (
@@ -312,9 +291,9 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => handleRemove(srv.id)}
+                      onClick={() => setConfirmRemoveId(srv.id)}
                     >
-                      <X className="size-3.5" />
+                      <Trash2 className="size-3.5 text-destructive" />
                     </Button>
                   </div>
                 ))}
@@ -327,6 +306,15 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmRemoveId !== null}
+        onOpenChange={(open) => { if (!open) setConfirmRemoveId(null) }}
+        title="Remove MCP server"
+        description="Remove this MCP server from the agent?"
+        confirmLabel="Remove"
+        destructive
+        onConfirm={handleRemoveConfirm}
+      />
     </div>
   )
 }
@@ -742,57 +730,50 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
           </div>
         </div>
 
-        {showDeleteModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="w-96 rounded-lg border bg-background p-6 shadow-lg">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-medium">Delete "{detail.name}"?</h2>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => setShowDeleteModal(false)}
-                >
-                  <X className="size-4" />
-                </Button>
-              </div>
-              <p className="text-sm text-muted-foreground mb-5">
+        <Dialog open={showDeleteModal} onOpenChange={setShowDeleteModal}>
+          <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+            <DialogHeader>
+              <DialogTitle>Delete "{detail.name}"?</DialogTitle>
+              <DialogDescription>
                 This will archive the agent, stop any running containers, and remove it from the sidebar. Choose whether to keep or delete the agent's workspace files.
-              </p>
-              <div className="flex flex-col gap-2">
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    setShowDeleteModal(false)
-                    onDeleteAgent(detail.id, false)
-                  }}
-                >
-                  <FolderOpen className="mr-2 size-4" />
-                  Keep Agent Workspace
-                </Button>
-                <Button
-                  variant="destructive"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    setShowDeleteModal(false)
-                    onDeleteAgent(detail.id, true)
-                  }}
-                >
-                  <Trash2 className="mr-2 size-4" />
-                  Delete Everything
-                </Button>
-              </div>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => {
+                  setShowDeleteModal(false)
+                  onDeleteAgent(detail.id, false)
+                }}
+              >
+                <FolderOpen className="mr-2 size-4" />
+                Keep Agent Workspace
+              </Button>
+              <Button
+                variant="destructive"
+                className="w-full justify-start"
+                onClick={() => {
+                  setShowDeleteModal(false)
+                  onDeleteAgent(detail.id, true)
+                }}
+              >
+                <Trash2 className="mr-2 size-4" />
+                Delete Everything
+              </Button>
+            </div>
+            <DialogFooter>
               <Button
                 variant="ghost"
                 size="sm"
-                className="mt-3 w-full"
+                className="w-full"
                 onClick={() => setShowDeleteModal(false)}
               >
                 Cancel
               </Button>
-            </div>
-          </div>
-        )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         </>
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">

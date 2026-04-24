@@ -1,0 +1,81 @@
+- generic [ref=e3]:
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - list [ref=e8]:
+        - listitem [ref=e9]:
+          - generic [ref=e10]:
+            - img "takopod" [ref=e12]
+            - img "takopod" [ref=e14]
+            - button [ref=e15]:
+              - img
+      - generic [ref=e16]: Agents
+      - list [ref=e17]:
+        - listitem [ref=e18]:
+          - button "ag1" [ref=e19]:
+            - img [ref=e20]
+            - generic [ref=e23]: ag1
+            - img [ref=e24]
+        - listitem [ref=e26]:
+          - button "Add Agent" [ref=e27]:
+            - img [ref=e28]
+            - generic [ref=e29]: Add Agent
+    - generic [ref=e31]:
+      - generic [ref=e32]: Navigation
+      - list [ref=e33]:
+        - listitem [ref=e34]:
+          - link "Chat" [ref=e35] [cursor=pointer]:
+            - /url: /a/ag1
+            - img [ref=e36]
+            - generic [ref=e38]: Chat
+        - listitem [ref=e39]:
+          - button "Settings" [ref=e40]:
+            - img [ref=e41]
+            - generic [ref=e44]: Settings
+            - img [ref=e45]
+    - button "Toggle Sidebar" [ref=e48]
+  - main [ref=e49]:
+    - generic [ref=e50]:
+      - generic [ref=e51]:
+        - button "Toggle Sidebar" [ref=e52]:
+          - img
+          - generic [ref=e53]: Toggle Sidebar
+        - generic [ref=e54]:
+          - img [ref=e55]
+          - text: ag1
+        - button [ref=e58]:
+          - img
+        - generic [ref=e59]:
+          - button "Clear Context" [disabled]:
+            - img
+            - text: Clear Context
+      - generic [ref=e61]:
+        - button "Load older messages" [ref=e63]
+        - paragraph [ref=e65]: Send a message to get started.
+      - generic [ref=e67]:
+        - button "Attach files" [disabled]:
+          - img
+        - textbox "Disconnected..." [disabled] [ref=e68]
+        - button [disabled]:
+          - img
+  - complementary [ref=e69]:
+    - generic [ref=e71]:
+      - generic [ref=e72]:
+        - generic [ref=e73]: Skills
+        - generic [ref=e76]: schedule
+      - generic [ref=e77]:
+        - generic [ref=e78]: MCP Servers
+        - generic [ref=e79]: Empty
+      - generic [ref=e80]:
+        - generic [ref=e81]: Container
+        - generic [ref=e84]: takopod-5351913b
+        - generic [ref=e85]:
+          - link "Logs" [ref=e86] [cursor=pointer]:
+            - /url: /settings/containers/takopod-5351913b/logs
+          - button "Kill container" [ref=e87]:
+            - img [ref=e88]
+      - generic [ref=e92]:
+        - generic [ref=e93]: Files
+        - button "workspace" [ref=e94]:
+          - img [ref=e95]
+          - generic [ref=e97]: workspace
+          - img [ref=e98]

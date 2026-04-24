@@ -1,0 +1,8 @@
+{
+  "jira_search": {
+    "fields": "summary,status,priority,issuetype,assignee,reporter,labels,created,updated,url"
+  },
+  "jira_get_issue": {
+    "fields": "summary,status,priority,issuetype,assignee,reporter,labels,description,created,updated,url"
+  }
+}

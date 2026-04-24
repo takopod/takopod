@@ -1,0 +1,33 @@
+- generic [ref=e3]:
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - list [ref=e8]:
+        - listitem [ref=e9]:
+          - generic [ref=e10]:
+            - img "takopod" [ref=e12]
+            - img "takopod" [ref=e14]
+            - button [ref=e15]:
+              - img
+      - generic [ref=e16]: Agents
+      - list [ref=e17]:
+        - listitem [ref=e18]:
+          - button "Add Agent" [ref=e19]:
+            - img [ref=e20]
+            - generic [ref=e21]: Add Agent
+    - generic [ref=e23]:
+      - generic [ref=e24]: Navigation
+      - list [ref=e25]:
+        - listitem [ref=e26]:
+          - link "Chat" [ref=e27] [cursor=pointer]:
+            - /url: /
+            - img [ref=e28]
+            - generic [ref=e30]: Chat
+        - listitem [ref=e31]:
+          - button "Settings" [ref=e32]:
+            - img [ref=e33]
+            - generic [ref=e36]: Settings
+            - img [ref=e37]
+    - button "Toggle Sidebar" [ref=e40]
+  - main [ref=e41]:
+    - paragraph [ref=e43]: Select an agent or create one to get started.
+  - complementary [ref=e44]
