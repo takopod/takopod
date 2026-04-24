@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+os.umask(0o022)
+
 from worker import db
 from worker.agent import run_query
 
