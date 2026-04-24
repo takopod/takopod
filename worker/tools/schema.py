@@ -21,11 +21,6 @@ create_schedule_schema = {
                     "include URLs, channel names, criteria, and what action to take."
                 ),
             },
-            "allowed_tools": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Tools the scheduled task needs (e.g., WebFetch, WebSearch, Bash).",
-            },
             "interval_minutes": {
                 "type": "integer",
                 "description": "How often to run, in minutes (minimum 5). Required for interval triggers.",
@@ -96,11 +91,6 @@ update_schedule_schema = {
             "interval_minutes": {
                 "type": "integer",
                 "description": "New interval in minutes (minimum 5).",
-            },
-            "allowed_tools": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "New list of allowed tools.",
             },
             "base_interval_minutes": {
                 "type": "integer",

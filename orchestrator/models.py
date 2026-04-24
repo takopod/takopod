@@ -234,7 +234,6 @@ class ScheduleResponse(BaseModel):
     agent_id: str
     agent_name: str
     prompt: str
-    allowed_tools: list[str]
     interval_seconds: int
     trigger_type: str
     base_interval_seconds: int | None = None
@@ -251,7 +250,6 @@ class ScheduleCreateRequest(BaseModel):
     trigger_type: Literal["interval", "file_watch", "webhook"] = "interval"
     interval_minutes: int | None = Field(None, ge=5)
     watch_dir: str | None = None
-    allowed_tools: list[str] = []
     base_interval_minutes: int | None = Field(None, ge=5)
     max_interval_minutes: int | None = Field(None, ge=5)
 

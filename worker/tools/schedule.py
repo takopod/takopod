@@ -44,7 +44,6 @@ def create_schedule_server():
     async def create_schedule(args: dict[str, Any]) -> dict[str, Any]:
         params: dict[str, Any] = {
             "prompt": args.get("prompt", ""),
-            "allowed_tools": args.get("allowed_tools", []),
             "interval_minutes": args.get("interval_minutes", 60),
         }
         if args.get("trigger_type"):
@@ -87,7 +86,7 @@ def create_schedule_server():
     )
     async def update_schedule(args: dict[str, Any]) -> dict[str, Any]:
         params: dict[str, Any] = {"task_id": args["task_id"]}
-        for key in ("prompt", "interval_minutes", "allowed_tools",
+        for key in ("prompt", "interval_minutes",
                      "base_interval_minutes", "max_interval_minutes"):
             if key in args:
                 params[key] = args[key]

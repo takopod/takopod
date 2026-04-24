@@ -1553,7 +1553,7 @@ async def delete_container(container_id: str):
 async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     db = await get_db()
     query = (
-        "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
+        "SELECT t.id, t.agent_id, a.name, t.prompt, "
         "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
         "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
         "FROM agentic_tasks t "
@@ -1571,10 +1571,10 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     return [
         ScheduleResponse(
             id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
-            prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
-            interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
-            status=r[8], created_at=r[9], trigger_type=r[10] or "interval",
-            base_interval_seconds=r[11], max_interval_seconds=r[12],
+            prompt=r[3],
+            interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
+            status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
+            base_interval_seconds=r[10], max_interval_seconds=r[11],
         )
         for r in rows
     ]
@@ -1584,7 +1584,7 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
 async def get_schedule(task_id: str) -> ScheduleResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
+        "SELECT t.id, t.agent_id, a.name, t.prompt, "
         "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
         "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
         "FROM agentic_tasks t "
@@ -1598,10 +1598,10 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
 
     return ScheduleResponse(
         id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
-        prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
-        interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
-        status=r[8], created_at=r[9], trigger_type=r[10] or "interval",
-        base_interval_seconds=r[11], max_interval_seconds=r[12],
+        prompt=r[3],
+        interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
+        status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
+        base_interval_seconds=r[10], max_interval_seconds=r[11],
     )
 
 
@@ -1647,11 +1647,11 @@ async def create_schedule(body: ScheduleCreateRequest):
 
     await db.execute(
         "INSERT INTO agentic_tasks "
-        "(id, agent_id, prompt, allowed_tools, interval_seconds, "
+        "(id, agent_id, prompt, interval_seconds, "
         "trigger_type, trigger_config, trigger_secret, "
         "base_interval_seconds, max_interval_seconds) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (task_id, body.agent_id, body.prompt, json.dumps(body.allowed_tools),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (task_id, body.agent_id, body.prompt,
          interval_seconds, body.trigger_type, json.dumps(trigger_config),
          trigger_secret, base_interval, max_interval),
     )
@@ -1707,11 +1707,10 @@ async def update_schedule(task_id: str, request: Request):
     body = await request.json()
     updates = []
     params = []
-    for field in ("prompt", "agent_id", "allowed_tools", "interval_seconds"):
+    for field in ("prompt", "agent_id", "interval_seconds",
+                   "base_interval_seconds", "max_interval_seconds"):
         if field in body:
             value = body[field]
-            if field == "allowed_tools":
-                value = json.dumps(value)
             updates.append(f"{field} = ?")
             params.append(value)
     if not updates:

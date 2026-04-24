@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,7 +19,6 @@ import {
   Pencil,
   Play,
   Plus,
-  RefreshCw,
   Save,
   Trash2,
   X,
@@ -30,9 +29,10 @@ interface Schedule {
   agent_id: string
   agent_name: string
   prompt: string
-  allowed_tools: string[]
   interval_seconds: number
   trigger_type: string
+  base_interval_seconds: number | null
+  max_interval_seconds: number | null
   last_executed_at: string | null
   last_result: string | null
   status: string
@@ -58,15 +58,23 @@ function formatInterval(seconds: number): string {
   return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`
 }
 
+function triggerLabel(t: string): string {
+  if (t === "file_watch") return "file watch"
+  return t
+}
+
 export function SchedulesView() {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [editTriggerType, setEditTriggerType] = useState("")
   const [editPrompt, setEditPrompt] = useState("")
   const [editAgentId, setEditAgentId] = useState("")
   const [editInterval, setEditInterval] = useState("")
+  const [editBaseInterval, setEditBaseInterval] = useState("")
+  const [editMaxInterval, setEditMaxInterval] = useState("")
 
   const [showCreate, setShowCreate] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -76,7 +84,6 @@ export function SchedulesView() {
   const [newPrompt, setNewPrompt] = useState("")
   const [newIntervalMinutes, setNewIntervalMinutes] = useState("10")
   const [newWatchDir, setNewWatchDir] = useState("")
-  const [newAllowedTools, setNewAllowedTools] = useState("")
   const [newBaseInterval, setNewBaseInterval] = useState("")
   const [newMaxInterval, setNewMaxInterval] = useState("")
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null)
@@ -123,9 +130,12 @@ export function SchedulesView() {
 
   const startEditing = (s: Schedule) => {
     setEditingId(s.id)
+    setEditTriggerType(s.trigger_type)
     setEditPrompt(s.prompt)
     setEditAgentId(s.agent_id)
-    setEditInterval(String(s.interval_seconds))
+    setEditInterval(String(Math.floor(s.interval_seconds / 60)))
+    setEditBaseInterval(s.base_interval_seconds ? String(Math.floor(s.base_interval_seconds / 60)) : "")
+    setEditMaxInterval(s.max_interval_seconds ? String(Math.floor(s.max_interval_seconds / 60)) : "")
   }
 
   const cancelEditing = () => {
@@ -133,14 +143,24 @@ export function SchedulesView() {
   }
 
   const saveEditing = async (id: string) => {
+    const body: Record<string, unknown> = {
+      prompt: editPrompt,
+      agent_id: editAgentId,
+    }
+
+    if (editTriggerType === "interval") {
+      body.interval_seconds = (parseInt(editInterval) || 1) * 60
+
+      const base = parseInt(editBaseInterval)
+      const max = parseInt(editMaxInterval)
+      body.base_interval_seconds = !isNaN(base) && base > 0 ? base * 60 : null
+      body.max_interval_seconds = !isNaN(max) && max > 0 ? max * 60 : null
+    }
+
     const res = await fetch(`/api/schedules/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: editPrompt,
-        agent_id: editAgentId,
-        interval_seconds: parseInt(editInterval) || 60,
-      }),
+      body: JSON.stringify(body),
     })
     if (res.ok) {
       setEditingId(null)
@@ -154,7 +174,6 @@ export function SchedulesView() {
     setNewPrompt("")
     setNewIntervalMinutes("10")
     setNewWatchDir("")
-    setNewAllowedTools("")
     setNewBaseInterval("")
     setNewMaxInterval("")
     setWebhookInfo(null)
@@ -179,12 +198,6 @@ export function SchedulesView() {
       if (newTriggerType === "file_watch") {
         body.watch_dir = newWatchDir.trim()
       }
-
-      const tools = newAllowedTools
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean)
-      if (tools.length > 0) body.allowed_tools = tools
 
       const base = parseInt(newBaseInterval)
       const max = parseInt(newMaxInterval)
@@ -220,11 +233,6 @@ export function SchedulesView() {
     }
   }
 
-  const triggerLabel = (t: string) => {
-    if (t === "file_watch") return "file watch"
-    return t
-  }
-
   const hasPartialBackoff = Boolean(newBaseInterval) !== Boolean(newMaxInterval)
   const backoffValid =
     !newBaseInterval ||
@@ -243,21 +251,15 @@ export function SchedulesView() {
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b px-4 py-2">
         <span className="text-sm font-medium">Schedules</span>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={fetchSchedules} disabled={loading}>
-            <RefreshCw className={`mr-1.5 size-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-          <Button size="sm" onClick={() => { setShowCreate(true); setWebhookInfo(null) }} disabled={showCreate}>
-            <Plus className="mr-1.5 size-3.5" />
-            New Schedule
-          </Button>
-        </div>
+        <Button size="sm" onClick={() => { setShowCreate(true); setWebhookInfo(null) }} disabled={showCreate}>
+          <Plus className="mr-1.5 size-3.5" />
+          New Schedule
+        </Button>
       </div>
-      <div className="flex-1 overflow-auto">
-        {showCreate && (
-          <div className="border-b bg-muted/10 p-4">
-            <div className="mx-auto max-w-2xl">
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="mx-auto max-w-3xl flex flex-col gap-3">
+          {showCreate && (
+            <>
               {webhookInfo ? (
                 <div className="rounded-md border p-4">
                   <div className="mb-3 flex items-center justify-between">
@@ -397,15 +399,6 @@ export function SchedulesView() {
                       </p>
                     )}
 
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">Allowed Tools (comma-separated, optional)</Label>
-                      <Input
-                        value={newAllowedTools}
-                        onChange={(e) => setNewAllowedTools(e.target.value)}
-                        placeholder="e.g. read_file, web_search"
-                      />
-                    </div>
-
                     {newTriggerType === "interval" && (
                       <div className="flex flex-col gap-1.5">
                         <Label className="text-xs">Idle Backoff (optional)</Label>
@@ -457,197 +450,183 @@ export function SchedulesView() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        )}
+            </>
+          )}
 
-        {schedules.length === 0 && !showCreate ? (
-          <p className="p-4 text-sm text-muted-foreground">
-            {loading
-              ? "Loading..."
-              : "No scheduled tasks. Click \"New Schedule\" or ask an agent to create one."}
-          </p>
-        ) : (
-          schedules.length > 0 && (
-            <table className="w-full table-fixed text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  <th className="w-6 px-1 py-2" />
-                  <th className="w-[7%] px-2 py-2">ID</th>
-                  <th className="w-[10%] px-2 py-2">Agent</th>
-                  <th className="w-[8%] px-2 py-2">Type</th>
-                  <th className="px-2 py-2">Prompt</th>
-                  <th className="w-[8%] px-2 py-2">Tools</th>
-                  <th className="w-[6%] px-2 py-2">Interval</th>
-                  <th className="w-[12%] px-2 py-2">Last Executed</th>
-                  <th className="w-[6%] px-2 py-2">Status</th>
-                  <th className="w-[10%] px-2 py-2">Created</th>
-                  <th className="w-[10%] px-2 py-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {schedules.map((s) => (
-                  <Fragment key={s.id}>
-                    <tr
-                      className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer"
-                      onClick={() =>
-                        editingId !== s.id &&
-                        setExpandedId(expandedId === s.id ? null : s.id)
-                      }
+          {schedules.length === 0 && !showCreate && (
+            <p className="text-sm text-muted-foreground">
+              {loading
+                ? "Loading..."
+                : "No scheduled tasks. Click \"New Schedule\" or ask an agent to create one."}
+            </p>
+          )}
+
+          {schedules.map((s) =>
+            editingId === s.id ? (
+              <div key={s.id} className="rounded-md border p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">Edit Schedule</span>
+                    <Badge variant="outline" className="text-[10px]">
+                      {triggerLabel(s.trigger_type)}
+                    </Badge>
+                  </div>
+                  <Button variant="ghost" size="icon-sm" onClick={cancelEditing}>
+                    <X className="size-4" />
+                  </Button>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <Label className="text-xs">Agent</Label>
+                    <Select value={editAgentId} onValueChange={setEditAgentId}>
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {agents.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label className="text-xs">Prompt</Label>
+                    <Textarea
+                      value={editPrompt}
+                      onChange={(e) => setEditPrompt(e.target.value)}
+                      className="min-h-20 resize-none text-sm"
+                    />
+                  </div>
+                  {s.trigger_type === "interval" && (
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Interval (minutes, min 5)</Label>
+                      <Input
+                        type="number"
+                        min={5}
+                        value={editInterval}
+                        onChange={(e) => setEditInterval(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  {s.trigger_type === "interval" && (
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Idle Backoff (optional, minutes)</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          value={editBaseInterval}
+                          onChange={(e) => setEditBaseInterval(e.target.value)}
+                          placeholder="Base"
+                          className="flex-1"
+                        />
+                        <span className="text-xs text-muted-foreground">to</span>
+                        <Input
+                          type="number"
+                          value={editMaxInterval}
+                          onChange={(e) => setEditMaxInterval(e.target.value)}
+                          placeholder="Max"
+                          className="flex-1"
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        If idle, interval doubles up to max. signal_activity resets to base.
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button variant="outline" size="sm" onClick={cancelEditing}>
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={() => saveEditing(s.id)}>
+                      <Save className="mr-1.5 size-3.5" />
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div key={s.id} className="rounded-md border px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium">{s.agent_name}</span>
+                      <Badge variant="outline" className="text-[10px]">
+                        {triggerLabel(s.trigger_type)}
+                      </Badge>
+                      <Badge variant={s.status === "active" ? "default" : "secondary"}>
+                        {s.status}
+                      </Badge>
+                      {s.interval_seconds > 0 && (
+                        <span className="text-xs text-muted-foreground font-mono">
+                          every {formatInterval(s.interval_seconds)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <span className="font-mono">{s.id.slice(0, 8)}</span>
+                      {s.last_executed_at && (
+                        <span>last run: {s.last_executed_at}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => startEditing(s)}
                     >
-                      <td className="px-1 py-2 text-muted-foreground">
-                        {s.last_result ? (
-                          expandedId === s.id ? (
-                            <ChevronDown className="size-3.5" />
-                          ) : (
-                            <ChevronRight className="size-3.5" />
-                          )
-                        ) : null}
-                      </td>
-                      <td
-                        className="truncate px-2 py-2 font-mono text-xs text-muted-foreground"
-                        title={s.id}
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleToggle(s.id, s.status)}
+                    >
+                      {s.status === "active" ? (
+                        <Pause className="size-3.5" />
+                      ) : (
+                        <Play className="size-3.5" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleDelete(s.id)}
+                    >
+                      <Trash2 className="size-3.5 text-destructive" />
+                    </Button>
+                    {s.last_result && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setExpandedId(expandedId === s.id ? null : s.id)}
                       >
-                        {s.id.slice(0, 8)}
-                      </td>
-                      <td className="truncate px-2 py-2">
-                        {editingId === s.id ? (
-                          <Select value={editAgentId} onValueChange={setEditAgentId}>
-                            <SelectTrigger className="h-7 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {agents.map((a) => (
-                                <SelectItem key={a.id} value={a.id}>
-                                  {a.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                        {expandedId === s.id ? (
+                          <ChevronDown className="size-3.5" />
                         ) : (
-                          s.agent_name
+                          <ChevronRight className="size-3.5" />
                         )}
-                      </td>
-                      <td className="px-2 py-2">
-                        <Badge variant="outline" className="text-[10px]">
-                          {triggerLabel(s.trigger_type)}
-                        </Badge>
-                      </td>
-                      <td className="truncate px-2 py-2" title={s.prompt}>
-                        {editingId === s.id ? (
-                          <Input
-                            value={editPrompt}
-                            onChange={(e) => setEditPrompt(e.target.value)}
-                            className="h-7 text-xs"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        ) : (
-                          <span className="block truncate">{s.prompt}</span>
-                        )}
-                      </td>
-                      <td className="truncate px-2 py-2 font-mono text-xs">
-                        {s.allowed_tools.length > 0
-                          ? s.allowed_tools.join(", ")
-                          : "-"}
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono">
-                        {editingId === s.id ? (
-                          <Input
-                            value={editInterval}
-                            onChange={(e) => setEditInterval(e.target.value)}
-                            className="h-7 w-full text-xs text-right"
-                            type="number"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        ) : (
-                          formatInterval(s.interval_seconds)
-                        )}
-                      </td>
-                      <td className="truncate px-2 py-2 text-xs">
-                        {s.last_executed_at ?? "-"}
-                      </td>
-                      <td className="px-2 py-2">
-                        <Badge
-                          variant={
-                            s.status === "active" ? "default" : "secondary"
-                          }
-                        >
-                          {s.status}
-                        </Badge>
-                      </td>
-                      <td className="truncate px-2 py-2 text-xs">{s.created_at}</td>
-                      <td
-                        className="px-2 py-2"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center gap-1">
-                          {editingId === s.id ? (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => saveEditing(s.id)}
-                              >
-                                <Save className="size-3.5" />
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={cancelEditing}
-                              >
-                                <X className="size-3.5" />
-                              </Button>
-                            </>
-                          ) : (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => startEditing(s)}
-                              >
-                                <Pencil className="size-3.5" />
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleToggle(s.id, s.status)}
-                              >
-                                {s.status === "active" ? (
-                                  <Pause className="size-3.5" />
-                                ) : (
-                                  <Play className="size-3.5" />
-                                )}
-                              </Button>
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => handleDelete(s.id)}
-                              >
-                                <Trash2 className="size-3.5" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    {expandedId === s.id && s.last_result && (
-                      <tr className="border-b bg-muted/20">
-                        <td colSpan={11} className="px-4 py-3">
-                          <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
-                            Last Result
-                          </div>
-                          <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                            {s.last_result}
-                          </pre>
-                        </td>
-                      </tr>
+                      </Button>
                     )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          )
-        )}
+                  </div>
+                </div>
+                {expandedId === s.id && s.last_result && (
+                  <div className="mt-3 border-t pt-3">
+                    <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
+                      Last Result
+                    </div>
+                    <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                      {s.last_result}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            ),
+          )}
+        </div>
       </div>
     </div>
   )
