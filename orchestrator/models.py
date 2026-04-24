@@ -64,6 +64,7 @@ class AgentResponse(BaseModel):
     container_status: str | None = None
     container_memory: str = "2g"
     container_cpus: str = "2"
+    model: str | None = None
 
 
 class AgentDetailResponse(AgentResponse):
@@ -73,6 +74,7 @@ class AgentDetailResponse(AgentResponse):
 class UpdateAgentRequest(BaseModel):
     container_memory: str | None = None
     container_cpus: str | None = None
+    model: str | None = None
 
     @field_validator("container_memory")
     @classmethod

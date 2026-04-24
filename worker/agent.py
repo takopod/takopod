@@ -6,6 +6,7 @@ persisted via the worker's emit() callback for the orchestrator to consume.
 
 import asyncio
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -394,6 +395,10 @@ async def run_query(
             "PostToolUse": [HookMatcher(matcher=".*", hooks=[on_post_tool])],
         },
     }
+
+    configured_model = os.environ.get("TAKOPOD_MODEL")
+    if configured_model:
+        opts_kwargs["model"] = configured_model
     if session_id:
         opts_kwargs["resume"] = session_id
 

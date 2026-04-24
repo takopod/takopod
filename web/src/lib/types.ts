@@ -113,4 +113,5 @@ export interface Agent {
   container_status?: string | null
   container_memory?: string
   container_cpus?: string
+  model?: string | null
 }

@@ -13,7 +13,7 @@ RUN apt-get update && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI (Agent SDK spawns it as a subprocess)
-RUN npm install -g @anthropic-ai/claude-code @googleworkspace/cli
+RUN npm install -g @anthropic-ai/claude-code@2.1.96 @googleworkspace/cli
 
 # Install Python Agent SDK
 RUN pip install --no-cache-dir claude-agent-sdk sqlite-vec

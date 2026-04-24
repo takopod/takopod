@@ -231,7 +231,7 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
         )
 
     async with db.execute(
-        "SELECT id, name, icon, status, created_at, container_memory, container_cpus "
+        "SELECT id, name, icon, status, created_at, container_memory, container_cpus, model "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
@@ -240,6 +240,7 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     return AgentResponse(
         id=row[0], name=row[1], icon=row[2], status=row[3],
         created_at=row[4], container_memory=row[5], container_cpus=row[6],
+        model=row[7],
     )
 
 
@@ -251,7 +252,8 @@ async def list_agents() -> list[AgentResponse]:
         "  (SELECT c.status FROM agent_containers c "
         "   WHERE c.agent_id = a.id ORDER BY c.started_at DESC LIMIT 1) AS container_status, "
         "  a.container_memory, "
-        "  a.container_cpus "
+        "  a.container_cpus, "
+        "  a.model "
         "FROM agents a WHERE a.status = 'active' ORDER BY a.created_at"
     ) as cur:
         rows = await cur.fetchall()
@@ -260,6 +262,7 @@ async def list_agents() -> list[AgentResponse]:
             id=r[0], name=r[1], icon=r[2] or "", status=r[3],
             created_at=r[4], container_status=r[5],
             container_memory=r[6], container_cpus=r[7],
+            model=r[8],
         )
         for r in rows
     ]
@@ -270,7 +273,7 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
     db = await get_db()
     async with db.execute(
         "SELECT id, name, icon, status, created_at, host_dir, "
-        "container_memory, container_cpus "
+        "container_memory, container_cpus, model "
         "FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
@@ -281,12 +284,16 @@ async def get_agent(agent_id: str) -> AgentDetailResponse:
     return AgentDetailResponse(
         id=row[0], name=row[1], icon=row[2] or "", status=row[3],
         created_at=row[4], container_memory=row[6], container_cpus=row[7],
+        model=row[8],
     )
 
 
 @router.put("/agents/{agent_id}")
 async def update_agent(agent_id: str, req: UpdateAgentRequest) -> AgentDetailResponse:
     updates = req.model_dump(exclude_none=True)
+    # Empty string means "clear to SDK default" (store as SQL NULL)
+    if req.model == "":
+        updates["model"] = None
     if updates:
         db = await get_db()
         set_clause = ", ".join(f"{k} = ?" for k in updates)

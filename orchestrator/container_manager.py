@@ -267,7 +267,7 @@ async def spawn_container(
 ) -> tuple[str, asyncio.subprocess.Process, Path]:
     db = await get_db()
     async with db.execute(
-        "SELECT host_dir, container_memory, container_cpus FROM agents WHERE id = ?",
+        "SELECT host_dir, container_memory, container_cpus, model FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
@@ -277,6 +277,7 @@ async def spawn_container(
     host_dir = Path(row[0])
     container_memory = row[1]
     container_cpus = row[2]
+    agent_model = row[3]
 
     # Read settings for worker env vars
     async with db.execute(
@@ -323,6 +324,9 @@ async def spawn_container(
         "-e", f"OLLAMA_ENABLED={ollama_enabled}",
     ]
 
+    if agent_model:
+        cmd.extend(["-e", f"TAKOPOD_MODEL={agent_model}"])
+
     cmd.append(IMAGE)
 
     process = await asyncio.create_subprocess_exec(
@@ -355,7 +359,7 @@ async def spawn_scheduled_container(
     """
     db = await get_db()
     async with db.execute(
-        "SELECT host_dir, container_memory, container_cpus FROM agents WHERE id = ?",
+        "SELECT host_dir, container_memory, container_cpus, model FROM agents WHERE id = ?",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
@@ -365,6 +369,7 @@ async def spawn_scheduled_container(
     host_dir = Path(row[0])
     container_memory = row[1]
     container_cpus = row[2]
+    agent_model = row[3]
 
     host_dir.mkdir(parents=True, exist_ok=True)
     await write_workspace_settings(host_dir)
@@ -400,6 +405,9 @@ async def spawn_scheduled_container(
         "-e", f"ANTHROPIC_VERTEX_PROJECT_ID={os.environ.get('GOOGLE_CLOUD_PROJECT', '')}",
         "-e", "OLLAMA_ENABLED=false",
     ]
+
+    if agent_model:
+        cmd.extend(["-e", f"TAKOPOD_MODEL={agent_model}"])
 
     cmd.append(IMAGE)
 

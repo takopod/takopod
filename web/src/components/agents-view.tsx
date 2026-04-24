@@ -26,6 +26,7 @@ import type { Agent } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import {
   ArrowLeft,
+  Bot,
   Check,
   ChevronRight,
   Cpu,
@@ -45,6 +46,13 @@ import {
 import { AgentIcon } from "@/components/agent-icon"
 
 interface AgentDetail extends Agent {}
+
+const KNOWN_MODELS = [
+  "claude-sonnet-4-5@20250929",
+  "claude-sonnet-4@20250514",
+  "claude-opus-4@20250918",
+  "claude-haiku-4@20250414",
+]
 
 const IDENTITY_FILES = [
   { file: "CLAUDE.md", description: "System prompt & instructions" },
@@ -335,6 +343,8 @@ function ContainerResourcesPanel({
 }) {
   const [memory, setMemory] = useState(detail.container_memory ?? "2g")
   const [cpus, setCpus] = useState(detail.container_cpus ?? "2")
+  const [model, setModel] = useState(detail.model ?? "")
+  const [modelFocused, setModelFocused] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
@@ -342,9 +352,13 @@ function ContainerResourcesPanel({
   useEffect(() => {
     setMemory(detail.container_memory ?? "2g")
     setCpus(detail.container_cpus ?? "2")
-  }, [detail.container_memory, detail.container_cpus])
+    setModel(detail.model ?? "")
+  }, [detail.container_memory, detail.container_cpus, detail.model])
 
-  const dirty = memory !== (detail.container_memory ?? "2g") || cpus !== (detail.container_cpus ?? "2")
+  const dirty =
+    memory !== (detail.container_memory ?? "2g") ||
+    cpus !== (detail.container_cpus ?? "2") ||
+    model !== (detail.model ?? "")
 
   const handleSave = async () => {
     setSaving(true)
@@ -354,7 +368,11 @@ function ContainerResourcesPanel({
       const res = await fetch(`/api/agents/${agentId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ container_memory: memory, container_cpus: cpus }),
+        body: JSON.stringify({
+          container_memory: memory,
+          container_cpus: cpus,
+          model: model,
+        }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -377,8 +395,50 @@ function ContainerResourcesPanel({
       </h3>
       <div className="rounded-md border px-4 py-4">
         <p className="text-xs text-muted-foreground mb-4">
-          CPU and memory limits for this agent's container. Changes take effect on next container start.
+          Model and resource limits for this agent's container. Changes take effect on next container start.
         </p>
+        <div className="mb-4">
+          <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+            <Bot className="size-3.5 text-muted-foreground" />
+            Model
+          </label>
+          <div className="relative">
+            <Input
+              value={model}
+              onChange={(e) => { setModel(e.target.value); setError(""); setSaved(false) }}
+              onFocus={() => setModelFocused(true)}
+              onBlur={() => setTimeout(() => setModelFocused(false), 150)}
+              placeholder="SDK default"
+              className="h-8 text-sm"
+            />
+            {modelFocused && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-y-auto rounded-md border bg-popover shadow-md">
+                <button
+                  type="button"
+                  className="flex w-full items-center px-3 py-2 text-sm text-muted-foreground hover:bg-accent text-left"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { setModel(""); setModelFocused(false); setError(""); setSaved(false) }}
+                >
+                  SDK default
+                </button>
+                {KNOWN_MODELS
+                  .filter((m) => !model || m.toLowerCase().includes(model.toLowerCase()))
+                  .map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className="flex w-full items-center border-t px-3 py-2 text-sm hover:bg-accent text-left"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => { setModel(m); setModelFocused(false); setError(""); setSaved(false) }}
+                    >
+                      {m}
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+          <span className="text-[11px] text-muted-foreground">Vertex AI model ID — type or select from suggestions</span>
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
