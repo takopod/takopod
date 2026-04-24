@@ -19,6 +19,13 @@ import { SkillsStatusPanel } from "@/components/skills-status-panel"
 import { QueueStatusPanel } from "@/components/queue-status-panel"
 import { FileBrowserPanel } from "@/components/file-browser-panel"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent } from "@/lib/types"
@@ -29,7 +36,6 @@ import {
   MessageSquare,
   MoreHorizontal,
   Settings,
-  X,
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 import {
@@ -354,51 +360,40 @@ export function App() {
         </div>
       </aside>
 
-      {showCreateDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-96 rounded-lg border bg-background p-6 shadow-lg">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-medium">Create Agent</h2>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setShowCreateDialog(false)}
-              >
-                <X className="size-4" />
-              </Button>
-            </div>
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="agent-name" className="text-sm">Name</Label>
-                <Input
-                  id="agent-name"
-                  value={newAgentName}
-                  onChange={(e) => setNewAgentName(e.target.value)}
-                  placeholder="My Agent"
-                  autoFocus
-                  onKeyDown={(e) => e.key === "Enter" && handleCreateAgent()}
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowCreateDialog(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleCreateAgent}
-                  disabled={!newAgentName.trim()}
-                >
-                  Create
-                </Button>
-              </div>
-            </div>
+      <Dialog open={showCreateDialog} onOpenChange={(open) => { if (!open) setShowCreateDialog(false) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Create Agent</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="agent-name" className="text-xs">Name</Label>
+            <Input
+              id="agent-name"
+              value={newAgentName}
+              onChange={(e) => setNewAgentName(e.target.value)}
+              placeholder="My Agent"
+              autoFocus
+              onKeyDown={(e) => e.key === "Enter" && handleCreateAgent()}
+            />
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowCreateDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleCreateAgent}
+              disabled={!newAgentName.trim()}
+            >
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SidebarProvider>
   )
 }
