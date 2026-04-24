@@ -327,9 +327,9 @@ export function App() {
               }
             />
             <Route path="/settings/search-index" element={<SearchIndexView />} />
-            <Route path="/settings/skills" element={<SystemSkillsView />} />
-            <Route path="/settings/mcp" element={<SystemMcpView />} />
-            <Route path="/settings/schedules" element={<SchedulesView />} />
+            <Route path="/skills" element={<SystemSkillsView />} />
+            <Route path="/mcp" element={<SystemMcpView />} />
+            <Route path="/schedules" element={<SchedulesView />} />
           </Routes>
       </SidebarInset>
 

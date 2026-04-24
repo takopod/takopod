@@ -199,7 +199,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {available.length === 0
                         ? <>No servers available. Configure them in the global{" "}
-                            <Link to="/settings/mcp" className="underline">MCP Servers</Link>{" "}
+                            <Link to="/mcp" className="underline">MCP Servers</Link>{" "}
                             settings.</>
                         : "No matching servers."}
                     </p>

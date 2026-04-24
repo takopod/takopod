@@ -139,6 +139,45 @@ export function AppSidebar({
               </SidebarMenuButton>
             </SidebarMenuItem>
 
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={currentPath.startsWith("/schedules")}
+                tooltip="Schedules"
+              >
+                <Link to="/schedules">
+                  <Calendar />
+                  <span>Schedules</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={currentPath.startsWith("/skills")}
+                tooltip="Skills"
+              >
+                <Link to="/skills">
+                  <Sparkles />
+                  <span>Skills</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={currentPath.startsWith("/mcp")}
+                tooltip="MCP Servers"
+              >
+                <Link to="/mcp">
+                  <Server />
+                  <span>MCP Servers</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+
             <Collapsible
               asChild
               defaultOpen={currentPath.startsWith("/settings")}
@@ -175,39 +214,6 @@ export function AppSidebar({
                         <Link to="/settings/slack">
                           <Hash className="size-3.5" />
                           <span>Slack</span>
-                        </Link>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem>
-                      <SidebarMenuSubButton
-                        asChild
-                        isActive={currentPath === "/settings/schedules"}
-                      >
-                        <Link to="/settings/schedules">
-                          <Calendar className="size-3.5" />
-                          <span>Schedules</span>
-                        </Link>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem>
-                      <SidebarMenuSubButton
-                        asChild
-                        isActive={currentPath === "/settings/skills"}
-                      >
-                        <Link to="/settings/skills">
-                          <Sparkles className="size-3.5" />
-                          <span>Skills</span>
-                        </Link>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem>
-                      <SidebarMenuSubButton
-                        asChild
-                        isActive={currentPath === "/settings/mcp"}
-                      >
-                        <Link to="/settings/mcp">
-                          <Server className="size-3.5" />
-                          <span>MCP Servers</span>
                         </Link>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>

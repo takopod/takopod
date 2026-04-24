@@ -502,7 +502,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {available.length === 0
                         ? <>No skills available. Add skills in the global{" "}
-                            <Link to="/settings/skills" className="underline">System Skills</Link>{" "}
+                            <Link to="/skills" className="underline">System Skills</Link>{" "}
                             settings.</>
                         : "No matching skills."}
                     </p>
