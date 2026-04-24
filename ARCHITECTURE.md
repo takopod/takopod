@@ -195,7 +195,8 @@ When input tokens exceed 80% of the 200K context window:
 3. If the daily file exceeds a size threshold, continuation files are created (`-2.md`, `-3.md`, etc.).
 4. **Compaction**: When a 4th continuation file would be created, all files for that day are distilled into a single summary file via a Claude API call.
 5. Worker starts a new SDK session with the summary as continuation context.
-6. The split is invisible to the user — the WebSocket connection remains unchanged.
+6. The last N transcript entries (user + assistant pairs) are carried over into the new session as raw history. N defaults to 20 and is configurable via the `session_history_window_size` setting.
+7. The split is invisible to the user — the WebSocket connection remains unchanged.
 
 ### Fact Extraction & Learning
 
