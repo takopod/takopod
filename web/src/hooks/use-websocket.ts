@@ -280,6 +280,12 @@ export function useWebSocket(agentId: string | null) {
     }
   }, [agentId, loadingOlder, messages])
 
+  const stopQuery = useCallback(() => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: "stop_query" }))
+  }, [])
+
   const sendApprovalResponse = useCallback((requestId: string, approved: boolean) => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
@@ -296,5 +302,5 @@ export function useWebSocket(agentId: string | null) {
     connect()
   }, [connect])
 
-  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages }
+  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages }
 }

@@ -14,6 +14,7 @@ from worker.agent import run_query
 WORKSPACE = Path("/workspace")
 INPUT_PATH = WORKSPACE / "input.json"
 OUTPUT_PATH = WORKSPACE / "output.json"
+CANCEL_PATH = WORKSPACE / "cancel.json"
 SESSION_HISTORY_PATH = WORKSPACE / "session_history.json"
 SETTINGS_PATH = WORKSPACE / ".settings.json"
 POLL_INTERVAL = 0.5
@@ -122,6 +123,16 @@ def drain_pending(max_wait: float = 10.0) -> None:
             flush_responses()
         else:
             time.sleep(0.1)
+
+
+async def _cancel_monitor(task: asyncio.Task) -> None:
+    """Poll for cancel.json and cancel the query task when found."""
+    while not task.done():
+        await asyncio.sleep(0.5)
+        if CANCEL_PATH.exists():
+            CANCEL_PATH.unlink(missing_ok=True)
+            task.cancel()
+            return
 
 
 def _is_processed(conn, message_id: str) -> bool:
@@ -387,16 +398,20 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         sys.stderr.flush()
 
     response_text = ""
+    partial_text_ref = [""]
+    query_task = asyncio.create_task(run_query(
+        message_id, content, _session_id, emit,
+        conn=conn,
+        retrieved_context=retrieved_context,
+        memory_context=memory_context,
+        continuation_summary=_continuation_summary,
+        facts_context=facts_context,
+        msg_payload=msg,
+        partial_text_ref=partial_text_ref,
+    ))
+    monitor_task = asyncio.create_task(_cancel_monitor(query_task))
     try:
-        new_session_id, _usage, response_text = await run_query(
-            message_id, content, _session_id, emit,
-            conn=conn,
-            retrieved_context=retrieved_context,
-            memory_context=memory_context,
-            continuation_summary=_continuation_summary,
-            facts_context=facts_context,
-            msg_payload=msg,
-        )
+        new_session_id, _usage, response_text = await query_task
         _session_id = new_session_id
         # Clear continuation summary after it has been consumed
         _continuation_summary = None
@@ -418,6 +433,26 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             )
             sys.stderr.flush()
             await _split_session(conn)
+    except asyncio.CancelledError:
+        response_text = partial_text_ref[0]
+        stopped_text = (
+            response_text + "\n\n[Generation stopped by user]"
+            if response_text
+            else "[Generation stopped by user]"
+        )
+        sys.stderr.write("worker: query cancelled by user\n")
+        sys.stderr.flush()
+        emit({
+            "type": "complete",
+            "content": stopped_text,
+            "message_id": message_id,
+            "usage": {},
+        })
+        drain_pending()
+        _session_id = None
+        _session_transcript.append(("user", content))
+        _session_transcript.append(("assistant", stopped_text))
+        _persist_session_history()
     except Exception as e:
         sys.stderr.write(f"worker: query error: {e}\n")
         sys.stderr.flush()
@@ -427,6 +462,8 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             "fatal": False,
             "message_id": message_id,
         })
+    finally:
+        monitor_task.cancel()
 
     # Clean up uploaded attachment files — the SDK has already read them
     if attachments:
@@ -461,6 +498,7 @@ async def main() -> None:
     # Clean up stale state from a previous run
     if OUTPUT_PATH.exists():
         os.remove(OUTPUT_PATH)
+    CANCEL_PATH.unlink(missing_ok=True)
     conn.execute("DELETE FROM processed_messages")
     conn.commit()
 
@@ -546,6 +584,7 @@ async def main() -> None:
         flush_responses()
 
         if not INPUT_PATH.exists():
+            CANCEL_PATH.unlink(missing_ok=True)
             continue
 
         try:

@@ -299,6 +299,7 @@ async def run_query(
     continuation_summary: str | None = None,
     facts_context: str | None = None,
     msg_payload: dict[str, Any] | None = None,
+    partial_text_ref: list[str] | None = None,
 ) -> tuple[str | None, dict[str, Any], str]:
     """Run a query through the Claude Agent SDK.
 
@@ -440,6 +441,8 @@ async def run_query(
                         "seq": seq,
                     })
             current_text = "\n\n".join(full_text_parts)
+            if partial_text_ref is not None:
+                partial_text_ref[0] = current_text
             if current_text != last_emitted_text:
                 emit({
                     "type": "assistant_message",

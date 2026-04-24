@@ -74,7 +74,7 @@ export function App() {
     }
   }, [selectedAgent])
 
-  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages } =
+  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages } =
     useWebSocket(selectedAgentId)
 
   const fetchAgents = useCallback(async () => {
@@ -265,7 +265,7 @@ export function App() {
                         {selectedAgent?.name ?? "Agent"} is typing...
                       </div>
                     )}
-                    <ChatInput onSend={sendMessage} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} />
+                    <ChatInput onSend={sendMessage} onStop={stopQuery} isStreaming={messages.some((m) => m.status === "streaming")} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} />
                   </div>
                 )
               }

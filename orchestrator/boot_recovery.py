@@ -71,8 +71,18 @@ async def boot_recovery() -> None:
         for ipc_file in AGENTS_DIR.glob("*/response.json"):
             ipc_file.unlink(missing_ok=True)
             files_cleaned += 1
+        for ipc_file in AGENTS_DIR.glob("*/cancel.json"):
+            ipc_file.unlink(missing_ok=True)
+            files_cleaned += 1
 
-    # Step 5: Reset stale container statuses
+    # Step 5: Finalize messages stuck in "streaming" — all workers are being
+    # killed, nothing will complete them.
+    cursor = await db.execute(
+        "UPDATE messages SET status = 'complete' WHERE status = 'streaming'"
+    )
+    streaming_finalized = cursor.rowcount
+
+    # Step 7: Reset stale container statuses
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     cursor = await db.execute(
         "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
@@ -81,7 +91,7 @@ async def boot_recovery() -> None:
     )
     statuses_reset = cursor.rowcount
 
-    # Step 6: Mark pending/running scheduled tasks as failed
+    # Step 8: Mark pending/running scheduled tasks as failed
     cursor = await db.execute(
         "UPDATE scheduled_tasks SET status = 'failed', "
         "completed_at = ?, error_message = 'orchestrator restart' "
@@ -90,7 +100,7 @@ async def boot_recovery() -> None:
     )
     tasks_failed = cursor.rowcount
 
-    # Step 7: Seed always_enabled builtin skills for all agents
+    # Step 9: Seed always_enabled builtin skills for all agents
     builtin_skill_ids = [
         sid for sid in _scan_skills_dir(BUILTIN_SKILLS_DIR)
         if _is_always_enabled_skill(sid)
@@ -110,8 +120,9 @@ async def boot_recovery() -> None:
 
     logger.info(
         "Boot recovery complete: %d containers killed, %d messages re-queued, "
-        "%d IPC files cleaned, %d container statuses reset, "
+        "%d IPC files cleaned, %d streaming messages finalized, "
+        "%d container statuses reset, "
         "%d scheduled tasks failed, %d builtin skills seeded",
-        killed, requeued, files_cleaned, statuses_reset, tasks_failed,
-        skills_seeded,
+        killed, requeued, files_cleaned, streaming_finalized, statuses_reset,
+        tasks_failed, skills_seeded,
     )

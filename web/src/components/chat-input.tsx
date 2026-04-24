@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { SendHorizontal, Paperclip, X, FileIcon, ImageIcon, Loader2 } from "lucide-react"
+import { SendHorizontal, Square, Paperclip, X, FileIcon, ImageIcon, Loader2 } from "lucide-react"
 
 interface PendingFile {
   file: File
@@ -10,12 +10,14 @@ interface PendingFile {
 
 interface ChatInputProps {
   onSend: (content: string, attachments?: string[]) => void
+  onStop?: () => void
+  isStreaming?: boolean
   disabled: boolean
   sessionEnded?: string | null
   agentId?: string | null
 }
 
-export function ChatInput({ onSend, disabled, sessionEnded, agentId }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded, agentId }: ChatInputProps) {
   const [value, setValue] = useState("")
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [uploading, setUploading] = useState(false)
@@ -154,9 +156,15 @@ export function ChatInput({ onSend, disabled, sessionEnded, agentId }: ChatInput
           rows={1}
           className="min-h-0 resize-none"
         />
-        <Button type="submit" size="icon" className="shrink-0" disabled={!canSend}>
-          {uploading ? <Loader2 className="size-4 animate-spin" /> : <SendHorizontal />}
-        </Button>
+        {isStreaming ? (
+          <Button type="button" size="icon" variant="destructive" className="shrink-0" onClick={onStop} title="Stop generation">
+            <Square className="size-4" />
+          </Button>
+        ) : (
+          <Button type="submit" size="icon" className="shrink-0" disabled={!canSend}>
+            {uploading ? <Loader2 className="size-4 animate-spin" /> : <SendHorizontal />}
+          </Button>
+        )}
       </form>
     </div>
   )

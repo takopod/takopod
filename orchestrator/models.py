@@ -96,6 +96,10 @@ class SystemCommandFrame(BaseModel):
     command: Literal["clear_context", "shutdown"]
 
 
+class StopQueryFrame(BaseModel):
+    type: Literal["stop_query"]
+
+
 class GhApprovalRequestFrame(BaseModel):
     type: Literal["gh_approval_request"] = "gh_approval_request"
     request_id: str

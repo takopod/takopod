@@ -2485,6 +2485,17 @@ async def websocket_endpoint(ws: WebSocket):
                     pass
                 continue
 
+            if data.get("type") == "stop_query":
+                async with _workers_lock:
+                    worker = _active_workers.get(agent_id)
+                if worker:
+                    cancel_path = worker.host_dir / "cancel.json"
+                    atomic_write(cancel_path, b'{"cancel": true}')
+                    logger.info(
+                        "stop_query: agent %s", agent_id[:8],
+                    )
+                continue
+
             if data.get("type") == "system_command":
                 try:
                     cmd_frame = SystemCommandFrame.model_validate(data)
