@@ -10,7 +10,14 @@ A multi-agent AI platform where each agent runs in an isolated Podman container 
 - **Container isolation** — Each agent runs in a rootless Podman container with capped memory (2 GB), CPU (2 cores), and PID limits (256). The worker process never sees integration credentials — all MCP servers and external service tokens stay on the host side of the IPC boundary.
 - **Real-time streaming chat** — WebSocket-based UI with streaming token output, tool call visibility, and approval prompts for sensitive operations.
 - **Persistent memory** — Conversations are summarized on context overflow, stored as daily memory files, and indexed for hybrid search (BM25 keyword + vector similarity via Ollama embeddings). Structured facts are extracted from sessions and tracked with supersession history to power a learning loop.
-- **Scheduled tasks** — Create recurring tasks with interval, file-watch, or webhook triggers. Tasks run in ephemeral containers with full agent capabilities.
+- **Scheduled tasks** — Create recurring tasks with interval, file-watch, or webhook triggers. Tasks run in ephemeral containers with full agent capabilities. Webhook example:
+  ```bash
+  curl -X POST http://localhost:8000/api/agents/{agent_id}/trigger/{task_id} \
+    -H "Authorization: Bearer {token}" \
+    -H "Content-Type: application/json" \
+    -d '{"repo": "quay/quay", "pr": 5805, "check": "unit-tests", "status": "failed"}'
+  ```
+  The agent wakes up with its original prompt enriched with the webhook payload. Works with GitHub Actions, Jenkins, PagerDuty — anything that can send an HTTP POST.
 - **Skills** — Markdown instruction files that guide agent behavior. Builtin skills (schedule, Slack, Jira) ship with the platform; agents can also create their own.
 - **Session continuity** — On context overflow (80% of the 200K context window), the session splits transparently: the conversation is summarized, a continuation context is injected into the next session, and the user sees no interruption.
 
