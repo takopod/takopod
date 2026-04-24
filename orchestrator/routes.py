@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import time
 import uuid
@@ -34,6 +35,7 @@ from orchestrator.container_manager import (
 from orchestrator.mcp_manager import McpServerManager
 from orchestrator.db import get_db
 from orchestrator.ipc import (
+    _get_initial_snapshot,
     atomic_write,
     get_queue_counts,
     queue_message,
@@ -54,6 +56,7 @@ from orchestrator.models import (
     McpServerResponse,
     QueueStatusFrame,
     RegistrySkillSummary,
+    ScheduleCreateRequest,
     ScheduleResponse,
     SkillDetail,
     SkillDraftDetail,
@@ -1551,7 +1554,8 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     db = await get_db()
     query = (
         "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
-        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, t.created_at "
+        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
+        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
     )
@@ -1569,7 +1573,8 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
             id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
             prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
             interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
-            status=r[8], created_at=r[9],
+            status=r[8], created_at=r[9], trigger_type=r[10] or "interval",
+            base_interval_seconds=r[11], max_interval_seconds=r[12],
         )
         for r in rows
     ]
@@ -1580,7 +1585,8 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
     db = await get_db()
     async with db.execute(
         "SELECT t.id, t.agent_id, a.name, t.prompt, t.allowed_tools, "
-        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, t.created_at "
+        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
+        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
         "WHERE t.id = ?",
@@ -1594,8 +1600,69 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
         id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
         prompt=r[3], allowed_tools=json.loads(r[4]) if r[4] else [],
         interval_seconds=r[5], last_executed_at=r[6], last_result=r[7],
-        status=r[8], created_at=r[9],
+        status=r[8], created_at=r[9], trigger_type=r[10] or "interval",
+        base_interval_seconds=r[11], max_interval_seconds=r[12],
     )
+
+
+@router.post("/schedules")
+async def create_schedule(body: ScheduleCreateRequest):
+    db = await get_db()
+
+    async with db.execute(
+        "SELECT id FROM agents WHERE id = ?", (body.agent_id,),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    task_id = str(uuid.uuid4())
+    trigger_config: dict = {}
+    trigger_secret = None
+
+    if body.trigger_type == "file_watch":
+        if not body.watch_dir:
+            raise HTTPException(status_code=400, detail="watch_dir required for file_watch trigger")
+        if ".." in body.watch_dir or body.watch_dir.startswith("/"):
+            raise HTTPException(status_code=400, detail="watch_dir must be a relative path within workspace")
+        initial_snapshot = await _get_initial_snapshot(body.agent_id, body.watch_dir)
+        trigger_config = {"watch_dir": body.watch_dir, "last_snapshot": initial_snapshot}
+        interval_seconds = 0
+    elif body.trigger_type == "webhook":
+        interval_seconds = 0
+        trigger_secret = secrets.token_urlsafe(24)
+    else:
+        if not body.interval_minutes:
+            raise HTTPException(status_code=400, detail="interval_minutes is required for interval triggers")
+        interval_seconds = body.interval_minutes * 60
+
+    base_interval = None
+    max_interval = None
+    if body.base_interval_minutes and body.max_interval_minutes:
+        base_interval = body.base_interval_minutes * 60
+        max_interval = body.max_interval_minutes * 60
+        if base_interval >= max_interval:
+            raise HTTPException(status_code=400, detail="base_interval_minutes must be less than max_interval_minutes")
+        if interval_seconds:
+            interval_seconds = base_interval
+
+    await db.execute(
+        "INSERT INTO agentic_tasks "
+        "(id, agent_id, prompt, allowed_tools, interval_seconds, "
+        "trigger_type, trigger_config, trigger_secret, "
+        "base_interval_seconds, max_interval_seconds) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (task_id, body.agent_id, body.prompt, json.dumps(body.allowed_tools),
+         interval_seconds, body.trigger_type, json.dumps(trigger_config),
+         trigger_secret, base_interval, max_interval),
+    )
+    await db.commit()
+
+    result = await get_schedule(task_id)
+    data = result.model_dump()
+    if body.trigger_type == "webhook":
+        data["webhook_url"] = f"/api/agents/{body.agent_id}/trigger/{task_id}"
+        data["webhook_secret"] = trigger_secret
+    return data
 
 
 @router.post("/schedules/{task_id}/pause")

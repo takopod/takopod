@@ -236,10 +236,24 @@ class ScheduleResponse(BaseModel):
     prompt: str
     allowed_tools: list[str]
     interval_seconds: int
+    trigger_type: str
+    base_interval_seconds: int | None = None
+    max_interval_seconds: int | None = None
     last_executed_at: str | None
     last_result: str | None
     status: str
     created_at: str
+
+
+class ScheduleCreateRequest(BaseModel):
+    agent_id: str
+    prompt: str
+    trigger_type: Literal["interval", "file_watch", "webhook"] = "interval"
+    interval_minutes: int | None = Field(None, ge=5)
+    watch_dir: str | None = None
+    allowed_tools: list[str] = []
+    base_interval_minutes: int | None = Field(None, ge=5)
+    max_interval_minutes: int | None = Field(None, ge=5)
 
 
 class SlackConfigRequest(BaseModel):
