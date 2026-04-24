@@ -18,6 +18,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { FileBrowser } from "@/components/file-browser"
 import { FileEditor } from "@/components/file-editor"
@@ -40,7 +49,6 @@ import {
   Settings,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 
@@ -87,6 +95,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
   const [search, setSearch] = useState("")
   const [searchFocused, setSearchFocused] = useState(false)
   const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
 
   const fetchServers = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/mcp`)
@@ -143,8 +152,9 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
     }
   }
 
-  const handleRemove = async (id: string) => {
-    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${id}`, {
+  const handleRemoveConfirm = async () => {
+    if (!confirmRemoveId) return
+    const res = await fetch(`/api/agents/${agentId}/mcp/servers/${confirmRemoveId}`, {
       method: "DELETE",
     })
     if (res.ok) {
@@ -273,9 +283,9 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => handleRemove(srv.id)}
+                      onClick={() => setConfirmRemoveId(srv.id)}
                     >
-                      <X className="size-3.5" />
+                      <Trash2 className="size-3.5 text-destructive" />
                     </Button>
                   </div>
                 ))}
@@ -288,6 +298,15 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmRemoveId !== null}
+        onOpenChange={(open) => { if (!open) setConfirmRemoveId(null) }}
+        title="Remove MCP server"
+        description="Remove this MCP server from the agent?"
+        confirmLabel="Remove"
+        destructive
+        onConfirm={handleRemoveConfirm}
+      />
     </div>
   )
 }
@@ -651,57 +670,50 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
           </div>
         </div>
 
-        {showDeleteModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="w-96 rounded-lg border bg-background p-6 shadow-lg">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-medium">Delete "{detail.name}"?</h2>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => setShowDeleteModal(false)}
-                >
-                  <X className="size-4" />
-                </Button>
-              </div>
-              <p className="text-sm text-muted-foreground mb-5">
+        <Dialog open={showDeleteModal} onOpenChange={setShowDeleteModal}>
+          <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+            <DialogHeader>
+              <DialogTitle>Delete "{detail.name}"?</DialogTitle>
+              <DialogDescription>
                 This will archive the agent, stop any running containers, and remove it from the sidebar. Choose whether to keep or delete the agent's workspace files.
-              </p>
-              <div className="flex flex-col gap-2">
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    setShowDeleteModal(false)
-                    onDeleteAgent(detail.id, false)
-                  }}
-                >
-                  <FolderOpen className="mr-2 size-4" />
-                  Keep Agent Workspace
-                </Button>
-                <Button
-                  variant="destructive"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    setShowDeleteModal(false)
-                    onDeleteAgent(detail.id, true)
-                  }}
-                >
-                  <Trash2 className="mr-2 size-4" />
-                  Delete Everything
-                </Button>
-              </div>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => {
+                  setShowDeleteModal(false)
+                  onDeleteAgent(detail.id, false)
+                }}
+              >
+                <FolderOpen className="mr-2 size-4" />
+                Keep Agent Workspace
+              </Button>
+              <Button
+                variant="destructive"
+                className="w-full justify-start"
+                onClick={() => {
+                  setShowDeleteModal(false)
+                  onDeleteAgent(detail.id, true)
+                }}
+              >
+                <Trash2 className="mr-2 size-4" />
+                Delete Everything
+              </Button>
+            </div>
+            <DialogFooter>
               <Button
                 variant="ghost"
                 size="sm"
-                className="mt-3 w-full"
+                className="w-full"
                 onClick={() => setShowDeleteModal(false)}
               >
                 Cancel
               </Button>
-            </div>
-          </div>
-        )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         </>
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">

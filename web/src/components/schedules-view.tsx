@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import {
   ChevronDown,
   ChevronRight,
@@ -93,6 +94,7 @@ export function SchedulesView() {
   const [newBaseInterval, setNewBaseInterval] = useState("")
   const [newMaxInterval, setNewMaxInterval] = useState("")
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const fetchSchedules = useCallback(async () => {
     setLoading(true)
@@ -128,9 +130,9 @@ export function SchedulesView() {
     if (res.ok) fetchSchedules()
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this scheduled task? This cannot be undone.")) return
-    const res = await fetch(`/api/schedules/${id}`, { method: "DELETE" })
+  const handleDeleteConfirm = async () => {
+    if (!confirmDeleteId) return
+    const res = await fetch(`/api/schedules/${confirmDeleteId}`, { method: "DELETE" })
     if (res.ok) fetchSchedules()
   }
 
@@ -326,7 +328,7 @@ export function SchedulesView() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    onClick={() => handleDelete(s.id)}
+                    onClick={() => setConfirmDeleteId(s.id)}
                   >
                     <Trash2 className="size-3.5 text-destructive" />
                   </Button>
@@ -618,6 +620,16 @@ export function SchedulesView() {
           </DialogContent>
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onOpenChange={(open) => { if (!open) setConfirmDeleteId(null) }}
+        title="Delete schedule"
+        description="Delete this scheduled task? This cannot be undone."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   )
 }

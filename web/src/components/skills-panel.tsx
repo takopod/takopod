@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { FileEditor } from "@/components/file-editor"
@@ -65,6 +66,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
   const [draftEditing, setDraftEditing] = useState(false)
   const [draftEditContent, setDraftEditContent] = useState("")
   const [draftError, setDraftError] = useState<string | null>(null)
+  const [confirmDeleteSkill, setConfirmDeleteSkill] = useState(false)
 
   const fetchSkills = useCallback(async () => {
     const res = await fetch(`/api/agents/${agentId}/registry-skills`)
@@ -314,6 +316,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
   if (selected) {
     const isCustom = !selected.builtin && customSkills.some((s) => s.id === selected.id)
     return (
+    <>
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-3 border-b px-4 py-2">
           <Button
@@ -389,17 +392,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                   variant="ghost"
                   size="sm"
                   className="text-destructive ml-auto"
-                  onClick={async () => {
-                    if (!confirm(`Delete custom skill "${selected.name}"?`)) return
-                    const res = await fetch(`/api/agents/${agentId}/skills/${selected.id}`, {
-                      method: "DELETE",
-                    })
-                    if (res.ok) {
-                      setSelected(null)
-                      navigate(basePath)
-                      fetchCustomSkills()
-                    }
-                  }}
+                  onClick={() => setConfirmDeleteSkill(true)}
                 >
                   <Trash2 className="mr-1.5 size-3" />
                   Delete
@@ -409,6 +402,25 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDeleteSkill}
+        onOpenChange={setConfirmDeleteSkill}
+        title="Delete skill"
+        description={`Delete custom skill "${selected.name}"?`}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={async () => {
+          const res = await fetch(`/api/agents/${agentId}/skills/${selected.id}`, {
+            method: "DELETE",
+          })
+          if (res.ok) {
+            setSelected(null)
+            navigate(basePath)
+            fetchCustomSkills()
+          }
+        }}
+      />
+    </>
     )
   }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Textarea } from "@/components/ui/textarea"
 import type { FileEntry } from "@/lib/types"
 import { ArrowLeft, File, Folder, Save, Trash2 } from "lucide-react"
@@ -20,6 +21,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
   const [loading, setLoading] = useState(false)
   const [openFile, setOpenFile] = useState<string | null>(null)
   const [currentPath, setCurrentPath] = useState("")
+  const [confirmDelete, setConfirmDelete] = useState<FileEntry | null>(null)
 
   const basePath = `/a/${encodeURIComponent(agentName ?? agentId)}/settings/files`
 
@@ -110,10 +112,10 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
     setSaving(false)
   }
 
-  const handleDelete = async (entry: FileEntry) => {
-    if (!confirm(`Delete ${entry.name}?`)) return
+  const handleDeleteConfirm = async () => {
+    if (!confirmDelete) return
     const res = await fetch(
-      `/api/agents/${agentId}/files/${encodeURIComponent(entry.path)}`,
+      `/api/agents/${agentId}/files/${encodeURIComponent(confirmDelete.path)}`,
       { method: "DELETE" },
     )
     if (res.ok) {
@@ -219,7 +221,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    onClick={() => handleDelete(entry)}
+                    onClick={() => setConfirmDelete(entry)}
                   >
                     <Trash2 className="size-3.5 text-muted-foreground" />
                   </Button>
@@ -229,6 +231,15 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null) }}
+        title="Delete file"
+        description={confirmDelete ? `Delete ${confirmDelete.name}?` : ""}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   )
 }

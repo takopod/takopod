@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -43,6 +44,7 @@ export function SystemMcpView() {
   const [editEnvVars, setEditEnvVars] = useState("")
   const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
   const [authorizing, setAuthorizing] = useState<string | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<McpServer | null>(null)
 
   const fetchServers = useCallback(async () => {
     const res = await fetch("/api/mcp/servers")
@@ -153,13 +155,13 @@ export function SystemMcpView() {
     setSaving(false)
   }
 
-  const handleRemove = async (srv: McpServer) => {
-    if (!confirm(`Remove "${srv.display_name || srv.name}" from MCP servers?`)) return
-    const res = await fetch(`/api/mcp/servers/${srv.id}`, {
+  const handleRemoveConfirm = async () => {
+    if (!confirmRemove) return
+    const res = await fetch(`/api/mcp/servers/${confirmRemove.id}`, {
       method: "DELETE",
     })
     if (res.ok) {
-      setServers((prev) => prev.filter((s) => s.id !== srv.id))
+      setServers((prev) => prev.filter((s) => s.id !== confirmRemove.id))
     }
   }
 
@@ -433,7 +435,7 @@ export function SystemMcpView() {
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            onClick={() => handleRemove(srv)}
+                            onClick={() => setConfirmRemove(srv)}
                           >
                             <Trash2 className="size-3.5 text-destructive" />
                           </Button>
@@ -598,6 +600,15 @@ export function SystemMcpView() {
           )}
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmRemove !== null}
+        onOpenChange={(open) => { if (!open) setConfirmRemove(null) }}
+        title="Remove MCP server"
+        description={confirmRemove ? `Remove "${confirmRemove.display_name || confirmRemove.name}" from MCP servers?` : ""}
+        confirmLabel="Remove"
+        destructive
+        onConfirm={handleRemoveConfirm}
+      />
     </div>
   )
 }

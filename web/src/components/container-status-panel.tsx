@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Trash2 } from "lucide-react"
 
 const ACTIVE_STATUSES = new Set(["running", "starting", "idle"])
@@ -22,6 +23,7 @@ export function ContainerStatusPanel({
 }) {
   const [killing, setKilling] = useState(false)
   const [container, setContainer] = useState<ContainerInfo | null>(null)
+  const [confirmKill, setConfirmKill] = useState(false)
 
   const containerName = `takopod-${agentId.slice(0, 8)}`
 
@@ -52,7 +54,6 @@ export function ContainerStatusPanel({
   }, [agentId])
 
   const handleKill = async () => {
-    if (!confirm("Kill this container?")) return
     setKilling(true)
     try {
       const res = await fetch(`/api/agents/${agentId}/kill`, { method: "POST" })
@@ -87,7 +88,7 @@ export function ContainerStatusPanel({
               Logs
             </Link>
             <button
-              onClick={handleKill}
+              onClick={() => setConfirmKill(true)}
               disabled={killing}
               className="text-muted-foreground/60 hover:text-destructive disabled:opacity-50"
               title="Kill container"
@@ -101,6 +102,15 @@ export function ContainerStatusPanel({
           Not running
         </span>
       )}
+      <ConfirmDialog
+        open={confirmKill}
+        onOpenChange={setConfirmKill}
+        title="Kill container"
+        description="Kill this container? The agent will need to restart it on the next message."
+        confirmLabel="Kill"
+        destructive
+        onConfirm={handleKill}
+      />
     </div>
   )
 }
