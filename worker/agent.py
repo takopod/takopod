@@ -19,6 +19,7 @@ from worker.context_budget import (
     get_config,
     log_usage_report,
 )
+from worker.model_config import parse_model_spec
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -300,6 +301,7 @@ async def run_query(
     facts_context: str | None = None,
     msg_payload: dict[str, Any] | None = None,
     partial_text_ref: list[str] | None = None,
+    model_spec: str | None = None,
 ) -> tuple[str | None, dict[str, Any], str]:
     """Run a query through the Claude Agent SDK.
 
@@ -398,6 +400,12 @@ async def run_query(
             "PostToolUse": [HookMatcher(matcher=".*", hooks=[on_post_tool])],
         },
     }
+    if model_spec:
+        model_id, effort = parse_model_spec(model_spec)
+        if model_id:
+            opts_kwargs["model"] = model_id
+        if effort:
+            opts_kwargs["effort"] = effort
     if session_id:
         opts_kwargs["resume"] = session_id
 

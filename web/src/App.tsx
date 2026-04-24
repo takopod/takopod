@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dialog"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket"
-import type { Agent } from "@/lib/types"
+import type { Agent, ModelOption } from "@/lib/types"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -61,6 +61,8 @@ export function App() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newAgentName, setNewAgentName] = useState("")
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [selectedModel, setSelectedModel] = useState("")
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     const saved = localStorage.getItem("takopod:rightPanelWidth")
     return saved ? Number(saved) : 208
@@ -93,6 +95,23 @@ export function App() {
   useEffect(() => {
     fetchAgents()
   }, [fetchAgents])
+
+  useEffect(() => {
+    fetch("/api/models").then(r => r.ok ? r.json() : []).then(setModelOptions)
+  }, [])
+
+  useEffect(() => {
+    if (modelOptions.length > 0 && !selectedModel) {
+      const saved = localStorage.getItem("takopod:selectedModel")
+      const valid = modelOptions.find(m => m.value === saved)
+      setSelectedModel(valid?.value ?? modelOptions[0].value)
+    }
+  }, [modelOptions, selectedModel])
+
+  const handleModelChange = useCallback((v: string) => {
+    setSelectedModel(v)
+    localStorage.setItem("takopod:selectedModel", v)
+  }, [])
 
   useEffect(() => {
     if (agents.length === 0) return
@@ -271,7 +290,7 @@ export function App() {
                         {selectedAgent?.name ?? "Agent"} is typing...
                       </div>
                     )}
-                    <ChatInput onSend={sendMessage} onStop={stopQuery} isStreaming={messages.some((m) => m.status === "streaming")} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} />
+                    <ChatInput onSend={(content, attachments) => sendMessage(content, attachments, selectedModel || undefined)} onStop={stopQuery} isStreaming={messages.some((m) => m.status === "streaming")} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} modelOptions={modelOptions} selectedModel={selectedModel} onModelChange={handleModelChange} />
                   </div>
                 )
               }

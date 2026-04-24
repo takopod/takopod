@@ -39,6 +39,7 @@ async def queue_message(
     agentic_task_id: str | None = None,
     allowed_tools: list[str] | None = None,
     attachments: list[str] | None = None,
+    model: str | None = None,
 ) -> None:
     db = await get_db()
     payload_dict: dict = {
@@ -54,6 +55,8 @@ async def queue_message(
         payload_dict["allowed_tools"] = allowed_tools
     if attachments:
         payload_dict["attachments"] = attachments
+    if model:
+        payload_dict["model"] = model
     payload = json.dumps(payload_dict)
     await db.execute(
         "INSERT INTO message_queue (id, agent_id, payload, agentic_task_id) "

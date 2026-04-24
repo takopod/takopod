@@ -29,6 +29,7 @@ class UserMessageFrame(BaseModel):
     content: str = Field(..., min_length=1, max_length=10_000)
     message_id: str
     attachments: list[str] = []  # relative paths within workspace (e.g. "uploads/abc/file.png")
+    model: str | None = None
 
 
 class QueueStatusFrame(BaseModel):

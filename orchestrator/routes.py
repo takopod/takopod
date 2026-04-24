@@ -247,6 +247,12 @@ async def create_agent(req: CreateAgentRequest) -> AgentResponse:
     )
 
 
+@router.get("/models")
+async def list_models():
+    from orchestrator.model_registry import get_model_options
+    return get_model_options()
+
+
 @router.get("/agents")
 async def list_agents() -> list[AgentResponse]:
     db = await get_db()
@@ -2046,13 +2052,19 @@ def _check_rate_limit(agent_id: str) -> float | None:
 
 async def _store_message(agent_id: str, frame: UserMessageFrame) -> None:
     db = await get_db()
-    metadata = json.dumps({"attachments": frame.attachments}) if frame.attachments else None
+    metadata_dict: dict = {}
+    if frame.attachments:
+        metadata_dict["attachments"] = frame.attachments
+    if frame.model:
+        metadata_dict["model"] = frame.model
+    metadata = json.dumps(metadata_dict) if metadata_dict else None
     await db.execute(
         "INSERT INTO messages (id, agent_id, role, content, metadata) VALUES (?, ?, ?, ?, ?)",
         (frame.message_id, agent_id, "user", frame.content, metadata),
     )
     await db.commit()
-    await queue_message(agent_id, frame.message_id, frame.content, attachments=frame.attachments)
+    await queue_message(agent_id, frame.message_id, frame.content,
+                        attachments=frame.attachments, model=frame.model)
 
 
 async def _send_queue_status(ws: WebSocket, agent_id: str) -> None:

@@ -399,6 +399,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 
     response_text = ""
     partial_text_ref = [""]
+    model_spec = msg.get("model")
     query_task = asyncio.create_task(run_query(
         message_id, content, _session_id, emit,
         conn=conn,
@@ -408,6 +409,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         facts_context=facts_context,
         msg_payload=msg,
         partial_text_ref=partial_text_ref,
+        model_spec=model_spec,
     ))
     monitor_task = asyncio.create_task(_cancel_monitor(query_task))
     try:

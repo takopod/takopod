@@ -1,7 +1,17 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { SendHorizontal, Square, Paperclip, X, FileIcon, ImageIcon, Loader2 } from "lucide-react"
+import type { ModelOption } from "@/lib/types"
 
 interface PendingFile {
   file: File
@@ -9,15 +19,18 @@ interface PendingFile {
 }
 
 interface ChatInputProps {
-  onSend: (content: string, attachments?: string[]) => void
+  onSend: (content: string, attachments?: string[], model?: string) => void
   onStop?: () => void
   isStreaming?: boolean
   disabled: boolean
   sessionEnded?: string | null
   agentId?: string | null
+  modelOptions: ModelOption[]
+  selectedModel: string
+  onModelChange: (value: string) => void
 }
 
-export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded, agentId }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded, agentId, modelOptions, selectedModel, onModelChange }: ChatInputProps) {
   const [value, setValue] = useState("")
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [uploading, setUploading] = useState(false)
@@ -61,7 +74,7 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded,
       setUploading(false)
     }
 
-    onSend(trimmed || "See attached files.", attachmentPaths)
+    onSend(trimmed || "See attached files.", attachmentPaths, selectedModel || undefined)
     setValue("")
     setPendingFiles([])
   }
@@ -100,6 +113,12 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded,
   }
 
   const canSend = !disabled && !uploading && (value.trim() || pendingFiles.length > 0)
+
+  const modelGroups = modelOptions.reduce<Record<string, ModelOption[]>>((acc, m) => {
+    const family = m.model_id.includes("sonnet") ? "Sonnet" : m.model_id.includes("opus") ? "Opus" : m.model_id
+    ;(acc[family] ??= []).push(m)
+    return acc
+  }, {})
 
   return (
     <div className="border-t">
@@ -146,6 +165,23 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded,
         >
           <Paperclip className="size-4" />
         </Button>
+        {modelOptions.length > 0 && (
+          <Select value={selectedModel} onValueChange={onModelChange}>
+            <SelectTrigger className="h-8 w-auto shrink-0 gap-1 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(modelGroups).map(([family, models]) => (
+                <SelectGroup key={family}>
+                  <SelectLabel>{family}</SelectLabel>
+                  {models.map(m => (
+                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <Textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
