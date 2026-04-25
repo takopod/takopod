@@ -281,37 +281,98 @@ async def _poll_agentic_tasks() -> None:
         )
         _running_agentic[task_id] = task
 
-    # --- File-watch tasks ---
-    async with db.execute(
-        "SELECT id, agent_id, prompt, allowed_tools, trigger_config, model "
-        "FROM agentic_tasks "
-        "WHERE status = 'active' AND trigger_type = 'file_watch'",
-    ) as cur:
-        watch_rows = await cur.fetchall()
+    # --- Checker-based tasks (file_watch, github_pr, github_issues, slack_channel) ---
+    from orchestrator.checkers import CHECKERS
 
-    for task_id, agent_id, prompt, allowed_tools_json, trigger_config_json, model in watch_rows:
-        if task_id in _running_agentic:
-            continue
-        trigger_config = json.loads(trigger_config_json) if trigger_config_json else {}
-        new_files = await _check_file_watch(agent_id, trigger_config)
-        if new_files:
-            allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
-            file_list = ", ".join(new_files)
-            enriched_prompt = f"{prompt}\n\nNew files detected: {file_list}"
-            task = asyncio.create_task(
-                execute_agentic_task(task_id, agent_id, enriched_prompt, allowed_tools, model=model),
-                name=f"agentic-watch-{task_id[:8]}",
+    checker_types = list(CHECKERS.keys())
+    if checker_types:
+        placeholders = ",".join("?" for _ in checker_types)
+        async with db.execute(
+            "SELECT id, agent_id, prompt, allowed_tools, trigger_type, "
+            "trigger_config, cursor, model "
+            "FROM agentic_tasks "
+            "WHERE status = 'active' "
+            f"  AND trigger_type IN ({placeholders}) "
+            "  AND (last_checked_at IS NULL "
+            "       OR last_checked_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', "
+            "          '-' || interval_seconds || ' seconds')) "
+            "ORDER BY last_checked_at ASC NULLS FIRST "
+            "LIMIT 1",
+            checker_types,
+        ) as cur:
+            row = await cur.fetchone()
+
+        if row:
+            (task_id, agent_id, prompt, allowed_tools_json,
+             trigger_type, trigger_config_json, cursor_json, model) = row
+            if task_id not in _running_agentic:
+                trigger_config = json.loads(trigger_config_json) if trigger_config_json else {}
+                cursor = json.loads(cursor_json) if cursor_json else {}
+                allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
+                # file_watch needs agent_id in config for directory resolution
+                if trigger_type == "file_watch":
+                    trigger_config["agent_id"] = agent_id
+                task = asyncio.create_task(
+                    _run_checker_task(
+                        task_id, agent_id, prompt, allowed_tools,
+                        trigger_type, trigger_config, cursor, model,
+                    ),
+                    name=f"agentic-check-{task_id[:8]}",
+                )
+                _running_agentic[task_id] = task
+
+
+async def _run_checker_task(
+    task_id: str,
+    agent_id: str,
+    prompt: str,
+    allowed_tools: list[str],
+    trigger_type: str,
+    trigger_config: dict,
+    cursor: dict,
+    model: str | None,
+) -> None:
+    """Run checker, invoke agent only if changes detected, update cursor."""
+    from orchestrator.checkers import run_checker
+
+    db = await get_db()
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    try:
+        result = await run_checker(trigger_type, trigger_config, cursor)
+
+        # Always update last_checked_at
+        await db.execute(
+            "UPDATE agentic_tasks SET last_checked_at = ? WHERE id = ?",
+            (now, task_id),
+        )
+        await db.commit()
+
+        if result.changed:
+            enriched_prompt = f"{prompt}\n\n{result.summary}"
+            success = await execute_agentic_task(
+                task_id, agent_id, enriched_prompt, allowed_tools,
+                model=model, _caller_managed=True,
             )
-            _running_agentic[task_id] = task
-            # Update snapshot
-            trigger_config["last_snapshot"] = await _get_dir_listing(
-                agent_id, trigger_config.get("watch_dir", ""),
-            )
-            await db.execute(
-                "UPDATE agentic_tasks SET trigger_config = ? WHERE id = ?",
-                (json.dumps(trigger_config), task_id),
-            )
-            await db.commit()
+            # Cursor advances only after successful agent completion
+            if success:
+                await db.execute(
+                    "UPDATE agentic_tasks SET cursor = ? WHERE id = ?",
+                    (json.dumps(result.new_cursor), task_id),
+                )
+                await db.commit()
+        else:
+            # Update cursor even on no-change (e.g. new ETag)
+            if result.new_cursor != cursor:
+                await db.execute(
+                    "UPDATE agentic_tasks SET cursor = ? WHERE id = ?",
+                    (json.dumps(result.new_cursor), task_id),
+                )
+                await db.commit()
+    except Exception:
+        logger.exception("Checker task %s (%s) failed", task_id[:8], trigger_type)
+    finally:
+        _running_agentic.pop(task_id, None)
 
 
 async def execute_agentic_task(
@@ -321,13 +382,20 @@ async def execute_agentic_task(
     allowed_tools: list[str],
     *,
     model: str | None = None,
-) -> None:
-    """Queue a scheduled task prompt through the normal message path."""
+    _caller_managed: bool = False,
+) -> bool:
+    """Queue a scheduled task prompt through the normal message path.
+
+    Returns True on success, False on failure.  When *_caller_managed* is
+    True the caller owns the ``_running_agentic`` entry and backoff — this
+    function will not pop or apply backoff itself.
+    """
     from orchestrator.ipc import _activity_signaled, store_scheduled_message
     from orchestrator.routes import ensure_worker_headless
 
     db = await get_db()
     message_id = str(uuid.uuid4())
+    success = False
 
     try:
         await ensure_worker_headless(agent_id)
@@ -346,6 +414,7 @@ async def execute_agentic_task(
         )
         await db.commit()
         logger.info("Agentic task %s executed successfully", task_id[:8])
+        success = not (last_result or "").startswith("Error:")
 
     except Exception:
         logger.exception("Agentic task %s failed", task_id[:8])
@@ -360,8 +429,11 @@ async def execute_agentic_task(
         except Exception:
             pass
     finally:
-        _running_agentic.pop(task_id, None)
-        await _apply_backoff(task_id, _activity_signaled)
+        if not _caller_managed:
+            _running_agentic.pop(task_id, None)
+            await _apply_backoff(task_id, _activity_signaled)
+
+    return success
 
 
 async def _apply_backoff(task_id: str, activity_signaled: set[str]) -> None:
@@ -419,59 +491,6 @@ async def _wait_for_completion(
             return row[0] or ""
 
     return "Error: Timed out waiting for response"
-
-
-# ---------------------------------------------------------------------------
-# File-watch helpers
-# ---------------------------------------------------------------------------
-
-
-async def _check_file_watch(agent_id: str, trigger_config: dict) -> list[str]:
-    """Check if new files appeared in the watched directory.
-
-    Returns list of new filenames, or empty list if no changes.
-    """
-    watch_dir = trigger_config.get("watch_dir", "")
-    if not watch_dir:
-        return []
-
-    current = set(await _get_dir_listing(agent_id, watch_dir))
-    previous = set(trigger_config.get("last_snapshot", []))
-    return sorted(current - previous)
-
-
-async def _get_dir_listing(agent_id: str, watch_dir: str) -> list[str]:
-    """Get current file listing for snapshot update."""
-    db = await get_db()
-    async with db.execute(
-        "SELECT host_dir FROM agents WHERE id = ?", (agent_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if not row:
-        return []
-
-    host_dir = Path(row[0])
-    target = host_dir / watch_dir
-
-    try:
-        target = target.resolve()
-        if not target.is_relative_to(host_dir.resolve()):
-            return []
-    except (ValueError, OSError):
-        return []
-
-    if not target.is_dir():
-        return []
-
-    IPC_FILES = {"input.json", "output.json", "request.json", "response.json"}
-    result = []
-    try:
-        for entry in target.iterdir():
-            if entry.is_file() and entry.name not in IPC_FILES and not entry.name.endswith(".log"):
-                result.append(entry.name)
-    except OSError:
-        pass
-    return sorted(result)
 
 
 # ---------------------------------------------------------------------------

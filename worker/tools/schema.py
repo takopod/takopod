@@ -27,12 +27,45 @@ create_schedule_schema = {
             },
             "trigger_type": {
                 "type": "string",
-                "enum": ["interval", "file_watch", "webhook"],
-                "description": "Type of trigger. 'interval' runs on a timer, 'file_watch' runs when new files appear in a directory, 'webhook' runs when an HTTP POST is received.",
+                "enum": ["interval", "file_watch", "webhook", "github_pr", "github_issues", "slack_channel"],
+                "description": (
+                    "Type of trigger. 'interval' runs on a timer. "
+                    "'file_watch' runs when new files appear in a directory. "
+                    "'webhook' runs when an HTTP POST is received. "
+                    "'github_pr' polls a GitHub PR for new comments/reviews/commits. "
+                    "'github_issues' polls repo issues matching labels/state. "
+                    "'slack_channel' passively observes a Slack channel for new messages."
+                ),
             },
             "watch_dir": {
                 "type": "string",
                 "description": "For file_watch triggers: directory within /workspace to watch (e.g., 'inbox'). Must be a relative path within the workspace.",
+            },
+            "github_repo": {
+                "type": "string",
+                "description": "For github_pr/github_issues triggers: repository in 'owner/repo' format.",
+            },
+            "github_pr_number": {
+                "type": "integer",
+                "description": "For github_pr trigger: specific PR number to watch. If omitted, watches all PRs in the repo.",
+            },
+            "github_labels": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "For github_pr/github_issues triggers: only match PRs/issues with these labels.",
+            },
+            "github_state": {
+                "type": "string",
+                "enum": ["open", "closed", "all"],
+                "description": "For github_pr/github_issues triggers: state filter (default: open).",
+            },
+            "slack_channel_id": {
+                "type": "string",
+                "description": "For slack_channel trigger: the Slack channel ID (e.g., 'C1234567890').",
+            },
+            "slack_channel_name": {
+                "type": "string",
+                "description": "For slack_channel trigger: optional human-readable channel name for display.",
             },
             "base_interval_minutes": {
                 "type": "integer",

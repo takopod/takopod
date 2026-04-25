@@ -23,11 +23,13 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Info,
   Pause,
   Pencil,
   Play,
   Plus,
   Trash2,
+  X,
 } from "lucide-react"
 
 interface Schedule {
@@ -40,10 +42,16 @@ interface Schedule {
   base_interval_seconds: number | null
   max_interval_seconds: number | null
   last_executed_at: string | null
+  last_checked_at: string | null
   last_result: string | null
   status: string
   created_at: string
   model: string | null
+}
+
+interface TriggerTypeOption {
+  value: string
+  label: string
 }
 
 interface ModelOption {
@@ -73,8 +81,13 @@ function formatInterval(seconds: number): string {
 }
 
 function triggerLabel(t: string): string {
-  if (t === "file_watch") return "file watch"
-  return t
+  const labels: Record<string, string> = {
+    file_watch: "file watch",
+    github_pr: "github pr",
+    github_issues: "github issues",
+    slack_channel: "slack channel",
+  }
+  return labels[t] || t
 }
 
 export function SchedulesView() {
@@ -103,8 +116,16 @@ export function SchedulesView() {
   const [newBaseInterval, setNewBaseInterval] = useState("")
   const [newMaxInterval, setNewMaxInterval] = useState("")
   const [newModel, setNewModel] = useState("")
+  const [newGithubRepo, setNewGithubRepo] = useState("")
+  const [newGithubPrNumber, setNewGithubPrNumber] = useState("")
+  const [newGithubLabels, setNewGithubLabels] = useState("")
+  const [newGithubState, setNewGithubState] = useState("open")
+  const [newSlackChannelId, setNewSlackChannelId] = useState("")
+  const [newSlackChannelName, setNewSlackChannelName] = useState("")
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [triggerTypes, setTriggerTypes] = useState<TriggerTypeOption[]>([])
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null)
+  const [showTriggerInfo, setShowTriggerInfo] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const fetchSchedules = useCallback(async () => {
@@ -134,6 +155,7 @@ export function SchedulesView() {
     fetchSchedules()
     fetchAgents()
     fetch("/api/models").then(r => r.ok ? r.json() : []).then(setModelOptions)
+    fetch("/api/schedules/trigger-types").then(r => r.ok ? r.json() : []).then(setTriggerTypes)
   }, [fetchSchedules, fetchAgents])
 
   const handleToggle = async (id: string, currentStatus: string) => {
@@ -199,8 +221,15 @@ export function SchedulesView() {
     setNewBaseInterval("")
     setNewMaxInterval("")
     setNewModel("")
+    setNewGithubRepo("")
+    setNewGithubPrNumber("")
+    setNewGithubLabels("")
+    setNewGithubState("open")
+    setNewSlackChannelId("")
+    setNewSlackChannelName("")
     setWebhookInfo(null)
     setCreateError("")
+    setShowTriggerInfo(false)
   }
 
   const closeCreateDialog = () => {
@@ -221,18 +250,50 @@ export function SchedulesView() {
         model: newModel || null,
       }
 
-      if (newTriggerType === "interval") {
-        body.interval_minutes = parseInt(newIntervalMinutes) || 10
+      const isChecker = ["file_watch", "github_pr", "github_issues", "slack_channel"].includes(newTriggerType)
+
+      if (newTriggerType === "interval" || isChecker) {
+        body.interval_minutes = parseInt(newIntervalMinutes) || (isChecker ? 5 : 10)
       }
       if (newTriggerType === "file_watch") {
         body.watch_dir = newWatchDir.trim()
       }
+      if (newTriggerType === "github_pr") {
+        body.github_repo = newGithubRepo.trim()
+        if (newGithubPrNumber) {
+          body.github_pr_number = parseInt(newGithubPrNumber)
+        } else {
+          if (newGithubLabels.trim()) {
+            body.github_labels = newGithubLabels.split(",").map((l: string) => l.trim()).filter(Boolean)
+          }
+          if (newGithubState !== "open") {
+            body.github_state = newGithubState
+          }
+        }
+      }
+      if (newTriggerType === "github_issues") {
+        body.github_repo = newGithubRepo.trim()
+        if (newGithubLabels.trim()) {
+          body.github_labels = newGithubLabels.split(",").map((l: string) => l.trim()).filter(Boolean)
+        }
+        if (newGithubState !== "open") {
+          body.github_state = newGithubState
+        }
+      }
+      if (newTriggerType === "slack_channel") {
+        body.slack_channel_id = newSlackChannelId.trim()
+        if (newSlackChannelName.trim()) {
+          body.slack_channel_name = newSlackChannelName.trim()
+        }
+      }
 
-      const base = parseInt(newBaseInterval)
-      const max = parseInt(newMaxInterval)
-      if (!isNaN(base) && !isNaN(max) && base > 0 && max > 0) {
-        body.base_interval_minutes = base
-        body.max_interval_minutes = max
+      if (!isChecker) {
+        const base = parseInt(newBaseInterval)
+        const max = parseInt(newMaxInterval)
+        if (!isNaN(base) && !isNaN(max) && base > 0 && max > 0) {
+          body.base_interval_minutes = base
+          body.max_interval_minutes = max
+        }
       }
 
       const res = await fetch("/api/schedules", {
@@ -267,11 +328,15 @@ export function SchedulesView() {
     !newMaxInterval ||
     parseInt(newBaseInterval) < parseInt(newMaxInterval)
 
+  const needsInterval = newTriggerType !== "webhook"
   const canSubmit =
     newAgentId &&
     newPrompt.trim() &&
-    (newTriggerType !== "interval" || parseInt(newIntervalMinutes) >= 5) &&
+    (!needsInterval || parseInt(newIntervalMinutes) >= 5) &&
     (newTriggerType !== "file_watch" || newWatchDir.trim()) &&
+    (newTriggerType !== "github_pr" || newGithubRepo.trim()) &&
+    (newTriggerType !== "github_issues" || newGithubRepo.trim()) &&
+    (newTriggerType !== "slack_channel" || newSlackChannelId.trim()) &&
     !hasPartialBackoff &&
     backoffValid
 
@@ -322,6 +387,9 @@ export function SchedulesView() {
                   <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     <span className="font-mono">{s.id.slice(0, 8)}</span>
+                    {s.last_checked_at && (
+                      <span>last checked: {s.last_checked_at}</span>
+                    )}
                     {s.last_executed_at && (
                       <span>last run: {s.last_executed_at}</span>
                     )}
@@ -455,15 +523,43 @@ export function SchedulesView() {
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <Label className="text-xs">Trigger Type</Label>
+                  <div className="flex items-center gap-1">
+                    <Label className="text-xs">Trigger Type</Label>
+                    <button
+                      type="button"
+                      onClick={() => setShowTriggerInfo(!showTriggerInfo)}
+                      className="inline-flex cursor-pointer"
+                    >
+                      <Info className="size-3 text-muted-foreground" />
+                    </button>
+                  </div>
+                  {showTriggerInfo && (
+                    <div className="rounded-md border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                      <div className="flex items-start justify-between gap-2">
+                        <ul className="flex flex-col gap-1 list-disc pl-3.5">
+                          <li><strong>Interval</strong> -- runs on a timer, always invokes the agent</li>
+                          <li><strong>Webhook</strong> -- triggered by HTTP POST, always invokes the agent</li>
+                          <li><strong>File Watch</strong> -- checks for new files, invokes agent only when changes detected</li>
+                          <li><strong>GitHub PR</strong> -- watches a single PR or all PRs in a repo, invokes agent only on new activity</li>
+                          <li><strong>GitHub Issues</strong> -- polls issues by label/state, invokes agent only for new matches</li>
+                          <li><strong>Slack Channel</strong> -- reads new messages, invokes agent only when messages found</li>
+                        </ul>
+                        <button type="button" onClick={() => setShowTriggerInfo(false)} className="shrink-0 mt-0.5">
+                          <X className="size-3 text-muted-foreground" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <Select value={newTriggerType} onValueChange={setNewTriggerType}>
                     <SelectTrigger className="h-9 text-sm">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="interval">Interval (recurring)</SelectItem>
-                      <SelectItem value="file_watch">File Watch</SelectItem>
-                      <SelectItem value="webhook">Webhook (HTTP POST)</SelectItem>
+                      {triggerTypes.map((tt) => (
+                        <SelectItem key={tt.value} value={tt.value}>
+                          {tt.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -495,7 +591,7 @@ export function SchedulesView() {
                   </Select>
                 </div>
 
-                {newTriggerType === "interval" && (
+                {newTriggerType !== "webhook" && (
                   <div className="flex flex-col gap-1.5">
                     <Label className="text-xs">Interval (minutes, min 5)</Label>
                     <Input
@@ -516,6 +612,109 @@ export function SchedulesView() {
                       placeholder="e.g. incoming/"
                     />
                   </div>
+                )}
+
+                {newTriggerType === "github_pr" && (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Repository (owner/repo)</Label>
+                      <Input
+                        value={newGithubRepo}
+                        onChange={(e) => setNewGithubRepo(e.target.value)}
+                        placeholder="e.g. octocat/hello-world"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">PR Number (optional -- leave empty to watch all PRs)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={newGithubPrNumber}
+                        onChange={(e) => setNewGithubPrNumber(e.target.value)}
+                        placeholder="e.g. 42"
+                      />
+                    </div>
+                    {!newGithubPrNumber && (
+                      <>
+                        <div className="flex flex-col gap-1.5">
+                          <Label className="text-xs">Labels (comma-separated, optional)</Label>
+                          <Input
+                            value={newGithubLabels}
+                            onChange={(e) => setNewGithubLabels(e.target.value)}
+                            placeholder="e.g. bug, needs-review"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <Label className="text-xs">State</Label>
+                          <Select value={newGithubState} onValueChange={setNewGithubState}>
+                            <SelectTrigger className="h-9 text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="open">Open</SelectItem>
+                              <SelectItem value="closed">Closed</SelectItem>
+                              <SelectItem value="all">All</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+
+                {newTriggerType === "github_issues" && (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Repository (owner/repo)</Label>
+                      <Input
+                        value={newGithubRepo}
+                        onChange={(e) => setNewGithubRepo(e.target.value)}
+                        placeholder="e.g. octocat/hello-world"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Labels (comma-separated, optional)</Label>
+                      <Input
+                        value={newGithubLabels}
+                        onChange={(e) => setNewGithubLabels(e.target.value)}
+                        placeholder="e.g. bug, critical"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">State</Label>
+                      <Select value={newGithubState} onValueChange={setNewGithubState}>
+                        <SelectTrigger className="h-9 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="open">Open</SelectItem>
+                          <SelectItem value="closed">Closed</SelectItem>
+                          <SelectItem value="all">All</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
+
+                {newTriggerType === "slack_channel" && (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Channel ID</Label>
+                      <Input
+                        value={newSlackChannelId}
+                        onChange={(e) => setNewSlackChannelId(e.target.value)}
+                        placeholder="e.g. C1234567890"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-xs">Channel Name (optional)</Label>
+                      <Input
+                        value={newSlackChannelName}
+                        onChange={(e) => setNewSlackChannelName(e.target.value)}
+                        placeholder="e.g. engineering"
+                      />
+                    </div>
+                  </>
                 )}
 
                 {newTriggerType === "webhook" && (
@@ -626,7 +825,7 @@ export function SchedulesView() {
                   </SelectContent>
                 </Select>
               </div>
-              {editTriggerType === "interval" && (
+              {editTriggerType !== "webhook" && (
                 <div className="flex flex-col gap-1.5">
                   <Label className="text-xs">Interval (minutes, min 5)</Label>
                   <Input

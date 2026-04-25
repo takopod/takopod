@@ -1555,17 +1555,65 @@ async def delete_container(container_id: str):
 # --- Schedules API ---
 
 
+@router.get("/schedules/trigger-types")
+async def list_trigger_types():
+    """Return available trigger types based on which MCP integrations are enabled."""
+    db = await get_db()
+    types = [
+        {"value": "interval", "label": "Interval (recurring)"},
+        {"value": "file_watch", "label": "File Watch"},
+        {"value": "webhook", "label": "Webhook (HTTP POST)"},
+    ]
+
+    from orchestrator.checkers import CHECKER_MCP_GATES
+
+    for trigger_type, mcp_name in CHECKER_MCP_GATES.items():
+        async with db.execute(
+            "SELECT env FROM mcp_servers WHERE name = ? AND builtin = 1",
+            (mcp_name,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row:
+            env = json.loads(row[0]) if row[0] else {}
+            if "_note" not in env:
+                label_map = {
+                    "github_pr": "GitHub PR",
+                    "github_issues": "GitHub Issues",
+                    "slack_channel": "Slack Channel",
+                }
+                types.append({
+                    "value": trigger_type,
+                    "label": label_map.get(trigger_type, trigger_type),
+                })
+
+    return types
+
+
+_SCHEDULE_SELECT = (
+    "SELECT t.id, t.agent_id, a.name, t.prompt, "
+    "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
+    "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds, "
+    "t.model, t.last_checked_at "
+    "FROM agentic_tasks t "
+    "LEFT JOIN agents a ON a.id = t.agent_id "
+)
+
+
+def _row_to_schedule(r: tuple) -> ScheduleResponse:
+    return ScheduleResponse(
+        id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
+        prompt=r[3],
+        interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
+        status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
+        base_interval_seconds=r[10], max_interval_seconds=r[11],
+        model=r[12], last_checked_at=r[13],
+    )
+
+
 @router.get("/schedules")
 async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     db = await get_db()
-    query = (
-        "SELECT t.id, t.agent_id, a.name, t.prompt, "
-        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
-        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds, "
-        "t.model "
-        "FROM agentic_tasks t "
-        "LEFT JOIN agents a ON a.id = t.agent_id "
-    )
+    query = _SCHEDULE_SELECT
     params: list = []
     if status:
         query += "WHERE t.status = ? "
@@ -1575,44 +1623,21 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
 
-    return [
-        ScheduleResponse(
-            id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
-            prompt=r[3],
-            interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
-            status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
-            base_interval_seconds=r[10], max_interval_seconds=r[11],
-            model=r[12],
-        )
-        for r in rows
-    ]
+    return [_row_to_schedule(r) for r in rows]
 
 
 @router.get("/schedules/{task_id}")
 async def get_schedule(task_id: str) -> ScheduleResponse:
     db = await get_db()
     async with db.execute(
-        "SELECT t.id, t.agent_id, a.name, t.prompt, "
-        "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
-        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds, "
-        "t.model "
-        "FROM agentic_tasks t "
-        "LEFT JOIN agents a ON a.id = t.agent_id "
-        "WHERE t.id = ?",
+        _SCHEDULE_SELECT + "WHERE t.id = ?",
         (task_id,),
     ) as cur:
         r = await cur.fetchone()
     if not r:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    return ScheduleResponse(
-        id=r[0], agent_id=r[1], agent_name=r[2] or "Unknown",
-        prompt=r[3],
-        interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
-        status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
-        base_interval_seconds=r[10], max_interval_seconds=r[11],
-        model=r[12],
-    )
+    return _row_to_schedule(r)
 
 
 @router.post("/schedules")
@@ -1625,9 +1650,35 @@ async def create_schedule(body: ScheduleCreateRequest):
         if not await cur.fetchone():
             raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Gate checker triggers on MCP availability
+    from orchestrator.checkers import CHECKER_MCP_GATES
+    from orchestrator.models import CHECKER_TRIGGER_TYPES
+
+    if body.trigger_type in CHECKER_MCP_GATES:
+        mcp_name = CHECKER_MCP_GATES[body.trigger_type]
+        async with db.execute(
+            "SELECT env FROM mcp_servers WHERE name = ? AND builtin = 1",
+            (mcp_name,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{mcp_name} integration is not available",
+            )
+        env = json.loads(row[0]) if row[0] else {}
+        if "_note" in env:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{mcp_name} integration is not configured: {env['_note']}",
+            )
+
     task_id = str(uuid.uuid4())
     trigger_config: dict = {}
     trigger_secret = None
+    cursor: dict = {}
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    last_checked_at = None
 
     if body.trigger_type == "file_watch":
         if not body.watch_dir:
@@ -1635,35 +1686,79 @@ async def create_schedule(body: ScheduleCreateRequest):
         if ".." in body.watch_dir or body.watch_dir.startswith("/"):
             raise HTTPException(status_code=400, detail="watch_dir must be a relative path within workspace")
         initial_snapshot = await _get_initial_snapshot(body.agent_id, body.watch_dir)
-        trigger_config = {"watch_dir": body.watch_dir, "last_snapshot": initial_snapshot}
-        interval_seconds = 0
+        trigger_config = {"watch_dir": body.watch_dir}
+        cursor = {"snapshot": initial_snapshot}
+        if not body.interval_minutes:
+            body.interval_minutes = 5
+        interval_seconds = body.interval_minutes * 60
+        last_checked_at = now
     elif body.trigger_type == "webhook":
         interval_seconds = 0
         trigger_secret = secrets.token_urlsafe(24)
+    elif body.trigger_type == "github_pr":
+        if not body.github_repo:
+            raise HTTPException(status_code=400, detail="github_repo required for github_pr trigger")
+        trigger_config = {"repo": body.github_repo}
+        if body.github_pr_number:
+            trigger_config["pr_number"] = body.github_pr_number
+        if body.github_labels:
+            trigger_config["labels"] = body.github_labels
+        if body.github_state:
+            trigger_config["state"] = body.github_state
+        if not body.interval_minutes:
+            body.interval_minutes = 5
+        interval_seconds = body.interval_minutes * 60
+        last_checked_at = now
+    elif body.trigger_type == "github_issues":
+        if not body.github_repo:
+            raise HTTPException(status_code=400, detail="github_repo required for github_issues trigger")
+        trigger_config = {"repo": body.github_repo}
+        if body.github_labels:
+            trigger_config["labels"] = body.github_labels
+        if body.github_state:
+            trigger_config["state"] = body.github_state
+        if not body.interval_minutes:
+            body.interval_minutes = 10
+        interval_seconds = body.interval_minutes * 60
+        last_checked_at = now
+    elif body.trigger_type == "slack_channel":
+        if not body.slack_channel_id:
+            raise HTTPException(status_code=400, detail="slack_channel_id required for slack_channel trigger")
+        trigger_config = {"channel_id": body.slack_channel_id}
+        if body.slack_channel_name:
+            trigger_config["channel_name"] = body.slack_channel_name
+        if not body.interval_minutes:
+            body.interval_minutes = 5
+        interval_seconds = body.interval_minutes * 60
+        last_checked_at = now
     else:
+        # interval trigger
         if not body.interval_minutes:
             raise HTTPException(status_code=400, detail="interval_minutes is required for interval triggers")
         interval_seconds = body.interval_minutes * 60
 
     base_interval = None
     max_interval = None
-    if body.base_interval_minutes and body.max_interval_minutes:
-        base_interval = body.base_interval_minutes * 60
-        max_interval = body.max_interval_minutes * 60
-        if base_interval >= max_interval:
-            raise HTTPException(status_code=400, detail="base_interval_minutes must be less than max_interval_minutes")
-        if interval_seconds:
-            interval_seconds = base_interval
+    if body.trigger_type not in CHECKER_TRIGGER_TYPES:
+        if body.base_interval_minutes and body.max_interval_minutes:
+            base_interval = body.base_interval_minutes * 60
+            max_interval = body.max_interval_minutes * 60
+            if base_interval >= max_interval:
+                raise HTTPException(status_code=400, detail="base_interval_minutes must be less than max_interval_minutes")
+            if interval_seconds:
+                interval_seconds = base_interval
 
     await db.execute(
         "INSERT INTO agentic_tasks "
         "(id, agent_id, prompt, interval_seconds, "
         "trigger_type, trigger_config, trigger_secret, "
-        "base_interval_seconds, max_interval_seconds, model) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "base_interval_seconds, max_interval_seconds, model, "
+        "cursor, last_checked_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (task_id, body.agent_id, body.prompt,
          interval_seconds, body.trigger_type, json.dumps(trigger_config),
-         trigger_secret, base_interval, max_interval, body.model),
+         trigger_secret, base_interval, max_interval, body.model,
+         json.dumps(cursor), last_checked_at),
     )
     await db.commit()
 

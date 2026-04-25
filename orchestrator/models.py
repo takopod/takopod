@@ -241,21 +241,34 @@ class ScheduleResponse(BaseModel):
     base_interval_seconds: int | None = None
     max_interval_seconds: int | None = None
     last_executed_at: str | None
+    last_checked_at: str | None = None
     last_result: str | None
     status: str
     created_at: str
     model: str | None = None
 
 
+CHECKER_TRIGGER_TYPES = {"file_watch", "github_pr", "github_issues", "slack_channel"}
+
+
 class ScheduleCreateRequest(BaseModel):
     agent_id: str
     prompt: str
-    trigger_type: Literal["interval", "file_watch", "webhook"] = "interval"
+    trigger_type: Literal[
+        "interval", "file_watch", "webhook",
+        "github_pr", "github_issues", "slack_channel",
+    ] = "interval"
     interval_minutes: int | None = Field(None, ge=5)
     watch_dir: str | None = None
     base_interval_minutes: int | None = Field(None, ge=5)
     max_interval_minutes: int | None = Field(None, ge=5)
     model: str | None = None
+    github_repo: str | None = None
+    github_pr_number: int | None = None
+    github_labels: list[str] | None = None
+    github_state: Literal["open", "closed", "all"] | None = None
+    slack_channel_id: str | None = None
+    slack_channel_name: str | None = None
 
 
 class SlackConfigRequest(BaseModel):

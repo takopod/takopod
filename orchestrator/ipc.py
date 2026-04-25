@@ -492,6 +492,9 @@ async def _handle_tool_request(
             trigger_type = params.get("trigger_type", "interval")
             trigger_config: dict = {}
             trigger_secret = None
+            cursor: dict = {}
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            last_checked_at = None
 
             if trigger_type == "file_watch":
                 watch_dir = params.get("watch_dir", "")
@@ -500,21 +503,65 @@ async def _handle_tool_request(
                 if ".." in watch_dir or watch_dir.startswith("/"):
                     return {"request_id": request_id, "status": "error", "error": "watch_dir must be a relative path within workspace"}
                 initial_snapshot = await _get_initial_snapshot(agent_id, watch_dir)
-                trigger_config = {"watch_dir": watch_dir, "last_snapshot": initial_snapshot}
-                interval_minutes = 0
-                interval_seconds = 0
+                trigger_config = {"watch_dir": watch_dir}
+                cursor = {"snapshot": initial_snapshot}
+                interval_minutes = max(int(params.get("interval_minutes", 5)), 5)
+                interval_seconds = interval_minutes * 60
+                last_checked_at = now
             elif trigger_type == "webhook":
                 interval_minutes = 0
                 interval_seconds = 0
                 import secrets
                 trigger_secret = secrets.token_urlsafe(24)
+            elif trigger_type == "github_pr":
+                repo = params.get("github_repo", "")
+                if not repo:
+                    return {"request_id": request_id, "status": "error", "error": "github_repo required"}
+                trigger_config = {"repo": repo}
+                pr_number = params.get("github_pr_number")
+                if pr_number:
+                    trigger_config["pr_number"] = int(pr_number)
+                labels = params.get("github_labels")
+                if labels:
+                    trigger_config["labels"] = labels if isinstance(labels, list) else [labels]
+                state = params.get("github_state")
+                if state:
+                    trigger_config["state"] = state
+                interval_minutes = max(int(params.get("interval_minutes", 5)), 5)
+                interval_seconds = interval_minutes * 60
+                last_checked_at = now
+            elif trigger_type == "github_issues":
+                repo = params.get("github_repo", "")
+                if not repo:
+                    return {"request_id": request_id, "status": "error", "error": "github_repo required"}
+                trigger_config = {"repo": repo}
+                labels = params.get("github_labels")
+                if labels:
+                    trigger_config["labels"] = labels if isinstance(labels, list) else [labels]
+                state = params.get("github_state")
+                if state:
+                    trigger_config["state"] = state
+                interval_minutes = max(int(params.get("interval_minutes", 10)), 5)
+                interval_seconds = interval_minutes * 60
+                last_checked_at = now
+            elif trigger_type == "slack_channel":
+                channel_id = params.get("slack_channel_id", "")
+                if not channel_id:
+                    return {"request_id": request_id, "status": "error", "error": "slack_channel_id required"}
+                trigger_config = {"channel_id": channel_id}
+                channel_name = params.get("slack_channel_name")
+                if channel_name:
+                    trigger_config["channel_name"] = channel_name
+                interval_minutes = max(int(params.get("interval_minutes", 5)), 5)
+                interval_seconds = interval_minutes * 60
+                last_checked_at = now
             else:
                 interval_minutes = max(int(params.get("interval_minutes", 60)), 5)
                 interval_seconds = interval_minutes * 60
 
             base_interval = None
             max_interval = None
-            if params.get("base_interval_minutes") and params.get("max_interval_minutes"):
+            if trigger_type in ("interval",) and params.get("base_interval_minutes") and params.get("max_interval_minutes"):
                 base_interval = max(int(params["base_interval_minutes"]), 5) * 60
                 max_interval = max(int(params["max_interval_minutes"]), 5) * 60
                 if base_interval >= max_interval:
@@ -526,11 +573,13 @@ async def _handle_tool_request(
                 "INSERT INTO agentic_tasks "
                 "(id, agent_id, prompt, allowed_tools, interval_seconds, "
                 "trigger_type, trigger_config, trigger_secret, "
-                "base_interval_seconds, max_interval_seconds) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "base_interval_seconds, max_interval_seconds, "
+                "cursor, last_checked_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (task_id, agent_id, prompt, allowed_tools, interval_seconds,
                  trigger_type, json.dumps(trigger_config), trigger_secret,
-                 base_interval, max_interval),
+                 base_interval, max_interval,
+                 json.dumps(cursor), last_checked_at),
             )
             await db.commit()
             logger.info("Created agentic task %s (%s) for agent %s", task_id[:8], trigger_type, agent_id[:8])
