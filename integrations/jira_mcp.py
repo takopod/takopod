@@ -14,15 +14,11 @@ Usage (standalone testing):
 
 from __future__ import annotations
 
-import asyncio
-import shlex
-
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("JiraIntegration")
+from integrations.cli_base import run_cli_tool
 
-SUBPROCESS_TIMEOUT = 300  # seconds
-MAX_OUTPUT_BYTES = 100_000  # ~100KB
+mcp = FastMCP("JiraIntegration")
 
 
 @mcp.tool()
@@ -66,41 +62,11 @@ async def jira(command: str) -> str:
     Args:
         command: The Jira subcommand and arguments (without the "acli jira" prefix).
     """
-    try:
-        tokens = shlex.split(command)
-    except ValueError as exc:
-        return f"Error: invalid command syntax: {exc}"
-
-    if not tokens:
-        return "Error: empty command"
-
-    proc = await asyncio.create_subprocess_exec(
-        "acli", "jira", *tokens,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    return await run_cli_tool(
+        command,
+        cli_prefix=["acli", "jira"],
+        truncation_hint="Use --limit or --output-format json with fewer fields to reduce output size.",
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=SUBPROCESS_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return f"Error: command timed out after {SUBPROCESS_TIMEOUT} seconds"
-
-    if proc.returncode != 0:
-        return f"Error (exit {proc.returncode}):\n{stderr.decode()}"
-
-    output = stdout.decode()
-    if len(stdout) > MAX_OUTPUT_BYTES:
-        truncated = stdout[:MAX_OUTPUT_BYTES].decode(errors="replace")
-        total_kb = len(stdout) / 1024
-        return (
-            f"{truncated}\n\n"
-            f"--- Output truncated ({total_kb:.0f}KB total). "
-            f"Use --limit or --output-format json with fewer fields to reduce output size. ---"
-        )
-    return output
 
 
 if __name__ == "__main__":

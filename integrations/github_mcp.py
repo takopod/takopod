@@ -19,15 +19,13 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("GitHubIntegration")
+from integrations.cli_base import run_cli_tool
 
-SUBPROCESS_TIMEOUT = 300  # seconds
-MAX_OUTPUT_BYTES = 100_000  # ~100KB
+mcp = FastMCP("GitHubIntegration")
 
 _GITHUB_REMOTE_RE = re.compile(
     r"(?:https://github\.com/|git@github\.com:)(?P<owner>[^/]+)/(?P<repo>[^/.]+?)(?:\.git)?$"
@@ -38,7 +36,7 @@ async def _run(
     *args: str,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
-    timeout: float = SUBPROCESS_TIMEOUT,
+    timeout: float = 300,
 ) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -96,41 +94,11 @@ async def gh(command: str) -> str:
     Args:
         command: The gh subcommand and arguments (without the "gh" prefix).
     """
-    try:
-        tokens = shlex.split(command)
-    except ValueError as exc:
-        return f"Error: invalid command syntax: {exc}"
-
-    if not tokens:
-        return "Error: empty command"
-
-    proc = await asyncio.create_subprocess_exec(
-        "gh", *tokens,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    return await run_cli_tool(
+        command,
+        cli_prefix=["gh"],
+        truncation_hint="Use --limit, --json with fewer fields, or --jq to reduce output size.",
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=SUBPROCESS_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return f"Error: command timed out after {SUBPROCESS_TIMEOUT} seconds"
-
-    if proc.returncode != 0:
-        return f"Error (exit {proc.returncode}):\n{stderr.decode()}"
-
-    output = stdout.decode()
-    if len(stdout) > MAX_OUTPUT_BYTES:
-        truncated = stdout[:MAX_OUTPUT_BYTES].decode(errors="replace")
-        total_kb = len(stdout) / 1024
-        return (
-            f"{truncated}\n\n"
-            f"--- Output truncated ({total_kb:.0f}KB total). "
-            f"Use --limit, --json with fewer fields, or --jq to reduce output size. ---"
-        )
-    return output
 
 
 @mcp.tool()

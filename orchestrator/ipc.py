@@ -782,14 +782,20 @@ async def _handle_tool_request(
             server_name = params.get("server_name", "")
             arguments = params.get("arguments", {})
 
-            # Permission gate for gh CLI tool
-            if server_name == "github" and tool_name == "gh":
-                from orchestrator.gh_permissions import GhPermission, classify_gh_command
+            # Registry-driven CLI permission gate
+            from orchestrator.cli_registry import CLI_TOOL_GATES
+            from orchestrator.cli_permissions import CliPermission
 
-                command = arguments.get("command", "")
-                permission, matched = classify_gh_command(command)
+            gate = CLI_TOOL_GATES.get((server_name, tool_name))
+            if gate is not None:
+                if gate.describe:
+                    command_or_desc = gate.describe(arguments)
+                else:
+                    command_or_desc = arguments.get("command", "")
 
-                if permission == GhPermission.DENIED:
+                permission, matched = gate.classify(command_or_desc)
+
+                if permission == CliPermission.DENIED:
                     return {
                         "request_id": request_id,
                         "status": "ok",
@@ -799,96 +805,30 @@ async def _handle_tool_request(
                         },
                     }
 
-                if permission == GhPermission.NEEDS_APPROVAL:
+                if permission == CliPermission.NEEDS_APPROVAL:
                     if not approval_manager or not ws_manager:
                         return {
                             "request_id": request_id,
                             "status": "ok",
                             "data": {
-                                "content": [{"type": "text", "text": f"Command requires approval but no approval channel available: gh {command}"}],
+                                "content": [{"type": "text", "text": f"Command requires approval but no approval channel available: {gate.cli_prefix} {command_or_desc}"}],
                                 "isError": True,
                             },
                         }
                     approved = await approval_manager.request_approval(
-                        request_id, agent_id, command, ws_manager,
-                        source="github",
+                        request_id, agent_id, command_or_desc, ws_manager,
+                        source=gate.approval_source,
+                        display_prefix=gate.cli_prefix,
                     )
                     if not approved:
                         return {
                             "request_id": request_id,
                             "status": "ok",
                             "data": {
-                                "content": [{"type": "text", "text": f"User denied execution of: gh {command}"}],
+                                "content": [{"type": "text", "text": f"User denied execution of: {gate.cli_prefix} {command_or_desc}"}],
                                 "isError": False,
                             },
                         }
-
-            # Permission gate for acli jira tool
-            if server_name == "jira" and tool_name == "jira":
-                from orchestrator.jira_permissions import JiraPermission, classify_jira_command
-
-                command = arguments.get("command", "")
-                permission, matched = classify_jira_command(command)
-
-                if permission == JiraPermission.DENIED:
-                    return {
-                        "request_id": request_id,
-                        "status": "ok",
-                        "data": {
-                            "content": [{"type": "text", "text": f"Command not allowed: '{matched}' is not in the approved command list."}],
-                            "isError": True,
-                        },
-                    }
-
-                if permission == JiraPermission.NEEDS_APPROVAL:
-                    if not approval_manager or not ws_manager:
-                        return {
-                            "request_id": request_id,
-                            "status": "ok",
-                            "data": {
-                                "content": [{"type": "text", "text": f"Command requires approval but no approval channel available: acli jira {command}"}],
-                                "isError": True,
-                            },
-                        }
-                    approved = await approval_manager.request_approval(
-                        request_id, agent_id, command, ws_manager,
-                        source="jira",
-                    )
-                    if not approved:
-                        return {
-                            "request_id": request_id,
-                            "status": "ok",
-                            "data": {
-                                "content": [{"type": "text", "text": f"User denied execution of: acli jira {command}"}],
-                                "isError": False,
-                            },
-                        }
-
-            # Permission gate for git_push tool
-            if server_name == "github" and tool_name == "git_push":
-                if not approval_manager or not ws_manager:
-                    return {
-                        "request_id": request_id,
-                        "status": "ok",
-                        "data": {
-                            "content": [{"type": "text", "text": "git_push requires approval but no approval channel available"}],
-                            "isError": True,
-                        },
-                    }
-                desc = f"git push {arguments.get('repo_path', '')} → {arguments.get('remote', 'origin')} {arguments.get('branch', '(current)')}"
-                approved = await approval_manager.request_approval(
-                    request_id, agent_id, desc, ws_manager,
-                    source="github",
-                )
-                if not approved:
-                    return {
-                        "request_id": request_id,
-                        "status": "ok",
-                        "data": {
-                            "content": [{"type": "text", "text": f"User denied: {desc}"}],
-                            "isError": False,
-                        },
-                    }
 
             if not mcp_manager:
                 return {

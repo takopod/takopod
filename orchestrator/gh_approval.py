@@ -36,6 +36,7 @@ class GhApprovalManager:
         ws_manager: WebSocketManager,
         *,
         source: str = "github",
+        display_prefix: str | None = None,
     ) -> bool:
         """Request human approval for a CLI command.
 
@@ -44,12 +45,16 @@ class GhApprovalManager:
 
         Args:
             source: Integration source (``"github"`` or ``"jira"``).  Controls
-                    the display prefix shown to the user.
+                    the display prefix shown to the user when *display_prefix*
+                    is not provided.
+            display_prefix: Explicit display prefix (e.g. ``"gh"``,
+                            ``"acli jira"``).  When given, takes precedence
+                            over the *source*-based lookup.
 
         Returns True if approved, False if denied or timed out.
         """
         # Derive display prefix from source for log messages and persistence
-        _display_prefix = {"github": "gh", "jira": "acli jira"}.get(source, source)
+        _display_prefix = display_prefix or {"github": "gh", "jira": "acli jira"}.get(source, source)
 
         if not ws_manager.connected:
             logger.warning(
@@ -73,6 +78,7 @@ class GhApprovalManager:
         await self._persist_approval_message(
             message_id, request_id, agent_id, command, "pending", timestamp,
             source=source,
+            display_prefix=_display_prefix,
         )
 
         await ws_manager.send(json.dumps({
@@ -133,8 +139,9 @@ class GhApprovalManager:
         timestamp: str,
         *,
         source: str = "github",
+        display_prefix: str | None = None,
     ) -> None:
-        display_prefix = {"github": "gh", "jira": "acli jira"}.get(source, source)
+        display_prefix = display_prefix or {"github": "gh", "jira": "acli jira"}.get(source, source)
         metadata = json.dumps({
             "blocks": [{
                 "type": "gh_approval",
