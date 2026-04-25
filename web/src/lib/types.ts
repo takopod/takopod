@@ -50,6 +50,7 @@ export interface GhApprovalRequestFrame {
   command: string
   message_id: string
   timestamp: string
+  source?: string
 }
 
 export interface MessagesSyncFrame {
@@ -83,7 +84,7 @@ export interface ToolCallInfo {
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool_call"; tool: ToolCallInfo }
-  | { type: "gh_approval"; request_id: string; command: string; status: "pending" | "approved" | "denied" }
+  | { type: "gh_approval"; request_id: string; command: string; status: "pending" | "approved" | "denied"; source?: string }
 
 export interface ChatMessage {
   id: string

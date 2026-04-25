@@ -71,6 +71,9 @@ function GhApprovalBlock({
   const isApproved = block.status === "approved"
   const isDenied = block.status === "denied"
 
+  const displayLabel = block.source === "jira" ? "Jira Command Approval" : "GitHub Command Approval"
+  const commandPrefix = block.source === "jira" ? "acli jira" : "gh"
+
   const handleRespond = (approved: boolean) => {
     setClicked(true)
     onRespond?.(block.request_id, approved)
@@ -80,10 +83,10 @@ function GhApprovalBlock({
     <div className="mt-1.5 rounded border border-amber-500/30 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs">
       <div className="flex items-center gap-1.5 mb-1.5 font-medium text-amber-700 dark:text-amber-400">
         <Shield className="size-3" />
-        GitHub Command Approval
+        {displayLabel}
       </div>
       <code className="block bg-background/50 px-2 py-1 rounded text-[11px] mb-2">
-        gh {block.command}
+        {commandPrefix} {block.command}
       </code>
       <div className="flex gap-2">
         {isPending ? (

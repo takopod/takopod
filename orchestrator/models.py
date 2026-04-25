@@ -108,6 +108,7 @@ class GhApprovalRequestFrame(BaseModel):
     command: str
     message_id: str
     timestamp: str
+    source: str = "github"
 
 
 class GhApprovalResponseFrame(BaseModel):

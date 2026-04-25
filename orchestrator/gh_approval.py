@@ -34,18 +34,27 @@ class GhApprovalManager:
         agent_id: str,
         command: str,
         ws_manager: WebSocketManager,
+        *,
+        source: str = "github",
     ) -> bool:
-        """Request human approval for a gh command.
+        """Request human approval for a CLI command.
 
         Persists an approval message in the DB, sends a WebSocket frame to the
         frontend, and blocks until the user responds or the timeout expires.
 
+        Args:
+            source: Integration source (``"github"`` or ``"jira"``).  Controls
+                    the display prefix shown to the user.
+
         Returns True if approved, False if denied or timed out.
         """
+        # Derive display prefix from source for log messages and persistence
+        _display_prefix = {"github": "gh", "jira": "acli jira"}.get(source, source)
+
         if not ws_manager.connected:
             logger.warning(
-                "No WebSocket connection for agent %s — auto-denying gh %s",
-                agent_id, command,
+                "No WebSocket connection for agent %s — auto-denying %s %s",
+                agent_id, _display_prefix, command,
             )
             return False
 
@@ -63,6 +72,7 @@ class GhApprovalManager:
 
         await self._persist_approval_message(
             message_id, request_id, agent_id, command, "pending", timestamp,
+            source=source,
         )
 
         await ws_manager.send(json.dumps({
@@ -72,6 +82,7 @@ class GhApprovalManager:
             "command": command,
             "message_id": message_id,
             "timestamp": timestamp,
+            "source": source,
         }))
 
         try:
@@ -120,13 +131,17 @@ class GhApprovalManager:
         command: str,
         status: str,
         timestamp: str,
+        *,
+        source: str = "github",
     ) -> None:
+        display_prefix = {"github": "gh", "jira": "acli jira"}.get(source, source)
         metadata = json.dumps({
             "blocks": [{
                 "type": "gh_approval",
                 "request_id": request_id,
                 "command": command,
                 "status": status,
+                "source": source,
             }],
             "source": "system",
         })
@@ -139,7 +154,7 @@ class GhApprovalManager:
                 (
                     message_id,
                     agent_id,
-                    f"Requesting approval for: gh {command}",
+                    f"Requesting approval for: {display_prefix} {command}",
                     metadata,
                     timestamp,
                 ),

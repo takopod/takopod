@@ -811,6 +811,7 @@ async def _handle_tool_request(
                         }
                     approved = await approval_manager.request_approval(
                         request_id, agent_id, command, ws_manager,
+                        source="github",
                     )
                     if not approved:
                         return {
@@ -818,6 +819,47 @@ async def _handle_tool_request(
                             "status": "ok",
                             "data": {
                                 "content": [{"type": "text", "text": f"User denied execution of: gh {command}"}],
+                                "isError": False,
+                            },
+                        }
+
+            # Permission gate for acli jira tool
+            if server_name == "jira" and tool_name == "jira":
+                from orchestrator.jira_permissions import JiraPermission, classify_jira_command
+
+                command = arguments.get("command", "")
+                permission, matched = classify_jira_command(command)
+
+                if permission == JiraPermission.DENIED:
+                    return {
+                        "request_id": request_id,
+                        "status": "ok",
+                        "data": {
+                            "content": [{"type": "text", "text": f"Command not allowed: '{matched}' is not in the approved command list."}],
+                            "isError": True,
+                        },
+                    }
+
+                if permission == JiraPermission.NEEDS_APPROVAL:
+                    if not approval_manager or not ws_manager:
+                        return {
+                            "request_id": request_id,
+                            "status": "ok",
+                            "data": {
+                                "content": [{"type": "text", "text": f"Command requires approval but no approval channel available: acli jira {command}"}],
+                                "isError": True,
+                            },
+                        }
+                    approved = await approval_manager.request_approval(
+                        request_id, agent_id, command, ws_manager,
+                        source="jira",
+                    )
+                    if not approved:
+                        return {
+                            "request_id": request_id,
+                            "status": "ok",
+                            "data": {
+                                "content": [{"type": "text", "text": f"User denied execution of: acli jira {command}"}],
                                 "isError": False,
                             },
                         }
@@ -836,6 +878,7 @@ async def _handle_tool_request(
                 desc = f"git push {arguments.get('repo_path', '')} → {arguments.get('remote', 'origin')} {arguments.get('branch', '(current)')}"
                 approved = await approval_manager.request_approval(
                     request_id, agent_id, desc, ws_manager,
+                    source="github",
                 )
                 if not approved:
                     return {
