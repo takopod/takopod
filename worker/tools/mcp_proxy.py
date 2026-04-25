@@ -7,9 +7,11 @@ which routes it to the actual MCP server running on the host.
 """
 
 import json
-import sys
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -65,8 +67,7 @@ def create_mcp_proxy_servers() -> list[tuple[str, Any, list[str]]]:
                 _server: str = server_name,
                 _timeout: float = timeout,
             ) -> dict[str, Any]:
-                sys.stderr.write(f"agent: mcp_call {_server}/{_name}\n")
-                sys.stderr.flush()
+                logger.debug("mcp_call %s/%s", _server, _name)
                 data = await ipc_request(
                     "mcp_call",
                     {
@@ -90,10 +91,7 @@ def create_mcp_proxy_servers() -> list[tuple[str, Any, list[str]]]:
             tool_functions.append(proxy_call)
             tool_names.append(f"mcp__{server_name}__{name}")
 
-        sys.stderr.write(
-            f"agent: mcp_proxy loaded {len(tool_functions)} tools for server '{server_name}'\n",
-        )
-        sys.stderr.flush()
+        logger.info("mcp_proxy loaded %d tools for server '%s'", len(tool_functions), server_name)
 
         server = create_sdk_mcp_server(
             name=server_name,

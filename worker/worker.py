@@ -2,13 +2,17 @@
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
 os.umask(0o022)
+
+logger = logging.getLogger(__name__)
 
 from worker import db
 from worker.agent import run_query
@@ -74,8 +78,7 @@ def _cleanup_attachments(attachments: list[str]) -> None:
                 d.rmdir()
         except OSError:
             pass
-    sys.stderr.write(f"worker: cleaned up {len(attachments)} attachment(s)\n")
-    sys.stderr.flush()
+    logger.info("Cleaned up %d attachment(s)", len(attachments))
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -218,19 +221,16 @@ async def _split_session(conn) -> None:
             if needs_compaction:
                 today = time.strftime("%Y-%m-%d", time.gmtime())
                 emit({"type": "schedule_compaction", "date": today, "message_id": ""})
-                sys.stderr.write(f"worker: scheduled compaction for {today}\n")
-                sys.stderr.flush()
+                logger.info("Scheduled compaction for %s", today)
 
         # Reset SDK session; keep last N transcript entries for session history
         _session_id = None
         window = _get_window_size()
         _session_transcript = _session_transcript[-window:]
-        sys.stderr.write("worker: session split complete\n")
-        sys.stderr.flush()
+        logger.info("Session split complete")
 
     except Exception as e:
-        sys.stderr.write(f"worker: session split failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Session split failed: %s", e)
 
 
 async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
@@ -239,8 +239,7 @@ async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
     payload = msg.get("payload", {})
     task_id = msg.get("task_id", "")
 
-    sys.stderr.write(f"worker: handling scheduled task {task_id[:8]} type={task_type}\n")
-    sys.stderr.flush()
+    logger.info("Handling scheduled task %s type=%s", task_id[:8], task_type)
 
     if task_type == "memory_compaction":
         from worker.memory import compact_memory_files
@@ -269,8 +268,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
                 if compaction_date:
                     emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
             except Exception as e:
-                sys.stderr.write(f"worker: session-end summary failed: {e}\n")
-                sys.stderr.flush()
+                logger.error("Session-end summary failed: %s", e)
             _session_id = None  # Next query starts a fresh SDK session
             _continuation_summary = None
             _session_transcript = []
@@ -278,8 +276,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
                 os.remove(SESSION_HISTORY_PATH)
             emit({"type": "status", "status": "context_cleared", "message_id": ""})
         elif command == "shutdown":
-            sys.stderr.write("worker: received shutdown command, summarizing session\n")
-            sys.stderr.flush()
+            logger.info("Received shutdown command, summarizing session")
             try:
                 from worker.memory import run_session_end
                 compaction_date = await run_session_end(
@@ -288,8 +285,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
                 if compaction_date:
                     emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
             except Exception as e:
-                sys.stderr.write(f"worker: session-end summary failed: {e}\n")
-                sys.stderr.flush()
+                logger.error("Session-end summary failed: %s", e)
             _persist_session_history()
             emit({"type": "status", "status": "done", "message_id": ""})
             flush_responses()
@@ -310,8 +306,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         sys.exit(0)
 
     if msg_type != "user_message":
-        sys.stderr.write(f"worker: unknown message type: {msg_type}\n")
-        sys.stderr.flush()
+        logger.warning("Unknown message type: %s", msg_type)
         return
 
     message_id = msg.get("message_id", "")
@@ -319,8 +314,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         return
 
     if _is_processed(conn, message_id):
-        sys.stderr.write(f"worker: skipping duplicate message {message_id}\n")
-        sys.stderr.flush()
+        logger.warning("Skipping duplicate message %s", message_id)
         return
 
     _current_agentic_task_id = msg.get("agentic_task_id")
@@ -329,10 +323,9 @@ async def process_message(msg: dict[str, Any], conn) -> None:
     attachments: list[str] = msg.get("attachments", [])
     session_id_from_msg = msg.get("session_id", "")
     _orch_session_id = session_id_from_msg or _orch_session_id
-    sys.stderr.write(f"worker: query message_id={message_id} content={content!r}\n")
+    logger.debug("Query message_id=%s content=%r", message_id, content)
     if attachments:
-        sys.stderr.write(f"worker: attachments={attachments}\n")
-    sys.stderr.flush()
+        logger.debug("Attachments=%s", attachments)
     emit({"type": "status", "status": "thinking", "message_id": message_id})
 
     # Prepend attachment references so the SDK's Read tool can access them
@@ -358,18 +351,11 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             results = await search_hybrid(conn, search_query)
             retrieved_context = format_context(results, max_tokens=config.search_tokens)
             if retrieved_context:
-                sys.stderr.write(
-                    f"worker: retrieved {len(results)} search results for context\n"
-                )
-                sys.stderr.flush()
+                logger.info("Retrieved %d search results for context", len(results))
         else:
-            sys.stderr.write(
-                f"worker: skipping search (query too short: {len(content.strip())} chars)\n"
-            )
-            sys.stderr.flush()
+            logger.debug("Skipping search (query too short: %d chars)", len(content.strip()))
     except Exception as e:
-        sys.stderr.write(f"worker: search failed, proceeding without context: {e}\n")
-        sys.stderr.flush()
+        logger.warning("Search failed, proceeding without context: %s", e)
 
     # Load memory context (MEMORY.md + daily memory files)
     memory_context = None
@@ -377,13 +363,9 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         from worker.memory import load_memory_context
         memory_context = load_memory_context()
         if memory_context:
-            sys.stderr.write(
-                f"worker: loaded memory context ({len(memory_context)} chars)\n"
-            )
-            sys.stderr.flush()
+            logger.info("Loaded memory context (%d chars)", len(memory_context))
     except Exception as e:
-        sys.stderr.write(f"worker: memory loading failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Memory loading failed: %s", e)
 
     # Extract structured facts from cached memory data (P2)
     facts_context = None
@@ -391,13 +373,9 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         from worker.memory import get_facts_context
         facts_context = get_facts_context(conn)
         if facts_context:
-            sys.stderr.write(
-                f"worker: facts context ({len(facts_context)} chars)\n"
-            )
-            sys.stderr.flush()
+            logger.debug("Facts context (%d chars)", len(facts_context))
     except Exception as e:
-        sys.stderr.write(f"worker: fact extraction failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Fact extraction failed: %s", e)
 
     response_text = ""
     partial_text_ref = [""]
@@ -430,12 +408,10 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         # split the SDK session.  The orchestrator session is unaffected.
         input_tokens = _usage.get("input_tokens", 0)
         if input_tokens > CONTEXT_WINDOW * CONTEXT_THRESHOLD:
-            sys.stderr.write(
-                f"worker: context overflow detected "
-                f"({input_tokens}/{CONTEXT_WINDOW} tokens, "
-                f"threshold {CONTEXT_THRESHOLD:.0%}), splitting session\n"
+            logger.warning(
+                "Context overflow detected (%d/%d tokens, threshold %.0f%%), splitting session",
+                input_tokens, CONTEXT_WINDOW, CONTEXT_THRESHOLD * 100,
             )
-            sys.stderr.flush()
             await _split_session(conn)
     except asyncio.CancelledError:
         response_text = partial_text_ref[0]
@@ -444,8 +420,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             if response_text
             else "[Generation stopped by user]"
         )
-        sys.stderr.write("worker: query cancelled by user\n")
-        sys.stderr.flush()
+        logger.info("Query cancelled by user")
         emit({
             "type": "complete",
             "content": stopped_text,
@@ -458,8 +433,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         _session_transcript.append(("assistant", stopped_text))
         _persist_session_history()
     except Exception as e:
-        sys.stderr.write(f"worker: query error: {e}\n")
-        sys.stderr.flush()
+        logger.error("Query error: %s", e)
         emit({
             "type": "system_error",
             "error": str(e),
@@ -483,17 +457,23 @@ async def main() -> None:
     logs_dir = WORKSPACE / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prune old log files, keep last 9 (+ the new one = 10)
-    old_logs = sorted(logs_dir.glob("worker-*.log"))
-    for stale in old_logs[:-9]:
-        stale.unlink(missing_ok=True)
+    log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
 
-    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    log_file = open(logs_dir / f"worker-{timestamp}.log", "w")
-    sys.stderr = log_file
+    file_handler = RotatingFileHandler(
+        logs_dir / "worker.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=10,
+    )
+    file_handler.setFormatter(logging.Formatter(log_format))
+    root.addHandler(file_handler)
 
-    sys.stderr.write("worker: starting, connecting to database\n")
-    sys.stderr.flush()
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setFormatter(logging.Formatter(log_format))
+    root.addHandler(console_handler)
+
+    logger.info("Starting, connecting to database")
 
     _conn = db.connect()
     conn = _conn
@@ -510,23 +490,16 @@ async def main() -> None:
     try:
         from worker.embed import embed
         vec = await embed("smoke test")
-        sys.stderr.write(
-            f"worker: Ollama connectivity OK — embedding dim={len(vec)}\n"
-        )
-        sys.stderr.flush()
+        logger.info("Ollama connectivity OK — embedding dim=%d", len(vec))
     except Exception as e:
-        sys.stderr.write(
-            f"worker: Ollama not reachable: {e} — embeddings disabled\n"
-        )
-        sys.stderr.flush()
+        logger.warning("Ollama not reachable: %s — embeddings disabled", e)
 
     # One-time migration: import markdown-embedded facts into DB (P7)
     try:
         from worker.memory import migrate_markdown_facts_to_db
         migrate_markdown_facts_to_db(conn)
     except Exception as e:
-        sys.stderr.write(f"worker: markdown facts migration failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Markdown facts migration failed: %s", e)
 
     # Backfill memory search index if empty but memory files exist on disk
     try:
@@ -537,20 +510,15 @@ async def main() -> None:
                 from worker.search import index_memory_file, index_memory_vectors
                 md_files = sorted(memory_dir.glob("*.md"))
                 if md_files:
-                    sys.stderr.write(
-                        f"worker: backfilling memory index ({len(md_files)} files)\n"
-                    )
-                    sys.stderr.flush()
+                    logger.info("Backfilling memory index (%d files)", len(md_files))
                     for md_file in md_files:
                         rel_path = f"memory/{md_file.name}"
                         file_content = md_file.read_text()
                         index_memory_file(conn, rel_path, file_content)
                         await index_memory_vectors(conn, rel_path, file_content)
-                    sys.stderr.write("worker: memory index backfill complete\n")
-                    sys.stderr.flush()
+                    logger.info("Memory index backfill complete")
     except Exception as e:
-        sys.stderr.write(f"worker: memory index backfill failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Memory index backfill failed: %s", e)
 
     # Prune old index entries based on retention policy (P3)
     try:
@@ -559,11 +527,9 @@ async def main() -> None:
         _cfg = _get_config()
         pruned = prune_old_index_entries(conn, _cfg.retention_days)
         if pruned > 0:
-            sys.stderr.write(f"worker: pruned {pruned} old index entries\n")
-            sys.stderr.flush()
+            logger.info("Pruned %d old index entries", pruned)
     except Exception as e:
-        sys.stderr.write(f"worker: index pruning failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Index pruning failed: %s", e)
 
     # Restore conversation context from previous session if available.
     # Pre-populate _session_transcript so old entries survive the next persist.
@@ -571,14 +537,12 @@ async def main() -> None:
     if history_entries:
         _session_transcript = history_entries
         _continuation_summary = history_summary
-        sys.stderr.write(
-            f"worker: loaded {len(history_entries)} session history entries "
-            "as continuation context\n"
+        logger.info(
+            "Loaded %d session history entries as continuation context",
+            len(history_entries),
         )
-        sys.stderr.flush()
 
-    sys.stderr.write("worker: ready, polling for input.json\n")
-    sys.stderr.flush()
+    logger.info("Ready, polling for input.json")
 
     while True:
         await asyncio.sleep(POLL_INTERVAL)
@@ -596,8 +560,7 @@ async def main() -> None:
                 data = json.load(f)
             os.remove(INPUT_PATH)
         except (json.JSONDecodeError, OSError) as e:
-            sys.stderr.write(f"worker: error reading input.json: {e}\n")
-            sys.stderr.flush()
+            logger.error("Error reading input.json: %s", e)
             continue
 
         messages = data if isinstance(data, list) else [data]

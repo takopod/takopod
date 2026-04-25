@@ -2,15 +2,30 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+
+_file_handler = RotatingFileHandler(
+    _LOG_DIR / "orchestrator.log",
+    maxBytes=5 * 1024 * 1024,
+    backupCount=10,
 )
+_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_root.addHandler(_file_handler)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_root.addHandler(_console_handler)
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse

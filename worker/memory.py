@@ -2,13 +2,15 @@
 
 import asyncio
 import json
+import logging
 import re
 import sqlite3
-import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -131,8 +133,7 @@ def parse_facts_json(text: str) -> list[dict]:
             json_str = match.group(0).strip()
 
     if not json_str:
-        sys.stderr.write("memory: no JSON facts array found in output\n")
-        sys.stderr.flush()
+        logger.warning("No JSON facts array found in output")
         return []
 
     # Strip trailing commas before closing bracket (common LLM formatting error)
@@ -141,15 +142,11 @@ def parse_facts_json(text: str) -> list[dict]:
     try:
         parsed = json.loads(json_str)
     except json.JSONDecodeError as e:
-        sys.stderr.write(f"memory: facts JSON parse failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Facts JSON parse failed: %s", e)
         return []
 
     if not isinstance(parsed, list):
-        sys.stderr.write(
-            f"memory: facts JSON is not an array: {type(parsed).__name__}\n"
-        )
-        sys.stderr.flush()
+        logger.error("Facts JSON is not an array: %s", type(parsed).__name__)
         return []
 
     # Validate and normalize each fact
@@ -170,8 +167,7 @@ def parse_facts_json(text: str) -> list[dict]:
             "category": category,
         })
 
-    sys.stderr.write(f"memory: parsed {len(facts)} facts from JSON\n")
-    sys.stderr.flush()
+    logger.info("Parsed %d facts from JSON", len(facts))
     return facts
 
 
@@ -235,10 +231,7 @@ def store_facts(
         written += 1
 
     conn.commit()
-    sys.stderr.write(
-        f"memory: stored {written} facts (source={source})\n"
-    )
-    sys.stderr.flush()
+    logger.info("Stored %d facts (source=%s)", written, source)
     return written
 
 
@@ -332,10 +325,7 @@ def migrate_markdown_facts_to_db(conn: sqlite3.Connection) -> int:
     # Check if already migrated
     count = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
     if count > 0:
-        sys.stderr.write(
-            f"memory: facts table already has {count} rows, skipping markdown migration\n"
-        )
-        sys.stderr.flush()
+        logger.info("Facts table already has %d rows, skipping markdown migration", count)
         return 0
 
     # Parse facts from all memory files
@@ -357,8 +347,7 @@ def migrate_markdown_facts_to_db(conn: sqlite3.Connection) -> int:
                     facts[norm_key] = (orig_key, value)
 
     if not facts:
-        sys.stderr.write("memory: no markdown facts found to migrate\n")
-        sys.stderr.flush()
+        logger.info("No markdown facts found to migrate")
         return 0
 
     # Insert all facts with source=migration:markdown
@@ -368,8 +357,7 @@ def migrate_markdown_facts_to_db(conn: sqlite3.Connection) -> int:
     ]
     written = store_facts(conn, migrated_facts, source="migration:markdown")
 
-    sys.stderr.write(f"memory: migrated {written} facts from markdown to DB\n")
-    sys.stderr.flush()
+    logger.info("Migrated %d facts from markdown to DB", written)
     return written
 
 
@@ -411,8 +399,7 @@ async def summarize_session(
     fails.
     """
     if not transcript_turns:
-        sys.stderr.write("memory: no messages to summarize\n")
-        sys.stderr.flush()
+        logger.info("No messages to summarize")
         return None
 
     # Format as transcript, stripping any injected retrieval blocks
@@ -426,11 +413,10 @@ async def summarize_session(
     if len(transcript) > MAX_SUMMARY_INPUT:
         transcript = transcript[:MAX_SUMMARY_INPUT] + "\n\n[...truncated]"
 
-    sys.stderr.write(
-        f"memory: summarizing session "
-        f"({len(transcript_turns)} messages, {len(transcript)} chars)\n"
+    logger.debug(
+        "Summarizing session (%d messages, %d chars)",
+        len(transcript_turns), len(transcript),
     )
-    sys.stderr.flush()
 
     try:
         summary = await asyncio.wait_for(
@@ -438,12 +424,10 @@ async def summarize_session(
         )
         return summary
     except asyncio.TimeoutError:
-        sys.stderr.write("memory: summarization timed out\n")
-        sys.stderr.flush()
+        logger.warning("Summarization timed out")
         return None
     except Exception as e:
-        sys.stderr.write(f"memory: summarization failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Summarization failed: %s", e)
         return None
 
 
@@ -470,8 +454,7 @@ async def _call_summarize(transcript: str) -> str | None:
     if not summary:
         return None
 
-    sys.stderr.write(f"memory: summary generated ({len(summary)} chars)\n")
-    sys.stderr.flush()
+    logger.info("Summary generated (%d chars)", len(summary))
     return summary
 
 
@@ -508,23 +491,17 @@ async def compact_memory_files(
     if len(combined) > MAX_SUMMARY_INPUT:
         combined = combined[:MAX_SUMMARY_INPUT] + "\n\n[...truncated]"
 
-    sys.stderr.write(
-        f"memory: compacting {len(paths)} files for {date} "
-        f"({len(combined)} chars)\n"
-    )
-    sys.stderr.flush()
+    logger.info("Compacting %d files for %s (%d chars)", len(paths), date, len(combined))
 
     try:
         distilled = await asyncio.wait_for(
             _call_compact(combined), timeout=SUMMARIZE_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        sys.stderr.write("memory: compaction timed out\n")
-        sys.stderr.flush()
+        logger.warning("Compaction timed out")
         return None
     except Exception as e:
-        sys.stderr.write(f"memory: compaction failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Compaction failed: %s", e)
         return None
 
     if not distilled:
@@ -539,16 +516,14 @@ async def compact_memory_files(
         if parsed_facts:
             store_facts(conn, parsed_facts, source=f"compaction:{date}")
     except Exception as e:
-        sys.stderr.write(f"memory: fact storage after compaction failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Fact storage after compaction failed: %s", e)
 
     # 2. Strip facts block from distilled output before writing to disk
     clean_distilled = _strip_facts_block(distilled)
     if len(clean_distilled) < len(distilled):
-        sys.stderr.write(
-            f"memory: stripped {len(distilled) - len(clean_distilled)} chars of facts JSON\n"
+        logger.debug(
+            "Stripped %d chars of facts JSON", len(distilled) - len(clean_distilled),
         )
-        sys.stderr.flush()
 
     # 3. Write clean content to disk
     canonical_path = f"memory/{date}.md"
@@ -580,11 +555,9 @@ async def compact_memory_files(
     index_memory_file(conn, canonical_path, compacted_content)
     await index_memory_vectors(conn, canonical_path, compacted_content)
 
-    sys.stderr.write(
-        f"memory: compacted {len(paths)} files into {canonical_path} "
-        f"({len(clean_distilled)} chars)\n"
+    logger.info(
+        "Compacted %d files into %s (%d chars)", len(paths), canonical_path, len(clean_distilled),
     )
-    sys.stderr.flush()
     return canonical_path
 
 
@@ -633,16 +606,12 @@ def write_memory_file(
             session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
             store_facts(conn, parsed_facts, source=f"session:{session_ref}")
     except Exception as e:
-        sys.stderr.write(f"memory: fact storage after write failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Fact storage after write failed: %s", e)
 
     # 2. Strip facts block from summary before writing to disk
     clean_summary = _strip_facts_block(summary)
     if len(clean_summary) < len(summary):
-        sys.stderr.write(
-            f"memory: stripped {len(summary) - len(clean_summary)} chars of facts JSON\n"
-        )
-        sys.stderr.flush()
+        logger.debug("Stripped %d chars of facts JSON", len(summary) - len(clean_summary))
 
     # Format the entry with clean (facts-free) summary
     entry = f"## Session: {session_filepath}\n\n{clean_summary}\n\n---\n"
@@ -702,13 +671,11 @@ def write_memory_file(
         file_content = abs_path.read_text()
         index_memory_file(conn, rel_path, file_content)
 
-        sys.stderr.write(f"memory: wrote summary to {rel_path}\n")
-        sys.stderr.flush()
+        logger.info("Wrote summary to %s", rel_path)
         return rel_path, needs_compaction
 
     except Exception as e:
-        sys.stderr.write(f"memory: failed to write memory file: {e}\n")
-        sys.stderr.flush()
+        logger.error("Failed to write memory file: %s", e)
         return None, False
 
 
@@ -740,14 +707,12 @@ async def run_session_end(
     Failures are non-fatal.
     """
     if not transcript:
-        sys.stderr.write("memory: no transcript, skipping session-end summary\n")
-        sys.stderr.flush()
+        logger.info("No transcript, skipping session-end summary")
         return None
 
     summary = await summarize_session(transcript)
     if not summary:
-        sys.stderr.write("memory: no summary produced, skipping memory write\n")
-        sys.stderr.flush()
+        logger.warning("No summary produced, skipping memory write")
         return None
 
     session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
@@ -761,10 +726,7 @@ async def run_session_end(
 
     if needs_compaction:
         today = time.strftime("%Y-%m-%d", time.gmtime())
-        sys.stderr.write(
-            f"memory: compaction needed for {today}\n"
-        )
-        sys.stderr.flush()
+        logger.info("Compaction needed for %s", today)
         return today
 
     return None

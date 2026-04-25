@@ -44,8 +44,9 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
         print(f"takopod is already running (pid {existing})")
         sys.exit(1)
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = DATA_DIR / "takopod.log"
+    log_dir = DATA_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "takopod-cli.log"
 
     try:
         log = open(log_file, "a")  # noqa: SIM115

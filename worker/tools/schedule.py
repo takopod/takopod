@@ -4,8 +4,10 @@ All tools communicate with the orchestrator via request/response IPC files.
 """
 
 import json
-import sys
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -56,8 +58,7 @@ def create_schedule_server():
             if key in args:
                 params[key] = args[key]
         data = await ipc_request("create_schedule", params)
-        sys.stderr.write(f"agent: created schedule {data.get('task_id', '')[:8]}\n")
-        sys.stderr.flush()
+        logger.info("Created schedule %s", data.get("task_id", "")[:8])
         return {"content": [{"type": "text", "text": json.dumps(data, indent=2)}]}
 
     @tool(

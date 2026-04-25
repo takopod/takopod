@@ -5,8 +5,10 @@ that exceed their allocation, and omits sections when no budget remains.
 Token estimation uses len(text) // 4 (chars divided by 4).
 """
 
-import sys
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 def estimate_tokens(text: str) -> int:
@@ -137,11 +139,10 @@ def assemble_system_prompt(
 
 
 def log_usage_report(usage_report: dict[str, dict]) -> None:
-    """Log token budget usage for each section to stderr."""
+    """Log token budget usage for each section."""
     for name, info in usage_report.items():
         truncated_marker = " TRUNCATED" if info["truncated"] else ""
-        sys.stderr.write(
-            f"agent: budget [{name}] "
-            f"{info['actual']}/{info['budget']} tokens{truncated_marker}\n"
+        logger.debug(
+            "Budget [%s] %d/%d tokens%s",
+            name, info["actual"], info["budget"], truncated_marker,
         )
-    sys.stderr.flush()

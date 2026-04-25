@@ -5,11 +5,13 @@ Exposes search, store, and delete as MCP tools under the "memory" server
 """
 
 import json
+import logging
 import re
 import sqlite3
-import sys
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -158,11 +160,10 @@ def create_memory_server(conn: sqlite3.Connection):
                 ).fetchall()
                 facts = [{"key": r[0], "value": r[1], "category": r[2]} for r in rows]
 
-            sys.stderr.write(
-                f"memory_tool: search query={query_text!r} "
-                f"results={len(search_results)} facts={len(facts)}\n"
+            logger.debug(
+                "search query=%r results=%d facts=%d",
+                query_text, len(search_results), len(facts),
             )
-            sys.stderr.flush()
 
             return _text_result({
                 "search_results": search_results,
@@ -172,8 +173,7 @@ def create_memory_server(conn: sqlite3.Connection):
             })
 
         except Exception as e:
-            sys.stderr.write(f"memory_tool: search failed: {e}\n")
-            sys.stderr.flush()
+            logger.error("search failed: %s", e)
             return _text_result({"error": f"Search failed: {e}"})
 
     @tool(
@@ -215,11 +215,10 @@ def create_memory_server(conn: sqlite3.Connection):
             store_facts(conn, [{"key": normalized_key, "value": value, "category": category}], source="tool:explicit")
             _write_count += 1
 
-            sys.stderr.write(
-                f"memory_tool: store key={normalized_key!r} action={action} "
-                f"writes={_write_count}/{_WRITE_LIMIT}\n"
+            logger.debug(
+                "store key=%r action=%s writes=%d/%d",
+                normalized_key, action, _write_count, _WRITE_LIMIT,
             )
-            sys.stderr.flush()
 
             return _text_result({
                 "stored": True,
@@ -230,8 +229,7 @@ def create_memory_server(conn: sqlite3.Connection):
             })
 
         except Exception as e:
-            sys.stderr.write(f"memory_tool: store failed: {e}\n")
-            sys.stderr.flush()
+            logger.error("store failed: %s", e)
             return _text_result({"error": f"Store failed: {e}"})
 
     @tool(
@@ -262,23 +260,14 @@ def create_memory_server(conn: sqlite3.Connection):
             _write_count += 1
 
             if cursor.rowcount > 0:
-                sys.stderr.write(
-                    f"memory_tool: delete key={normalized_key!r} "
-                    f"writes={_write_count}/{_WRITE_LIMIT}\n"
-                )
-                sys.stderr.flush()
+                logger.debug("delete key=%r writes=%d/%d", normalized_key, _write_count, _WRITE_LIMIT)
                 return _text_result({"deleted": True, "key": normalized_key})
 
-            sys.stderr.write(
-                f"memory_tool: delete key={normalized_key!r} not found "
-                f"writes={_write_count}/{_WRITE_LIMIT}\n"
-            )
-            sys.stderr.flush()
+            logger.debug("delete key=%r not found writes=%d/%d", normalized_key, _write_count, _WRITE_LIMIT)
             return _text_result({"deleted": False, "key": normalized_key, "reason": "not found"})
 
         except Exception as e:
-            sys.stderr.write(f"memory_tool: delete failed: {e}\n")
-            sys.stderr.flush()
+            logger.error("delete failed: %s", e)
             return _text_result({"error": f"Delete failed: {e}"})
 
     return create_sdk_mcp_server(

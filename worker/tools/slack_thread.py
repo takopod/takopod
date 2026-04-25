@@ -4,8 +4,10 @@ All tools communicate with the orchestrator via request/response IPC files.
 """
 
 import json
-import sys
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -36,10 +38,7 @@ def create_slack_thread_server():
             "channel_id": args["channel_id"],
             "thread_ts": args["thread_ts"],
         })
-        sys.stderr.write(
-            f"agent: registered slack thread {args['channel_id']}/{args['thread_ts']}\n"
-        )
-        sys.stderr.flush()
+        logger.info("Registered slack thread %s/%s", args["channel_id"], args["thread_ts"])
         return {"content": [{"type": "text", "text": json.dumps(data, indent=2)}]}
 
     @tool(
@@ -52,10 +51,7 @@ def create_slack_thread_server():
             "channel_id": args["channel_id"],
             "thread_ts": args["thread_ts"],
         })
-        sys.stderr.write(
-            f"agent: unregistered slack thread {args['channel_id']}/{args['thread_ts']}\n"
-        )
-        sys.stderr.flush()
+        logger.info("Unregistered slack thread %s/%s", args["channel_id"], args["thread_ts"])
         return {"content": [{"type": "text", "text": json.dumps(data, indent=2)}]}
 
     @tool(

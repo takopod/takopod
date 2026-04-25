@@ -1498,10 +1498,9 @@ async def _read_container_log(
         return f"Agent {agent_id} not found"
 
     logs_dir = Path(row[0]) / "logs"
-    log_files = sorted(logs_dir.glob("worker-*.log"))
-    if not log_files:
+    log_path = logs_dir / "worker.log"
+    if not log_path.is_file():
         return f"No log files found in {logs_dir}"
-    log_path = log_files[-1]
 
     try:
         with open(log_path) as f:

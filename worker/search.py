@@ -6,12 +6,14 @@ summaries from daily memory files are searchable.
 """
 
 import json
+import logging
 import re
 import sqlite3
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from worker.embed import embed
 
@@ -121,10 +123,7 @@ def rewrite_query(message: str) -> str:
 
     # 7. Log for debugging and quality assessment
     if rewritten != message.strip():
-        sys.stderr.write(
-            f'search: query rewrite: "{message.strip()}" -> "{rewritten}"\n'
-        )
-        sys.stderr.flush()
+        logger.debug('Query rewrite: "%s" -> "%s"', message.strip(), rewritten)
 
     return rewritten
 
@@ -265,8 +264,7 @@ async def index_memory_vectors(
 
         conn.commit()
     except Exception as e:
-        sys.stderr.write(f"search: memory vector indexing failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Memory vector indexing failed: %s", e)
         conn.commit()  # commit whatever succeeded
 
     return embedded
@@ -340,8 +338,7 @@ async def search_vector(
     try:
         query_vec = await embed(query_text)
     except Exception as e:
-        sys.stderr.write(f"search: vector search skipped (Ollama down): {e}\n")
-        sys.stderr.flush()
+        logger.warning("Vector search skipped (Ollama down): %s", e)
         return None
 
     rows = conn.execute(
@@ -384,12 +381,11 @@ async def search_hybrid(
 
         # Log all scores for threshold tuning
         sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
-        sys.stderr.write(
-            f"search: RRF scores (BM25-only) for query={query_text!r}: "
-            + ", ".join(f"{k}={rrf_scores[k]:.4f}" for k in sorted_keys)
-            + "\n"
+        logger.debug(
+            "RRF scores (BM25-only) for query=%r: %s",
+            query_text,
+            ", ".join(f"{k}={rrf_scores[k]:.4f}" for k in sorted_keys),
         )
-        sys.stderr.flush()
 
         # Filter and attach scores
         results: list[dict[str, Any]] = []
@@ -416,12 +412,11 @@ async def search_hybrid(
 
     # Log all scores for threshold tuning
     sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
-    sys.stderr.write(
-        f"search: RRF scores (hybrid) for query={query_text!r}: "
-        + ", ".join(f"{k}={rrf_scores[k]:.4f}" for k in sorted_keys)
-        + "\n"
+    logger.debug(
+        "RRF scores (hybrid) for query=%r: %s",
+        query_text,
+        ", ".join(f"{k}={rrf_scores[k]:.4f}" for k in sorted_keys),
     )
-    sys.stderr.flush()
 
     # Filter by minimum score and attach rrf_score to each result
     results = []

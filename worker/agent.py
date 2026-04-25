@@ -6,11 +6,13 @@ persisted via the worker's emit() callback for the orchestrator to consume.
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
-import sys
 from pathlib import Path
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from worker.context_budget import (
     ContextConfig,
@@ -262,8 +264,7 @@ async def _run_self_assessment(
         return ""
 
     except Exception as e:
-        sys.stderr.write(f"agent: self-assessment failed: {e}\n")
-        sys.stderr.flush()
+        logger.error("Self-assessment failed: %s", e)
         return ""
 
 
@@ -289,10 +290,7 @@ async def run_query(
         retrieved_context, memory_context, continuation_summary,
         facts_context=facts_context,
     )
-    sys.stderr.write(
-        f"agent: system_prompt ({len(system_prompt)} chars):\n{system_prompt}\n"
-    )
-    sys.stderr.flush()
+    logger.debug("system_prompt (%d chars):\n%s", len(system_prompt), system_prompt)
 
     # Emit tool events via hooks so the frontend can display them
     tool_call_count = 0
@@ -301,11 +299,7 @@ async def run_query(
         nonlocal tool_call_count
         tool_call_count += 1
         tool_name = input_data.get("tool_name", "unknown")
-        sys.stderr.write(
-            f"agent: tool_call {tool_name} id={tool_use_id}\n"
-            f"{json.dumps(input_data, indent=2)}\n"
-        )
-        sys.stderr.flush()
+        logger.debug("tool_call %s id=%s\n%s", tool_name, tool_use_id, json.dumps(input_data, indent=2))
         emit({
             "type": "tool_call",
             "tool_name": tool_name,
@@ -322,11 +316,7 @@ async def run_query(
         output_str = str(output)
 
         tool_name = input_data.get("tool_name", "unknown")
-        sys.stderr.write(
-            f"agent: tool_result {tool_name} id={tool_use_id}\n"
-            f"{output_str}\n"
-        )
-        sys.stderr.flush()
+        logger.debug("tool_result %s id=%s\n%s", tool_name, tool_use_id, output_str)
         if tool_name in ("Write", "Edit", "Bash"):
             os.sync()
         emit({
@@ -392,8 +382,7 @@ async def run_query(
     # Log the full query() call for debugging
     log_kwargs = {k: v for k, v in opts_kwargs.items() if k not in ("hooks", "mcp_servers")}
     log_kwargs["prompt"] = content
-    sys.stderr.write(f"agent: query() call:\n{json.dumps(log_kwargs, indent=2)}\n")
-    sys.stderr.flush()
+    logger.debug("query() call:\n%s", json.dumps(log_kwargs, indent=2))
 
     captured_session_id = session_id
     total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
@@ -406,10 +395,7 @@ async def run_query(
     async for msg in query(prompt=content, options=options):
         if isinstance(msg, SystemMessage) and msg.subtype == "init":
             captured_session_id = msg.data.get("session_id")
-            sys.stderr.write(
-                f"agent: SDK session_id={captured_session_id}\n"
-            )
-            sys.stderr.flush()
+            logger.debug("SDK session_id=%s", captured_session_id)
 
         elif isinstance(msg, AssistantMessage):
             if msg.usage:
@@ -437,15 +423,10 @@ async def run_query(
                     "seq": seq,
                 })
                 last_emitted_text = current_text
-                sys.stderr.write(
-                    f"agent: AssistantMessage seq={seq}\n"
-                    f"{current_text[:200]}\n"
-                )
-                sys.stderr.flush()
+                logger.debug("AssistantMessage seq=%d\n%s", seq, current_text[:200])
 
         elif isinstance(msg, ResultMessage):
-            sys.stderr.write("agent: ResultMessage (query complete)\n")
-            sys.stderr.flush()
+            logger.info("ResultMessage (query complete)")
 
     full_text = "\n\n".join(full_text_parts)
 
@@ -467,11 +448,12 @@ async def run_query(
             "seq": seq,
         })
 
-    sys.stderr.write(
-        f"agent: emitting complete, {len(full_text_parts)} text blocks, "
-        f"{total_usage.get('input_tokens', 0)}+{total_usage.get('output_tokens', 0)} tokens\n"
+    logger.info(
+        "Emitting complete, %d text blocks, %d+%d tokens",
+        len(full_text_parts),
+        total_usage.get("input_tokens", 0),
+        total_usage.get("output_tokens", 0),
     )
-    sys.stderr.flush()
     emit({
         "type": "complete",
         "content": full_text,
