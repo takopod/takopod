@@ -244,6 +244,7 @@ class ScheduleResponse(BaseModel):
     last_result: str | None
     status: str
     created_at: str
+    model: str | None = None
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -254,6 +255,7 @@ class ScheduleCreateRequest(BaseModel):
     watch_dir: str | None = None
     base_interval_minutes: int | None = Field(None, ge=5)
     max_interval_minutes: int | None = Field(None, ge=5)
+    model: str | None = None
 
 
 class SlackConfigRequest(BaseModel):

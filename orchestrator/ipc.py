@@ -72,6 +72,8 @@ async def store_scheduled_message(
     content: str,
     agentic_task_id: str,
     allowed_tools: list[str] | None = None,
+    *,
+    model: str | None = None,
 ) -> None:
     """Store a user message from a scheduled task and queue it for processing."""
     db = await get_db()
@@ -90,6 +92,7 @@ async def store_scheduled_message(
         source="scheduled_task",
         agentic_task_id=agentic_task_id,
         allowed_tools=allowed_tools,
+        model=model,
     )
 
 

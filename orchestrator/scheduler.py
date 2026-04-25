@@ -262,7 +262,7 @@ async def _poll_agentic_tasks() -> None:
 
     # --- Interval tasks (existing logic) ---
     async with db.execute(
-        "SELECT id, agent_id, prompt, allowed_tools, interval_seconds "
+        "SELECT id, agent_id, prompt, allowed_tools, interval_seconds, model "
         "FROM agentic_tasks "
         "WHERE status = 'active' AND trigger_type = 'interval' "
         "  AND (last_executed_at IS NULL "
@@ -271,25 +271,25 @@ async def _poll_agentic_tasks() -> None:
     ) as cur:
         interval_rows = await cur.fetchall()
 
-    for task_id, agent_id, prompt, allowed_tools_json, interval_seconds in interval_rows:
+    for task_id, agent_id, prompt, allowed_tools_json, interval_seconds, model in interval_rows:
         if task_id in _running_agentic:
             continue
         allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
         task = asyncio.create_task(
-            execute_agentic_task(task_id, agent_id, prompt, allowed_tools),
+            execute_agentic_task(task_id, agent_id, prompt, allowed_tools, model=model),
             name=f"agentic-{task_id[:8]}",
         )
         _running_agentic[task_id] = task
 
     # --- File-watch tasks ---
     async with db.execute(
-        "SELECT id, agent_id, prompt, allowed_tools, trigger_config "
+        "SELECT id, agent_id, prompt, allowed_tools, trigger_config, model "
         "FROM agentic_tasks "
         "WHERE status = 'active' AND trigger_type = 'file_watch'",
     ) as cur:
         watch_rows = await cur.fetchall()
 
-    for task_id, agent_id, prompt, allowed_tools_json, trigger_config_json in watch_rows:
+    for task_id, agent_id, prompt, allowed_tools_json, trigger_config_json, model in watch_rows:
         if task_id in _running_agentic:
             continue
         trigger_config = json.loads(trigger_config_json) if trigger_config_json else {}
@@ -299,7 +299,7 @@ async def _poll_agentic_tasks() -> None:
             file_list = ", ".join(new_files)
             enriched_prompt = f"{prompt}\n\nNew files detected: {file_list}"
             task = asyncio.create_task(
-                execute_agentic_task(task_id, agent_id, enriched_prompt, allowed_tools),
+                execute_agentic_task(task_id, agent_id, enriched_prompt, allowed_tools, model=model),
                 name=f"agentic-watch-{task_id[:8]}",
             )
             _running_agentic[task_id] = task
@@ -319,6 +319,8 @@ async def execute_agentic_task(
     agent_id: str,
     prompt: str,
     allowed_tools: list[str],
+    *,
+    model: str | None = None,
 ) -> None:
     """Queue a scheduled task prompt through the normal message path."""
     from orchestrator.ipc import _activity_signaled, store_scheduled_message
@@ -331,6 +333,7 @@ async def execute_agentic_task(
         await ensure_worker_headless(agent_id)
         await store_scheduled_message(
             agent_id, message_id, prompt, task_id, allowed_tools,
+            model=model,
         )
 
         last_result = await _wait_for_completion(message_id, timeout_seconds=300)

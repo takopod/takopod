@@ -43,6 +43,14 @@ interface Schedule {
   last_result: string | null
   status: string
   created_at: string
+  model: string | null
+}
+
+interface ModelOption {
+  value: string
+  label: string
+  model_id: string
+  effort: string
 }
 
 interface Agent {
@@ -82,6 +90,7 @@ export function SchedulesView() {
   const [editInterval, setEditInterval] = useState("")
   const [editBaseInterval, setEditBaseInterval] = useState("")
   const [editMaxInterval, setEditMaxInterval] = useState("")
+  const [editModel, setEditModel] = useState("")
 
   const [showCreate, setShowCreate] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -93,6 +102,8 @@ export function SchedulesView() {
   const [newWatchDir, setNewWatchDir] = useState("")
   const [newBaseInterval, setNewBaseInterval] = useState("")
   const [newMaxInterval, setNewMaxInterval] = useState("")
+  const [newModel, setNewModel] = useState("")
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
@@ -122,6 +133,7 @@ export function SchedulesView() {
   useEffect(() => {
     fetchSchedules()
     fetchAgents()
+    fetch("/api/models").then(r => r.ok ? r.json() : []).then(setModelOptions)
   }, [fetchSchedules, fetchAgents])
 
   const handleToggle = async (id: string, currentStatus: string) => {
@@ -144,6 +156,7 @@ export function SchedulesView() {
     setEditInterval(String(Math.floor(s.interval_seconds / 60)))
     setEditBaseInterval(s.base_interval_seconds ? String(Math.floor(s.base_interval_seconds / 60)) : "")
     setEditMaxInterval(s.max_interval_seconds ? String(Math.floor(s.max_interval_seconds / 60)) : "")
+    setEditModel(s.model || "")
   }
 
   const cancelEditing = () => {
@@ -154,6 +167,7 @@ export function SchedulesView() {
     const body: Record<string, unknown> = {
       prompt: editPrompt,
       agent_id: editAgentId,
+      model: editModel || null,
     }
 
     if (editTriggerType === "interval") {
@@ -184,6 +198,7 @@ export function SchedulesView() {
     setNewWatchDir("")
     setNewBaseInterval("")
     setNewMaxInterval("")
+    setNewModel("")
     setWebhookInfo(null)
     setCreateError("")
   }
@@ -203,6 +218,7 @@ export function SchedulesView() {
         agent_id: newAgentId,
         prompt: newPrompt.trim(),
         trigger_type: newTriggerType,
+        model: newModel || null,
       }
 
       if (newTriggerType === "interval") {
@@ -295,6 +311,11 @@ export function SchedulesView() {
                     {s.interval_seconds > 0 && (
                       <span className="text-xs text-muted-foreground font-mono">
                         every {formatInterval(s.interval_seconds)}
+                      </span>
+                    )}
+                    {s.model && (
+                      <span className="text-xs text-muted-foreground font-mono">
+                        {s.model}
                       </span>
                     )}
                   </div>
@@ -457,6 +478,23 @@ export function SchedulesView() {
                   />
                 </div>
 
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Model</Label>
+                  <Select value={newModel || "__default__"} onValueChange={(v) => setNewModel(v === "__default__" ? "" : v)}>
+                    <SelectTrigger className="h-9 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">Default (agent default)</SelectItem>
+                      {modelOptions.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 {newTriggerType === "interval" && (
                   <div className="flex flex-col gap-1.5">
                     <Label className="text-xs">Interval (minutes, min 5)</Label>
@@ -571,6 +609,22 @@ export function SchedulesView() {
                   onChange={(e) => setEditPrompt(e.target.value)}
                   className="min-h-20 resize-none text-sm"
                 />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Model</Label>
+                <Select value={editModel || "__default__"} onValueChange={(v) => setEditModel(v === "__default__" ? "" : v)}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">Default (agent default)</SelectItem>
+                    {modelOptions.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               {editTriggerType === "interval" && (
                 <div className="flex flex-col gap-1.5">

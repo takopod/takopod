@@ -1561,7 +1561,8 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
     query = (
         "SELECT t.id, t.agent_id, a.name, t.prompt, "
         "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
-        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
+        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds, "
+        "t.model "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
     )
@@ -1581,6 +1582,7 @@ async def list_schedules(status: str | None = None) -> list[ScheduleResponse]:
             interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
             status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
             base_interval_seconds=r[10], max_interval_seconds=r[11],
+            model=r[12],
         )
         for r in rows
     ]
@@ -1592,7 +1594,8 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
     async with db.execute(
         "SELECT t.id, t.agent_id, a.name, t.prompt, "
         "t.interval_seconds, t.last_executed_at, t.last_result, t.status, "
-        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds "
+        "t.created_at, t.trigger_type, t.base_interval_seconds, t.max_interval_seconds, "
+        "t.model "
         "FROM agentic_tasks t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
         "WHERE t.id = ?",
@@ -1608,6 +1611,7 @@ async def get_schedule(task_id: str) -> ScheduleResponse:
         interval_seconds=r[4], last_executed_at=r[5], last_result=r[6],
         status=r[7], created_at=r[8], trigger_type=r[9] or "interval",
         base_interval_seconds=r[10], max_interval_seconds=r[11],
+        model=r[12],
     )
 
 
@@ -1655,11 +1659,11 @@ async def create_schedule(body: ScheduleCreateRequest):
         "INSERT INTO agentic_tasks "
         "(id, agent_id, prompt, interval_seconds, "
         "trigger_type, trigger_config, trigger_secret, "
-        "base_interval_seconds, max_interval_seconds) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "base_interval_seconds, max_interval_seconds, model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (task_id, body.agent_id, body.prompt,
          interval_seconds, body.trigger_type, json.dumps(trigger_config),
-         trigger_secret, base_interval, max_interval),
+         trigger_secret, base_interval, max_interval, body.model),
     )
     await db.commit()
 
@@ -1714,7 +1718,7 @@ async def update_schedule(task_id: str, request: Request):
     updates = []
     params = []
     for field in ("prompt", "agent_id", "interval_seconds",
-                   "base_interval_seconds", "max_interval_seconds"):
+                   "base_interval_seconds", "max_interval_seconds", "model"):
         if field in body:
             value = body[field]
             updates.append(f"{field} = ?")
@@ -1758,7 +1762,7 @@ async def trigger_webhook(agent_id: str, task_id: str, request: Request):
     db = await get_db()
 
     async with db.execute(
-        "SELECT id, agent_id, prompt, allowed_tools, trigger_type, trigger_secret, status "
+        "SELECT id, agent_id, prompt, allowed_tools, trigger_type, trigger_secret, status, model "
         "FROM agentic_tasks WHERE id = ? AND agent_id = ?",
         (task_id, agent_id),
     ) as cur:
@@ -1799,10 +1803,11 @@ async def trigger_webhook(agent_id: str, task_id: str, request: Request):
     enriched_prompt = f"{prompt}\n\nWebhook payload:\n{payload_str[:5000]}"
 
     allowed_tools = json.loads(row[3]) if row[3] else []
+    task_model = row[7]
 
     from orchestrator.scheduler import execute_agentic_task
     asyncio.create_task(
-        execute_agentic_task(task_id, agent_id, enriched_prompt, allowed_tools),
+        execute_agentic_task(task_id, agent_id, enriched_prompt, allowed_tools, model=task_model),
         name=f"agentic-webhook-{task_id[:8]}",
     )
 
