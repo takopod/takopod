@@ -24,7 +24,6 @@ class ContextConfig:
 
     total_max_tokens: int = 15000
     identity_tokens: int = 4000       # CLAUDE.md + SOUL.md combined
-    agents_list_tokens: int = 500
     facts_tokens: int = 1000          # structured facts from memory files
     memory_md_tokens: int = 2000      # MEMORY.md persistent memory
     search_tokens: int = 3000         # hybrid search results

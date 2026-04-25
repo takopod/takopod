@@ -246,19 +246,6 @@ async def write_workspace_settings(host_dir: Path) -> None:
     atomic_write(settings_path, json.dumps(workspace_settings, indent=2).encode())
 
 
-async def write_agents_json(agent_id: str, host_dir: Path) -> None:
-    db = await get_db()
-    async with db.execute(
-        "SELECT name FROM agents WHERE id != ? AND status = 'active'",
-        (agent_id,),
-    ) as cur:
-        rows = await cur.fetchall()
-
-    agents = [{"name": row[0]} for row in rows]
-    manifest_path = host_dir / "agents.json"
-    manifest_path.write_text(json.dumps(agents, indent=2))
-
-
 async def spawn_container(
     agent_id: str,
 ) -> tuple[str, asyncio.subprocess.Process, Path]:
@@ -283,7 +270,6 @@ async def spawn_container(
     ollama_enabled = setting_row[0] if setting_row else "true"
 
     host_dir.mkdir(parents=True, exist_ok=True)
-    await write_agents_json(agent_id, host_dir)
     await write_workspace_settings(host_dir)
 
     record_id = str(uuid.uuid4())

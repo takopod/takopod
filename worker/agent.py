@@ -83,8 +83,7 @@ def _build_system_prompt(
       3. Active plan (task plan from .plans/)
       4. Facts (structured key-value pairs from memory)
       5. MEMORY.md (persistent user-curated context)
-      6. Agents list
-      7. Search results
+      6. Search results
     """
     if config is None:
         config = get_config()
@@ -99,21 +98,6 @@ def _build_system_prompt(
     if soul_md.is_file():
         identity_parts.append(soul_md.read_text().strip())
     identity_content = "\n\n".join(identity_parts)
-
-    agents_content = ""
-    agents_json = WORKSPACE / "agents.json"
-    if agents_json.is_file():
-        try:
-            agents = json.loads(agents_json.read_text())
-            if agents:
-                agent_list = "\n".join(f"- {a['name']}" for a in agents)
-                agents_content = (
-                    "## Available Delegation Targets\n\n"
-                    "The following agents are available for delegation:\n"
-                    + agent_list
-                )
-        except (json.JSONDecodeError, KeyError):
-            pass
 
     # Load active plan content
     plan_content = ""
@@ -182,15 +166,9 @@ def _build_system_prompt(
             content=memory_context or "",
         ),
         SectionBudget(
-            name="agents_list",
-            max_tokens=config.agents_list_tokens,
-            priority=6,
-            content=agents_content,
-        ),
-        SectionBudget(
             name="search",
             max_tokens=config.search_tokens,
-            priority=7,
+            priority=6,
             content=search_content,
         ),
     ]
