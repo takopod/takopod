@@ -35,8 +35,12 @@ async def check_github_issues(config: dict, cursor: dict) -> CheckResult:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
+        logger.warning(
+            "gh api failed for %s issues (exit %d): %s",
+            repo, proc.returncode, stderr.decode().strip()[:200],
+        )
         return CheckResult(changed=False, new_cursor=cursor, summary="")
 
     try:

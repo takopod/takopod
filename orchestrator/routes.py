@@ -1937,10 +1937,13 @@ async def kill_agent(agent_id: str):
             shutdown_payload = json.dumps(
                 [{"type": "system_command", "command": "shutdown"}]
             )
+            logger.info("Sending shutdown to agent %s (admin kill)", agent_id[:8])
             atomic_write(input_path, shutdown_payload.encode())
             await asyncio.wait_for(worker.process.wait(), timeout=30)
             graceful = True
+            logger.info("Agent %s exited gracefully after admin kill", agent_id[:8])
         except (asyncio.TimeoutError, Exception):
+            logger.warning("Agent %s did not exit gracefully, force-killing", agent_id[:8])
             await kill_container(container_name)
 
         if worker.ws_manager.connected:

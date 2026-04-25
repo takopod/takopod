@@ -46,11 +46,13 @@ def create_schedule_server():
             "prompt": args.get("prompt", ""),
             "interval_minutes": args.get("interval_minutes", 60),
         }
-        if args.get("trigger_type"):
-            params["trigger_type"] = args["trigger_type"]
-        if args.get("watch_dir"):
-            params["watch_dir"] = args["watch_dir"]
-        for key in ("base_interval_minutes", "max_interval_minutes"):
+        optional_keys = (
+            "trigger_type", "watch_dir",
+            "base_interval_minutes", "max_interval_minutes",
+            "github_repo", "github_pr_number", "github_labels", "github_state",
+            "slack_channel_id", "slack_channel_name",
+        )
+        for key in optional_keys:
             if key in args:
                 params[key] = args[key]
         data = await ipc_request("create_schedule", params)

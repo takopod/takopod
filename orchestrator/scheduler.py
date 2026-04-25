@@ -312,6 +312,10 @@ async def _poll_agentic_tasks() -> None:
                 # file_watch needs agent_id in config for directory resolution
                 if trigger_type == "file_watch":
                     trigger_config["agent_id"] = agent_id
+                logger.info(
+                    "Polling checker %s for task %s (agent %s)",
+                    trigger_type, task_id[:8], agent_id[:8],
+                )
                 task = asyncio.create_task(
                     _run_checker_task(
                         task_id, agent_id, prompt, allowed_tools,
@@ -349,6 +353,10 @@ async def _run_checker_task(
         await db.commit()
 
         if result.changed:
+            logger.info(
+                "Checker %s detected changes for task %s, invoking agent",
+                trigger_type, task_id[:8],
+            )
             enriched_prompt = f"{prompt}\n\n{result.summary}"
             success = await execute_agentic_task(
                 task_id, agent_id, enriched_prompt, allowed_tools,
@@ -362,6 +370,10 @@ async def _run_checker_task(
                 )
                 await db.commit()
         else:
+            logger.info(
+                "Checker %s found no changes for task %s",
+                trigger_type, task_id[:8],
+            )
             # Update cursor even on no-change (e.g. new ETag)
             if result.new_cursor != cursor:
                 await db.execute(

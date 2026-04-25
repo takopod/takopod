@@ -155,6 +155,7 @@ async def queue_system_command(agent_id: str, command: str) -> None:
         (cmd_id, agent_id, payload),
     )
     await db.commit()
+    logger.info("Queued system command '%s' for agent %s", command, agent_id[:8])
 
 
 async def get_queue_counts(agent_id: str) -> dict[str, int]:
@@ -389,8 +390,14 @@ async def _process_event(
         )
 
     elif event_type == "complete":
-        await _db_complete(
-            row_id, event.get("content", ""), event.get("usage"),
+        usage = event.get("usage")
+        await _db_complete(row_id, event.get("content", ""), usage)
+        usage_str = ""
+        if usage:
+            usage_str = f" (input={usage.get('input_tokens', '?')}, output={usage.get('output_tokens', '?')})"
+        logger.info(
+            "Message complete for agent %s, message %s%s",
+            agent_id[:8], row_id[:8], usage_str,
         )
         # Eagerly update agentic_tasks.last_result for the schedules view
         if source_metadata and source_metadata.get("agentic_task_id"):
@@ -988,6 +995,12 @@ async def _handle_request_background(
             agent_id, request, mcp_manager, ws_manager, approval_manager,
         )
         atomic_write(response_path, json.dumps(result).encode())
+        logger.info(
+            "Tool response to agent %s: action=%s status=%s",
+            agent_id[:8],
+            request.get("action") or "?",
+            result.get("status") or "?",
+        )
     except Exception:
         logger.exception("Background request handler failed for agent %s", agent_id)
         error_result = {
@@ -1021,6 +1034,14 @@ async def _process_output(
             pass
         return
 
+    type_counts: dict[str, int] = {}
+    for e in events:
+        t = e.get("type", "unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+    logger.info(
+        "Received %d event(s) from agent %s: %s",
+        len(events), agent_id[:8], type_counts,
+    )
     notified: set[str] = set()
     for event in events:
         try:
@@ -1140,6 +1161,11 @@ async def _polling_loop(
                         }
 
                 atomic_write(input_path, json.dumps(messages).encode())
+                msg_types = [m.get("type", "user_message") for m in messages]
+                logger.info(
+                    "Flushed %d message(s) to agent %s: %s",
+                    len(messages), agent_id[:8], msg_types,
+                )
 
                 ids = [row[0] for row in queued]
                 placeholders = ",".join("?" * len(ids))
@@ -1178,6 +1204,12 @@ async def _polling_loop(
                         request = None
 
                     if request:
+                        logger.info(
+                            "Tool request from agent %s: action=%s request_id=%s",
+                            agent_id[:8],
+                            request.get("action") or "?",
+                            (request.get("request_id") or "?")[:8],
+                        )
                         pending_request = asyncio.create_task(
                             _handle_request_background(
                                 agent_id, request, response_path,

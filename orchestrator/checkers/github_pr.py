@@ -72,8 +72,12 @@ async def _check_repo_prs(repo: str, config: dict, cursor: dict) -> CheckResult:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
+        logger.warning(
+            "gh api failed for %s PRs (exit %d): %s",
+            repo, proc.returncode, stderr.decode().strip()[:200],
+        )
         return CheckResult(changed=False, new_cursor=cursor, summary="")
 
     try:
@@ -120,7 +124,9 @@ async def _check_single_pr(repo: str, pr_number: int, cursor: dict) -> CheckResu
     rc, body, headers = await _gh_api(
         f"repos/{repo}/issues/{pr_number}/comments?per_page=30&sort=created&direction=desc",
     )
-    if rc == 0 and body.strip():
+    if rc != 0:
+        logger.warning("gh api failed fetching comments for %s#%s (exit %d)", repo, pr_number, rc)
+    elif body.strip():
         try:
             comments = json.loads(body)
             new_comments = [c for c in comments if c.get("id", 0) > last_comment_id]
@@ -138,7 +144,9 @@ async def _check_single_pr(repo: str, pr_number: int, cursor: dict) -> CheckResu
     rc, body, _ = await _gh_api(
         f"repos/{repo}/pulls/{pr_number}/reviews?per_page=30",
     )
-    if rc == 0 and body.strip():
+    if rc != 0:
+        logger.warning("gh api failed fetching reviews for %s#%s (exit %d)", repo, pr_number, rc)
+    elif body.strip():
         try:
             reviews = json.loads(body)
             new_reviews = [r for r in reviews if r.get("id", 0) > last_review_id]
@@ -157,7 +165,9 @@ async def _check_single_pr(repo: str, pr_number: int, cursor: dict) -> CheckResu
     rc, body, _ = await _gh_api(
         f"repos/{repo}/pulls/{pr_number}/commits?per_page=30",
     )
-    if rc == 0 and body.strip():
+    if rc != 0:
+        logger.warning("gh api failed fetching commits for %s#%s (exit %d)", repo, pr_number, rc)
+    elif body.strip():
         try:
             commits = json.loads(body)
             if commits:
