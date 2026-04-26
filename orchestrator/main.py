@@ -23,9 +23,19 @@ _file_handler = RotatingFileHandler(
 _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
 _root.addHandler(_file_handler)
 
-_console_handler = logging.StreamHandler()
-_console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-_root.addHandler(_console_handler)
+_log_path = _LOG_DIR / "orchestrator.log"
+if _log_path.exists() and _log_path.stat().st_size > 0:
+    _file_handler.doRollover()
+
+for _name in ("uvicorn", "uvicorn.error"):
+    _uv = logging.getLogger(_name)
+    _uv.handlers.clear()
+    _uv.propagate = True
+
+_uv_access = logging.getLogger("uvicorn.access")
+_uv_access.handlers.clear()
+_uv_access.propagate = True
+_uv_access.setLevel(logging.WARNING)
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse

@@ -44,16 +44,6 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
         print(f"takopod is already running (pid {existing})")
         sys.exit(1)
 
-    log_dir = DATA_DIR / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "takopod-cli.log"
-
-    try:
-        log = open(log_file, "a")  # noqa: SIM115
-    except OSError as exc:
-        print(f"Error: cannot open log file {log_file}: {exc}")
-        sys.exit(1)
-
     project_root = Path(__file__).resolve().parent.parent
 
     try:
@@ -69,13 +59,12 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
                 str(port),
             ],
             cwd=project_root,
-            stdout=log,
-            stderr=log,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
     except OSError as exc:
-        log.close()
         print(f"Error: failed to start takopod: {exc}")
         sys.exit(1)
 
@@ -88,19 +77,19 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
         # Check if process died during startup
         if proc.poll() is not None:
             PID_FILE.unlink(missing_ok=True)
+            log_file = DATA_DIR / "logs" / "orchestrator.log"
             print(f"Error: process exited during startup (code {proc.returncode})")
             print(f"Check logs: {log_file}")
             sys.exit(1)
         try:
             urllib.request.urlopen(url, timeout=2)
             print(f"takopod ready on http://{host}:{port}")
-            print(f"Logs: {log_file}")
             return
         except (urllib.error.URLError, OSError):
             time.sleep(1)
 
     print(f"Warning: takopod started but health check not responding after 20s")
-    print(f"Check logs: {log_file}")
+    print(f"Check logs: {DATA_DIR / 'logs' / 'orchestrator.log'}")
 
 
 def _kill_and_wait(pid: int) -> None:
