@@ -1,7 +1,10 @@
 """Google Workspace MCP server for takopod.
 
 Exposes a single ``gws`` tool that runs Google Workspace CLI commands on the
-host.  All commands are auto-approved — no permission tiers.
+host.
+
+Permission enforcement (allowed / needs-approval / denied) lives in the
+orchestrator, not here — this server executes whatever it receives.
 
 Requires the ``gws`` CLI to be installed and authenticated on the host
 (``gws auth login``).
@@ -23,19 +26,39 @@ mcp = FastMCP("GWSIntegration")
 async def gws(command: str) -> str:
     """Run a Google Workspace CLI command. Do NOT include the leading "gws" prefix.
 
-    All commands are auto-approved and execute immediately.
+    PERMISSION TIERS — commands are classified by their first 3-4 tokens:
 
-    SERVICES:
-      drive        — files, folders, shared drives
-      sheets       — read/write spreadsheets
-      gmail        — send, read, manage email
-      calendar     — manage calendars and events
-      docs         — read/write Google Docs
-      slides       — read/write presentations
-      tasks        — manage task lists and tasks
-      people       — manage contacts and profiles
-      chat         — manage Chat spaces and messages
-      forms        — read/write Google Forms
+    Auto-approved (run immediately):
+      drive files/permissions/comments/replies/revisions list/get,
+      drive files export, drive changes list, drive drives list/get,
+      sheets spreadsheets get, sheets spreadsheets values get/batchGet,
+      calendar events/calendarList list/get, calendar colors/settings get,
+      docs documents get, slides presentations get, slides presentations pages get,
+      tasks tasklists/tasks list/get,
+      people people get/searchContacts/searchDirectoryPeople/listDirectoryPeople,
+      people contactGroups list/get, people otherContacts list,
+      gmail users messages/labels/drafts/threads list/get, gmail users history list,
+      chat spaces list/get, chat spaces messages/members list/get,
+      forms forms get, forms forms responses list/get,
+      schema
+
+    Requires user approval (the user sees Accept/Deny buttons in chat):
+      drive files create/update/copy/delete, drive permissions/comments/replies create/update/delete,
+      drive drives create/update/delete,
+      sheets spreadsheets create/batchUpdate, sheets spreadsheets values update/append/clear/batchUpdate/batchClear,
+      calendar events insert/update/patch/delete/quickAdd, calendar calendarList insert/update/patch/delete,
+      docs documents create/batchUpdate, slides presentations create/batchUpdate, slides presentations pages delete,
+      tasks tasklists/tasks insert/update/patch/delete, tasks tasks clear,
+      people people createContact/updateContact/deleteContact, people contactGroups create/update/delete,
+      gmail users messages send/modify/trash/untrash, gmail users labels/drafts create/update/patch/delete,
+      gmail users drafts send, gmail users threads modify/trash/untrash,
+      chat spaces create/delete/setup, chat spaces messages/members create/update/delete,
+      forms forms create/batchUpdate
+
+    Denied (blocked, will return an error):
+      gmail users messages delete (permanent — use trash instead),
+      gmail users threads delete (permanent — use trash instead),
+      auth (all subcommands), and any unrecognized commands.
 
     COMMAND FORMAT:
       <service> <resource> [sub-resource] <method> [flags]

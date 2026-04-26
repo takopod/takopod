@@ -1,7 +1,7 @@
 """Generic permission classification for CLI tool commands.
 
 Provides a single classifier driven by a ``PermissionRuleset``.
-Integrations that need no permission gating (e.g. GWS) pass ``ruleset=None``
+Integrations that need no permission gating can pass ``ruleset=None``
 and get ``ALLOWED`` for every command.
 """
 
@@ -40,7 +40,7 @@ def classify_command(
 ) -> tuple[CliPermission, str]:
     """Classify *command* against *ruleset*.
 
-    If *ruleset* is ``None``, every command is allowed (GWS case).
+    If *ruleset* is ``None``, every command is allowed.
 
     Returns ``(permission, matched_prefix)`` where *matched_prefix* is the
     token prefix that triggered the decision.
@@ -160,6 +160,134 @@ JIRA_RULESET = PermissionRuleset(
             "filter add-favourite", "filter change-owner", "filter update",
             "filter reset-columns",
             "field create", "field cancel-delete",
+        })),
+    ),
+    denied_groups=frozenset({"auth"}),
+)
+
+
+# ---------------------------------------------------------------------------
+# Google Workspace ruleset
+# ---------------------------------------------------------------------------
+# Command format: <service> <resource> [sub-resource] <method> [flags]
+# Gmail and some Sheets/Slides/Chat/Forms commands need depth 4 because of
+# an extra resource level (e.g. "gmail users messages list").
+# Permanently destructive Gmail operations (messages delete, threads delete)
+# are omitted from needs_approval so they fall through to DENIED.
+
+GWS_RULESET = PermissionRuleset(
+    allowed=(
+        (4, frozenset({
+            # Gmail
+            "gmail users messages list", "gmail users messages get",
+            "gmail users labels list", "gmail users labels get",
+            "gmail users drafts list", "gmail users drafts get",
+            "gmail users threads list", "gmail users threads get",
+            "gmail users history list",
+            # Sheets values sub-resource
+            "sheets spreadsheets values get", "sheets spreadsheets values batchGet",
+            # Slides pages sub-resource
+            "slides presentations pages get",
+            # Forms responses sub-resource
+            "forms forms responses list", "forms forms responses get",
+            # Chat sub-resources
+            "chat spaces messages list", "chat spaces messages get",
+            "chat spaces members list", "chat spaces members get",
+        })),
+        (3, frozenset({
+            # Drive
+            "drive files list", "drive files get", "drive files export",
+            "drive permissions list", "drive permissions get",
+            "drive comments list", "drive comments get",
+            "drive replies list", "drive replies get",
+            "drive revisions list", "drive revisions get",
+            "drive changes list",
+            "drive drives list", "drive drives get",
+            # Sheets
+            "sheets spreadsheets get",
+            # Calendar
+            "calendar events list", "calendar events get",
+            "calendar calendarList list", "calendar calendarList get",
+            "calendar colors get",
+            "calendar settings list", "calendar settings get",
+            # Docs
+            "docs documents get",
+            # Slides
+            "slides presentations get",
+            # Tasks
+            "tasks tasklists list", "tasks tasklists get",
+            "tasks tasks list", "tasks tasks get",
+            # People
+            "people people get", "people people searchContacts",
+            "people people searchDirectoryPeople", "people people listDirectoryPeople",
+            "people contactGroups list", "people contactGroups get",
+            "people otherContacts list",
+            # Chat
+            "chat spaces list", "chat spaces get",
+            # Forms
+            "forms forms get",
+        })),
+        (1, frozenset({
+            "schema",
+        })),
+    ),
+    needs_approval=(
+        (4, frozenset({
+            # Gmail
+            "gmail users messages send", "gmail users messages modify",
+            "gmail users messages trash", "gmail users messages untrash",
+            "gmail users labels create", "gmail users labels update",
+            "gmail users labels patch", "gmail users labels delete",
+            "gmail users drafts create", "gmail users drafts update",
+            "gmail users drafts send", "gmail users drafts delete",
+            "gmail users threads modify",
+            "gmail users threads trash", "gmail users threads untrash",
+            # Sheets values sub-resource
+            "sheets spreadsheets values update", "sheets spreadsheets values append",
+            "sheets spreadsheets values batchUpdate",
+            "sheets spreadsheets values clear", "sheets spreadsheets values batchClear",
+            # Slides pages sub-resource
+            "slides presentations pages delete",
+            # Chat sub-resources
+            "chat spaces messages create", "chat spaces messages update",
+            "chat spaces messages delete",
+            "chat spaces members create", "chat spaces members delete",
+        })),
+        (3, frozenset({
+            # Drive
+            "drive files create", "drive files update",
+            "drive files copy", "drive files delete",
+            "drive permissions create", "drive permissions update",
+            "drive permissions delete",
+            "drive comments create", "drive comments update", "drive comments delete",
+            "drive replies create", "drive replies update", "drive replies delete",
+            "drive drives create", "drive drives update", "drive drives delete",
+            # Sheets
+            "sheets spreadsheets create", "sheets spreadsheets batchUpdate",
+            # Calendar
+            "calendar events insert", "calendar events update",
+            "calendar events patch", "calendar events delete",
+            "calendar events quickAdd",
+            "calendar calendarList insert", "calendar calendarList update",
+            "calendar calendarList patch", "calendar calendarList delete",
+            # Docs
+            "docs documents create", "docs documents batchUpdate",
+            # Slides
+            "slides presentations create", "slides presentations batchUpdate",
+            # Tasks
+            "tasks tasklists insert", "tasks tasklists update",
+            "tasks tasklists patch", "tasks tasklists delete",
+            "tasks tasks insert", "tasks tasks update",
+            "tasks tasks patch", "tasks tasks delete", "tasks tasks clear",
+            # People
+            "people people createContact", "people people updateContact",
+            "people people deleteContact",
+            "people contactGroups create", "people contactGroups update",
+            "people contactGroups delete",
+            # Chat
+            "chat spaces create", "chat spaces delete", "chat spaces setup",
+            # Forms
+            "forms forms create", "forms forms batchUpdate",
         })),
     ),
     denied_groups=frozenset({"auth"}),

@@ -44,9 +44,9 @@ class GhApprovalManager:
         frontend, and blocks until the user responds or the timeout expires.
 
         Args:
-            source: Integration source (``"github"`` or ``"jira"``).  Controls
-                    the display prefix shown to the user when *display_prefix*
-                    is not provided.
+            source: Integration source (``"github"``, ``"jira"``, or
+                    ``"gws"``).  Controls the display prefix shown to the
+                    user when *display_prefix* is not provided.
             display_prefix: Explicit display prefix (e.g. ``"gh"``,
                             ``"acli jira"``).  When given, takes precedence
                             over the *source*-based lookup.
@@ -54,7 +54,7 @@ class GhApprovalManager:
         Returns True if approved, False if denied or timed out.
         """
         # Derive display prefix from source for log messages and persistence
-        _display_prefix = display_prefix or {"github": "gh", "jira": "acli jira"}.get(source, source)
+        _display_prefix = display_prefix or {"github": "gh", "jira": "acli jira", "gws": "gws"}.get(source, source)
 
         if not ws_manager.connected:
             logger.warning(
@@ -141,7 +141,7 @@ class GhApprovalManager:
         source: str = "github",
         display_prefix: str | None = None,
     ) -> None:
-        display_prefix = display_prefix or {"github": "gh", "jira": "acli jira"}.get(source, source)
+        display_prefix = display_prefix or {"github": "gh", "jira": "acli jira", "gws": "gws"}.get(source, source)
         metadata = json.dumps({
             "blocks": [{
                 "type": "gh_approval",

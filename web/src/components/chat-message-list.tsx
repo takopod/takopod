@@ -59,6 +59,9 @@ function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   )
 }
 
+const APPROVAL_SOURCE_LABELS: Record<string, string> = { github: "GitHub", jira: "Jira", gws: "Google Workspace" }
+const APPROVAL_SOURCE_PREFIXES: Record<string, string> = { github: "gh", jira: "acli jira", gws: "gws" }
+
 function GhApprovalBlock({
   block,
   onRespond,
@@ -71,8 +74,9 @@ function GhApprovalBlock({
   const isApproved = block.status === "approved"
   const isDenied = block.status === "denied"
 
-  const displayLabel = block.source === "jira" ? "Jira Command Approval" : "GitHub Command Approval"
-  const commandPrefix = block.source === "jira" ? "acli jira" : "gh"
+  const source = block.source ?? "github"
+  const displayLabel = `${APPROVAL_SOURCE_LABELS[source] ?? source} Command Approval`
+  const commandPrefix = APPROVAL_SOURCE_PREFIXES[source] ?? source
 
   const handleRespond = (approved: boolean) => {
     setClicked(true)

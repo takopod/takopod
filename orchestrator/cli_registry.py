@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from orchestrator.cli_permissions import (
     CliPermission,
     GH_RULESET,
+    GWS_RULESET,
     JIRA_RULESET,
     PermissionRuleset,
     classify_command,
@@ -69,8 +70,8 @@ CLI_TOOL_GATES: dict[tuple[str, str], CliToolGate] = {
         cli_prefix="acli jira",
     ),
     ("gws", "gws"): CliToolGate(
-        ruleset=None,
-        approval_source=None,
+        ruleset=GWS_RULESET,
+        approval_source="gws",
         cli_prefix="gws",
     ),
 }
