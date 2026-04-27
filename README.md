@@ -1,5 +1,9 @@
 # takopod
 
+<p style="text-align: center;">
+  <img src="takopod-logo.png" alt="takopod">
+</p>
+
 A multi-agent AI platform where each agent runs in an isolated Podman container with persistent memory, file workspace, and real-time streaming chat. Agents are powered by Claude (via Vertex AI) and can be extended with MCP servers and integrations.
 
 ## Features
