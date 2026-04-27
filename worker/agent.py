@@ -128,9 +128,9 @@ def _build_system_prompt(
     continuation_content = ""
     if continuation_summary:
         continuation_content = (
-            "## Continuation Context\n\n"
-            "The conversation was automatically split due to context length. "
-            "Below is a summary of the prior conversation:\n\n"
+            "## Recent Conversation History\n\n"
+            "Below are the most recent messages from the prior session. "
+            "Use them as full context for the current conversation:\n\n"
             + continuation_summary
         )
 

@@ -246,6 +246,39 @@ async def write_workspace_settings(host_dir: Path) -> None:
     atomic_write(settings_path, json.dumps(workspace_settings, indent=2).encode())
 
 
+async def seed_session_history(agent_id: str, host_dir: Path) -> None:
+    """Write session_history.json from the orchestrator DB before container start.
+
+    The worker loads this file on startup to restore conversation context.
+    Without this, a container restarted after idle timeout would only see
+    whatever the previous worker process had persisted — which may be stale
+    or incomplete.
+    """
+    from orchestrator.ipc import atomic_write
+    from orchestrator.settings import get_all_settings
+
+    all_settings = await get_all_settings()
+    window = int(all_settings.get("session_history_window_size", "20"))
+
+    db = await get_db()
+    async with db.execute(
+        "SELECT role, content FROM messages "
+        "WHERE agent_id = ? AND visibility = 'visible' "
+        "ORDER BY created_at DESC LIMIT ?",
+        (agent_id, window),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    if not rows:
+        return
+
+    entries = [{"role": role, "content": content} for role, content in reversed(rows)]
+    history_path = host_dir / "session_history.json"
+    atomic_write(history_path, json.dumps(entries).encode())
+    logger.info("Seeded session_history.json with %d messages for agent %s",
+                len(entries), agent_id)
+
+
 async def spawn_container(
     agent_id: str,
 ) -> tuple[str, asyncio.subprocess.Process, Path]:
@@ -271,6 +304,7 @@ async def spawn_container(
 
     host_dir.mkdir(parents=True, exist_ok=True)
     await write_workspace_settings(host_dir)
+    await seed_session_history(agent_id, host_dir)
 
     record_id = str(uuid.uuid4())
     await db.execute(

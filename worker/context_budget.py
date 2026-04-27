@@ -24,13 +24,13 @@ class ContextConfig:
     Frozen dataclass -- defaults are not configurable per-agent.
     """
 
-    total_max_tokens: int = 15000
-    identity_tokens: int = 4000       # CLAUDE.md + SOUL.md combined
-    facts_tokens: int = 1000          # structured facts from memory files
-    memory_md_tokens: int = 2000      # MEMORY.md persistent memory
-    search_tokens: int = 3000         # hybrid search results
-    continuation_tokens: int = 2000   # continuation summary after split
-    plan_tokens: int = 1500           # active task plan from .plans/
+    total_max_tokens: int = 25000
+    identity_tokens: int = 3000       # CLAUDE.md + SOUL.md combined
+    facts_tokens: int = 2000          # structured facts from memory files
+    memory_md_tokens: int = 1000      # MEMORY.md persistent memory
+    search_tokens: int = 4000         # hybrid search results
+    continuation_tokens: int = 5000   # recent conversation history from prior session
+    plan_tokens: int = 10000          # active task plan from .plans/
     retention_days: int = 90          # P3: prune index entries older than this
 
 
