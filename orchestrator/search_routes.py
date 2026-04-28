@@ -149,6 +149,13 @@ def _check_ollama() -> bool:
         return False
 
 
+def _extract_iso_ts(session_ref: str) -> str:
+    """Extract an ISO timestamp from the start of session_ref, or empty string."""
+    if len(session_ref) >= 20 and session_ref[10] == "T" and session_ref[19] == "Z":
+        return session_ref[:20]
+    return ""
+
+
 def _parse_memory_chunks(file_path: str, content: str) -> list[dict[str, str]]:
     """Split a memory file into per-session chunks.
 
@@ -168,7 +175,7 @@ def _parse_memory_chunks(file_path: str, content: str) -> list[dict[str, str]]:
             session_ref = header_match.group(1).strip()
             body = re.sub(r"^## Session:.+\n*", "", part).strip().rstrip("-").strip()
         else:
-            session_ref = "compacted"
+            session_ref = ""
             body = part
 
         if not body:
@@ -178,6 +185,7 @@ def _parse_memory_chunks(file_path: str, content: str) -> list[dict[str, str]]:
             "chunk_key": f"{file_path}#{i}",
             "file_path": file_path,
             "session_ref": session_ref,
+            "created_at": _extract_iso_ts(session_ref),
             "content": body,
         })
 
@@ -239,11 +247,12 @@ async def reindex_memory_file(agent_id: str, rel_path: str, content: str) -> Non
             ollama_ok = _check_ollama()
             for chunk in chunks:
                 ck = chunk["chunk_key"]
+                ts = chunk["created_at"] or now
                 conn.execute(
                     "INSERT INTO memory_fts "
                     "(content, file_path, chunk_key, session_ref, created_at) "
                     "VALUES (?, ?, ?, ?, ?)",
-                    (chunk["content"], rel_path, ck, chunk["session_ref"], now),
+                    (chunk["content"], rel_path, ck, chunk["session_ref"], ts),
                 )
                 if ollama_ok:
                     embedding = _embed_sync(chunk["content"])
@@ -253,7 +262,7 @@ async def reindex_memory_file(agent_id: str, rel_path: str, content: str) -> Non
                             "(embedding, content, file_path, chunk_key, session_ref, created_at) "
                             "VALUES (?, ?, ?, ?, ?, ?)",
                             (json.dumps(embedding), chunk["content"], rel_path,
-                             ck, chunk["session_ref"], now),
+                             ck, chunk["session_ref"], ts),
                         )
                         vec_rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                         conn.execute(
@@ -604,11 +613,12 @@ async def _reindex_chunks(host_dir: Path, chunk_keys: list[str]):
                             ")", (ck,),
                         )
                         # Insert new FTS
+                        ts = chunk["created_at"] or now
                         conn.execute(
                             "INSERT INTO memory_fts "
                             "(content, file_path, chunk_key, session_ref, created_at) "
                             "VALUES (?, ?, ?, ?, ?)",
-                            (chunk["content"], fp, ck, chunk["session_ref"], now),
+                            (chunk["content"], fp, ck, chunk["session_ref"], ts),
                         )
                         # Delete old vec via map
                         map_row = conn.execute(
@@ -635,7 +645,7 @@ async def _reindex_chunks(host_dir: Path, chunk_keys: list[str]):
                                 "(embedding, content, file_path, chunk_key, session_ref, created_at) "
                                 "VALUES (?, ?, ?, ?, ?, ?)",
                                 (json.dumps(embedding), chunk["content"], fp,
-                                 ck, chunk["session_ref"], now),
+                                 ck, chunk["session_ref"], ts),
                             )
                             vec_rowid = conn.execute(
                                 "SELECT last_insert_rowid()"
@@ -695,12 +705,13 @@ async def _full_rebuild(host_dir: Path):
                 chunks = _parse_memory_chunks(rel_path, content)
                 for chunk in chunks:
                     try:
+                        ts = chunk["created_at"] or now
                         conn.execute(
                             "INSERT INTO memory_fts "
                             "(content, file_path, chunk_key, session_ref, created_at) "
                             "VALUES (?, ?, ?, ?, ?)",
                             (chunk["content"], rel_path, chunk["chunk_key"],
-                             chunk["session_ref"], now),
+                             chunk["session_ref"], ts),
                         )
                         if ollama_ok:
                             embedding = _embed_sync(chunk["content"])
@@ -712,7 +723,7 @@ async def _full_rebuild(host_dir: Path):
                                     "VALUES (?, ?, ?, ?, ?, ?)",
                                     (json.dumps(embedding), chunk["content"],
                                      rel_path, chunk["chunk_key"],
-                                     chunk["session_ref"], now),
+                                     chunk["session_ref"], ts),
                                 )
                                 vec_rowid = conn.execute(
                                     "SELECT last_insert_rowid()"

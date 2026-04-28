@@ -132,16 +132,22 @@ def rewrite_query(message: str) -> str:
 # Memory file parsing
 # ---------------------------------------------------------------------------
 
+def _extract_iso_ts(session_ref: str) -> str:
+    """Extract an ISO timestamp from the start of session_ref, or empty string."""
+    if len(session_ref) >= 20 and session_ref[10] == "T" and session_ref[19] == "Z":
+        return session_ref[:20]
+    return ""
+
 
 def parse_memory_chunks(file_path: str, content: str) -> list[dict[str, str]]:
     """Split a memory file into per-session chunks for indexing.
 
-    Daily memory files use ``## Session: <path>`` headers to delimit
-    individual session summaries.  Each chunk gets a unique key like
-    ``memory/2026-04-07.md#0``.
+    Daily memory files use ``## Session: <ISO timestamp>`` headers to
+    delimit individual session summaries.  Each chunk gets a unique key
+    like ``memory/2026-04-07.md#0``.
 
-    Compacted files (produced by ``compact_memory_files``) have a single
-    ``## Compacted Memory`` header and are indexed as one chunk.
+    Compacted files use ``## Session: <ISO timestamp> (compacted)`` and
+    are indexed as one chunk.
     """
     # Split on ## Session: headers, keeping the header text
     parts = re.split(r"(?=^## Session: )", content, flags=re.MULTILINE)
@@ -159,8 +165,7 @@ def parse_memory_chunks(file_path: str, content: str) -> list[dict[str, str]]:
             # Body is everything after the header line, strip trailing ---
             body = re.sub(r"^## Session:.+\n*", "", part).strip().rstrip("-").strip()
         else:
-            # Compacted file or no session headers
-            session_ref = "compacted"
+            session_ref = ""
             body = part
 
         if not body:
@@ -170,6 +175,7 @@ def parse_memory_chunks(file_path: str, content: str) -> list[dict[str, str]]:
             "chunk_key": f"{file_path}#{i}",
             "file_path": file_path,
             "session_ref": session_ref,
+            "created_at": _extract_iso_ts(session_ref),
             "content": body,
         })
 
@@ -205,7 +211,7 @@ def index_memory_file(
             "INSERT INTO memory_fts (content, file_path, chunk_key, session_ref, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (chunk["content"], file_path, chunk["chunk_key"],
-             chunk["session_ref"], now),
+             chunk["session_ref"], chunk["created_at"] or now),
         )
 
     conn.commit()
@@ -251,7 +257,7 @@ async def index_memory_vectors(
                 "(embedding, content, file_path, chunk_key, session_ref, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (json.dumps(vec), chunk["content"], file_path,
-                 chunk_key, chunk["session_ref"], now),
+                 chunk_key, chunk["session_ref"], chunk["created_at"] or now),
             )
             # Record the rowid for future deletion
             vec_rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
