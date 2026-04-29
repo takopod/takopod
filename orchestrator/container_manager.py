@@ -337,6 +337,9 @@ async def spawn_container(
         "-e", f"OLLAMA_ENABLED={ollama_enabled}",
     ]
 
+    if (host_dir / ".gitconfig").is_file():
+        cmd += ["-e", "GIT_CONFIG_GLOBAL=/workspace/.gitconfig"]
+
     cmd.append(IMAGE)
 
     process = await asyncio.create_subprocess_exec(
@@ -411,6 +414,9 @@ async def spawn_scheduled_container(
         *_claude_auth_args(),
         "-e", "OLLAMA_ENABLED=false",
     ]
+
+    if (host_dir / ".gitconfig").is_file():
+        cmd += ["-e", "GIT_CONFIG_GLOBAL=/workspace/.gitconfig"]
 
     cmd.append(IMAGE)
 

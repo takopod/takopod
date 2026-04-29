@@ -192,9 +192,9 @@ export function SchedulesView() {
       model: editModel || null,
     }
 
-    if (editTriggerType === "interval") {
-      body.interval_seconds = (parseInt(editInterval) || 1) * 60
+    body.interval_seconds = (parseInt(editInterval) || 1) * 60
 
+    if (editTriggerType === "interval") {
       const base = parseInt(editBaseInterval)
       const max = parseInt(editMaxInterval)
       body.base_interval_seconds = !isNaN(base) && base > 0 ? base * 60 : null

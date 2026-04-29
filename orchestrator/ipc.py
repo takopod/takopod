@@ -1043,6 +1043,7 @@ async def _process_output(
         len(events), agent_id[:8], type_counts,
     )
     notified: set[str] = set()
+    finished_ids: set[str] = set()
     for event in events:
         try:
             msg_id = event.get("message_id", "")
@@ -1052,8 +1053,9 @@ async def _process_output(
             )
             if row_id:
                 notified.add(row_id)
-            if event.get("type") == "complete" and msg_id:
+            if event.get("type") in ("complete", "system_error") and msg_id:
                 _inflight_source.pop(msg_id, None)
+                finished_ids.add(msg_id)
         except Exception:
             logger.exception(
                 "Error processing output event for agent %s",
@@ -1062,9 +1064,16 @@ async def _process_output(
 
     db = await get_db()
 
-    # Update last_activity so the idle reaper knows the worker is alive.
-    # Without this, long-running agent work (many tool calls) looks
-    # "inactive" and the reaper kills the container prematurely.
+    # Delete IN-FLIGHT records for completed/errored queries so the
+    # idle reaper no longer considers them active work.
+    if finished_ids:
+        placeholders = ",".join("?" * len(finished_ids))
+        await db.execute(
+            f"DELETE FROM message_queue "
+            f"WHERE id IN ({placeholders}) AND status = 'IN-FLIGHT'",
+            tuple(finished_ids),
+        )
+
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     await db.execute(
         "UPDATE agent_containers SET last_activity = ? "
@@ -1072,6 +1081,9 @@ async def _process_output(
         (now, agent_id),
     )
     await db.commit()
+
+    if finished_ids:
+        await _send_queue_status(ws_mgr, agent_id)
     for row_id in notified:
         msg_data = None
         try:
@@ -1119,7 +1131,10 @@ async def _polling_loop(
     while True:
         await asyncio.sleep(0.5)
         try:
-            # --- Input ACK: IN-FLIGHT messages + input.json gone = PROCESSED ---
+            # --- Input heartbeat: keep last_activity fresh while worker
+            # is processing.  IN-FLIGHT records stay alive until the
+            # worker emits a "complete" or "system_error" event so the
+            # idle reaper's in-flight check protects active containers.
             async with db.execute(
                 "SELECT COUNT(*) FROM message_queue "
                 "WHERE agent_id = ? AND status = 'IN-FLIGHT'",
@@ -1127,15 +1142,6 @@ async def _polling_loop(
             ) as cur:
                 row = await cur.fetchone()
                 in_flight_count = row[0]
-
-            if in_flight_count > 0 and not input_path.exists():
-                await db.execute(
-                    "DELETE FROM message_queue "
-                    "WHERE agent_id = ? AND status = 'IN-FLIGHT'",
-                    (agent_id,),
-                )
-                await db.commit()
-                await _send_queue_status(ws_mgr, agent_id)
 
             # --- Input flush: QUEUED messages + no input.json = write input.json ---
             async with db.execute(
@@ -1145,6 +1151,24 @@ async def _polling_loop(
                 (agent_id,),
             ) as cur:
                 queued = await cur.fetchall()
+
+            has_work = in_flight_count > 0 or len(queued) > 0
+
+            if has_work:
+                now_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                await db.execute(
+                    "UPDATE agent_containers SET last_activity = ?, status = 'running' "
+                    "WHERE agent_id = ? AND status IN ('running', 'idle')",
+                    (now_ts, agent_id),
+                )
+                await db.commit()
+            elif not ws_mgr.connected:
+                await db.execute(
+                    "UPDATE agent_containers SET status = 'idle' "
+                    "WHERE agent_id = ? AND status = 'running'",
+                    (agent_id,),
+                )
+                await db.commit()
 
             if queued and not input_path.exists():
                 messages = [json.loads(row[1]) for row in queued]
@@ -1173,12 +1197,6 @@ async def _polling_loop(
                     f"UPDATE message_queue SET status = 'IN-FLIGHT', flushed_at = ? "
                     f"WHERE id IN ({placeholders})",
                     (now, *ids),
-                )
-                # Update last_activity on the container (drives idle reaper)
-                await db.execute(
-                    "UPDATE agent_containers SET last_activity = ? "
-                    "WHERE agent_id = ? AND status IN ('running', 'idle')",
-                    (now, agent_id),
                 )
                 await db.commit()
                 await _send_queue_status(ws_mgr, agent_id)

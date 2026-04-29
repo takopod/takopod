@@ -296,34 +296,33 @@ async def _poll_agentic_tasks() -> None:
             "  AND (last_checked_at IS NULL "
             "       OR last_checked_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', "
             "          '-' || interval_seconds || ' seconds')) "
-            "ORDER BY last_checked_at ASC NULLS FIRST "
-            "LIMIT 1",
+            "ORDER BY last_checked_at ASC NULLS FIRST",
             checker_types,
         ) as cur:
-            row = await cur.fetchone()
+            checker_rows = await cur.fetchall()
 
-        if row:
+        for row in checker_rows:
             (task_id, agent_id, prompt, allowed_tools_json,
              trigger_type, trigger_config_json, cursor_json, model) = row
-            if task_id not in _running_agentic:
-                trigger_config = json.loads(trigger_config_json) if trigger_config_json else {}
-                cursor = json.loads(cursor_json) if cursor_json else {}
-                allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
-                # file_watch needs agent_id in config for directory resolution
-                if trigger_type == "file_watch":
-                    trigger_config["agent_id"] = agent_id
-                logger.info(
-                    "Polling checker %s for task %s (agent %s)",
-                    trigger_type, task_id[:8], agent_id[:8],
-                )
-                task = asyncio.create_task(
-                    _run_checker_task(
-                        task_id, agent_id, prompt, allowed_tools,
-                        trigger_type, trigger_config, cursor, model,
-                    ),
-                    name=f"agentic-check-{task_id[:8]}",
-                )
-                _running_agentic[task_id] = task
+            if task_id in _running_agentic:
+                continue
+            trigger_config = json.loads(trigger_config_json) if trigger_config_json else {}
+            cursor = json.loads(cursor_json) if cursor_json else {}
+            allowed_tools = json.loads(allowed_tools_json) if allowed_tools_json else []
+            if trigger_type == "file_watch":
+                trigger_config["agent_id"] = agent_id
+            logger.info(
+                "Polling checker %s for task %s (agent %s)",
+                trigger_type, task_id[:8], agent_id[:8],
+            )
+            task = asyncio.create_task(
+                _run_checker_task(
+                    task_id, agent_id, prompt, allowed_tools,
+                    trigger_type, trigger_config, cursor, model,
+                ),
+                name=f"agentic-check-{task_id[:8]}",
+            )
+            _running_agentic[task_id] = task
 
 
 async def _run_checker_task(
