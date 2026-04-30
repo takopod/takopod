@@ -65,8 +65,8 @@ nvm use 22
 
 Used for running agent containers and the Ollama embedding service.
 
-- **macOS**: Install [Podman Desktop](https://podman-desktop.io/) — this installs the Podman CLI to `/opt/podman/bin/podman`, which is the path takopod expects.
-- **Linux**: Install via your package manager (`sudo apt install podman` / `sudo dnf install podman`). You may need to symlink or update the path — the Makefile currently hardcodes `/opt/podman/bin/podman`.
+- **macOS**: Install [Podman Desktop](https://podman-desktop.io/) or via Homebrew (`brew install podman`).
+- **Linux**: Install via your package manager (`sudo apt install podman` / `sudo dnf install podman`).
 
 After installing, initialize and start the Podman machine (macOS only):
 

@@ -11,7 +11,7 @@ from orchestrator.db import get_db
 
 logger = logging.getLogger(__name__)
 
-PODMAN = "/opt/podman/bin/podman"
+PODMAN = shutil.which("podman") or "/opt/podman/bin/podman"
 NETWORK = "takopod-internal"
 IMAGE = "takopod-worker"
 AGENTS_DIR = Path("data/agents")
