@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { ChatMessage, ContentBlock, ToolCallInfo } from "@/lib/types"
-import { Check, ChevronDown, ChevronRight, Clock, FileIcon, ImageIcon, Shield, Terminal, X } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Clock, FileIcon, ImageIcon, Shield, Terminal, Wrench, X } from "lucide-react"
 
 function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   const [open, setOpen] = useState(false)
@@ -53,6 +53,61 @@ function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
               </pre>
             </>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const TOOL_GROUP_COLLAPSE_THRESHOLD = 3
+
+function ToolCallGroup({ tools }: { tools: ToolCallInfo[] }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (tools.length < TOOL_GROUP_COLLAPSE_THRESHOLD) {
+    return (
+      <>
+        {tools.map((t) => (
+          <ToolCallBlock key={t.tool_call_id} tool={t} />
+        ))}
+      </>
+    )
+  }
+
+  const toolNames = tools.map((t) => t.tool_name)
+  const uniqueNames = [...new Set(toolNames)]
+  const summary =
+    uniqueNames.length <= 3
+      ? uniqueNames.join(", ")
+      : `${uniqueNames.slice(0, 3).join(", ")} +${uniqueNames.length - 3} more`
+
+  return (
+    <div className="mt-1.5 rounded border bg-background/50 text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-muted-foreground hover:text-foreground"
+      >
+        {expanded ? (
+          <ChevronDown className="size-3 shrink-0" />
+        ) : (
+          <ChevronRight className="size-3 shrink-0" />
+        )}
+        <Wrench className="size-3 shrink-0" />
+        <span className="font-medium text-foreground">
+          {tools.length} tool calls
+        </span>
+        {!expanded && (
+          <span className="truncate font-mono text-muted-foreground">
+            {summary}
+          </span>
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t px-1 py-1">
+          {tools.map((t) => (
+            <ToolCallBlock key={t.tool_call_id} tool={t} />
+          ))}
         </div>
       )}
     </div>
@@ -152,6 +207,34 @@ function AttachmentChips({ paths }: { paths: string[] }) {
   )
 }
 
+type GroupedBlock =
+  | { kind: "single"; block: ContentBlock; index: number }
+  | { kind: "tool_group"; tools: ToolCallInfo[]; startIndex: number }
+
+function groupBlocks(blocks: ContentBlock[]): GroupedBlock[] {
+  const groups: GroupedBlock[] = []
+  let toolBatch: ToolCallInfo[] = []
+  let batchStart = 0
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    if (block.type === "tool_call") {
+      if (toolBatch.length === 0) batchStart = i
+      toolBatch.push(block.tool)
+    } else {
+      if (toolBatch.length > 0) {
+        groups.push({ kind: "tool_group", tools: toolBatch, startIndex: batchStart })
+        toolBatch = []
+      }
+      groups.push({ kind: "single", block, index: i })
+    }
+  }
+  if (toolBatch.length > 0) {
+    groups.push({ kind: "tool_group", tools: toolBatch, startIndex: batchStart })
+  }
+  return groups
+}
+
 interface ChatMessageListProps {
   messages: ChatMessage[]
   hasOlderMessages?: boolean
@@ -221,16 +304,16 @@ export function ChatMessageList({
                 } ${msg.source === "scheduled_task" ? "border-l-2 border-amber-500" : ""}`}
               >
               {msg.blocks && msg.blocks.length > 0 ? (
-                msg.blocks.map((block, i) =>
-                  block.type === "text" ? (
-                    <div key={i} className="markdown-body">
-                      <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{block.text}</Markdown>
+                groupBlocks(msg.blocks).map((group) =>
+                  group.kind === "tool_group" ? (
+                    <ToolCallGroup key={`tg-${group.startIndex}`} tools={group.tools} />
+                  ) : group.block.type === "text" ? (
+                    <div key={group.index} className="markdown-body">
+                      <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{group.block.text}</Markdown>
                     </div>
-                  ) : block.type === "gh_approval" ? (
-                    <GhApprovalBlock key={block.request_id} block={block} onRespond={onApprovalRespond} />
-                  ) : (
-                    <ToolCallBlock key={block.tool.tool_call_id} tool={block.tool} />
-                  ),
+                  ) : group.block.type === "gh_approval" ? (
+                    <GhApprovalBlock key={group.block.request_id} block={group.block} onRespond={onApprovalRespond} />
+                  ) : null,
                 )
               ) : msg.status === "streaming" && !msg.content ? (
                 <span className="inline-block animate-pulse text-muted-foreground text-xs">&nbsp;</span>
