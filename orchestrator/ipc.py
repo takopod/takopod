@@ -29,6 +29,81 @@ _inflight_source: dict[str, dict] = {}
 # Checked by the scheduler after task completion to decide whether to backoff.
 _activity_signaled: set[str] = set()
 
+# Per-agent pipeline engine cache with TTL.
+# Values: (timestamp, engine_tuple | None). None = no pipelines found.
+_pipeline_cache: dict[str, tuple[float, tuple | None]] = {}
+_PIPELINE_CACHE_TTL = 300  # seconds
+
+
+async def _get_pipeline_engine(agent_id: str) -> tuple | None:
+    """Get or create pipeline engine for an agent's workspace.
+
+    Caches results per agent_id with a TTL so config changes are
+    picked up without restarting.
+    """
+    now = time.monotonic()
+    cached = _pipeline_cache.get(agent_id)
+    if cached is not None:
+        cached_time, cached_result = cached
+        if now - cached_time < _PIPELINE_CACHE_TTL:
+            return cached_result
+
+    try:
+        from orchestrator.pipelines.loader import PipelineLoader
+        from orchestrator.pipelines.trigger import TriggerDetector
+        from orchestrator.pipelines.builder import PipelineBuilder
+
+        db = await get_db()
+        row = await db.execute_fetchone(
+            "SELECT host_dir FROM agents WHERE id = ?", (agent_id,)
+        )
+        if not row:
+            _pipeline_cache[agent_id] = (now, None)
+            return None
+
+        workspace = Path(row[0])
+        loader = PipelineLoader(workspace)
+        if not loader.discover_projects():
+            _pipeline_cache[agent_id] = (now, None)
+            return None
+        trigger = TriggerDetector(loader)
+        trigger.refresh()
+        builder = PipelineBuilder()
+        result = (loader, trigger, builder)
+        _pipeline_cache[agent_id] = (now, result)
+        return result
+    except Exception as e:
+        logger.debug("Pipeline engine not available: %s", e)
+        _pipeline_cache[agent_id] = (now, None)
+        return None
+
+
+async def _inject_pipeline_payload(
+    agent_id: str, content: str, payload: dict
+) -> None:
+    """Detect pipeline triggers and inject payload fields if matched."""
+    engine = await _get_pipeline_engine(agent_id)
+    if engine is None:
+        return
+
+    loader, trigger, builder = engine
+    match = trigger.detect(content)
+    if match is None:
+        return
+
+    try:
+        config = loader.load_pipeline(match.project, match.workflow)
+        pipeline_payload = builder.build(config, match.extracted_vars)
+        payload.update(pipeline_payload.to_message_fields())
+        logger.info(
+            "Pipeline triggered: project=%s workflow=%s run_id=%s",
+            match.project, match.workflow,
+            pipeline_payload.run_id,
+        )
+    except Exception as e:
+        logger.error("Pipeline loading failed for %s/%s: %s",
+                     match.project, match.workflow, e)
+
 
 async def queue_message(
     agent_id: str,
@@ -57,6 +132,10 @@ async def queue_message(
         payload_dict["attachments"] = attachments
     if model:
         payload_dict["model"] = model
+
+    # Pipeline trigger detection: check if message matches a pipeline workflow
+    await _inject_pipeline_payload(agent_id, content, payload_dict)
+
     payload = json.dumps(payload_dict)
     await db.execute(
         "INSERT INTO message_queue (id, agent_id, payload, agentic_task_id) "

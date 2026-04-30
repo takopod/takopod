@@ -281,15 +281,22 @@ async def run_query(
     msg_payload: dict[str, Any] | None = None,
     partial_text_ref: list[str] | None = None,
     model_spec: str | None = None,
+    pipeline_agents: dict[str, dict] | None = None,
+    pipeline_system_prompt: str | None = None,
+    pipeline_max_turns: int | None = None,
+    pipeline_effort: str | None = None,
 ) -> tuple[str | None, dict[str, Any], str]:
     """Run a query through the Claude Agent SDK.
 
     Returns (captured_session_id, usage_dict, full_response_text).
     """
-    system_prompt = _build_system_prompt(
-        retrieved_context, memory_context, continuation_summary,
-        facts_context=facts_context,
-    )
+    if pipeline_system_prompt:
+        system_prompt = pipeline_system_prompt
+    else:
+        system_prompt = _build_system_prompt(
+            retrieved_context, memory_context, continuation_summary,
+            facts_context=facts_context,
+        )
     logger.debug("system_prompt (%d chars):\n%s", len(system_prompt), system_prompt)
 
     # Emit tool events via hooks so the frontend can display them
@@ -355,19 +362,36 @@ async def run_query(
     if has_skills:
         allowed.append("Skill")
 
+    # Build subagent definitions from pipeline config
+    sdk_agents = None
+    if pipeline_agents:
+        from claude_agent_sdk import AgentDefinition
+        sdk_agents = {}
+        for name, agent_dict in pipeline_agents.items():
+            try:
+                sdk_agents[name] = AgentDefinition(**agent_dict)
+            except (TypeError, ValueError) as e:
+                logger.error("Invalid agent definition '%s': %s", name, e)
+        if sdk_agents and "Agent" not in allowed:
+            allowed.append("Agent")
+
     opts_kwargs: dict[str, Any] = {
         "cwd": str(WORKSPACE),
         "allowed_tools": allowed,
         "setting_sources": ["project"],
         "permission_mode": permission_mode,
         "system_prompt": system_prompt,
-        "max_turns": MAX_TURNS,
+        "max_turns": pipeline_max_turns or MAX_TURNS,
         "mcp_servers": mcp_servers,
         "hooks": {
             "PreToolUse": [HookMatcher(matcher=".*", hooks=[on_pre_tool])],
             "PostToolUse": [HookMatcher(matcher=".*", hooks=[on_post_tool])],
         },
     }
+    if sdk_agents:
+        opts_kwargs["agents"] = sdk_agents
+    if pipeline_effort and "effort" not in opts_kwargs:
+        opts_kwargs["effort"] = pipeline_effort
     if model_spec:
         model_id, effort = parse_model_spec(model_spec)
         if model_id:
