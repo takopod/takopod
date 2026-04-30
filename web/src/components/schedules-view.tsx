@@ -80,6 +80,19 @@ function formatInterval(seconds: number): string {
   return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`
 }
 
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  if (diff < 0) return "just now"
+  const secs = Math.floor(diff / 1000)
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
 function triggerLabel(t: string): string {
   const labels: Record<string, string> = {
     file_watch: "file watch",
@@ -385,13 +398,17 @@ export function SchedulesView() {
                     )}
                   </div>
                   <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span className="font-mono">{s.id.slice(0, 8)}</span>
                     {s.last_checked_at && (
-                      <span>last checked: {s.last_checked_at}</span>
+                      <Badge variant="outline" className="text-[10px] font-normal">
+                        checked {timeAgo(s.last_checked_at)}
+                      </Badge>
                     )}
                     {s.last_executed_at && (
-                      <span>last run: {s.last_executed_at}</span>
+                      <Badge variant="outline" className="text-[10px] font-normal">
+                        ran {timeAgo(s.last_executed_at)}
+                      </Badge>
                     )}
                   </div>
                 </div>

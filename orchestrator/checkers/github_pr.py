@@ -119,6 +119,20 @@ async def _check_single_pr(repo: str, pr_number: int, cursor: dict) -> CheckResu
     changes: list[str] = []
     new_cursor = dict(cursor)
 
+    prev_state = cursor.get("pr_state")
+    rc, body, _ = await _gh_api(f"repos/{repo}/pulls/{pr_number}")
+    if rc != 0:
+        logger.warning("gh api failed fetching PR state for %s#%s (exit %d)", repo, pr_number, rc)
+    elif body.strip():
+        try:
+            pr = json.loads(body)
+            current_state = "merged" if pr.get("merged") else pr.get("state", "open")
+            new_cursor["pr_state"] = current_state
+            if prev_state and current_state != prev_state:
+                changes.append(f"PR state changed: {prev_state} -> {current_state}")
+        except (json.JSONDecodeError, KeyError):
+            logger.warning("Failed to parse PR state for %s#%s", repo, pr_number)
+
     # Check for new comments
     last_comment_id = cursor.get("last_comment_id", 0)
     rc, body, headers = await _gh_api(
