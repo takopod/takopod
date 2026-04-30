@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -173,7 +174,7 @@ def status() -> None:
         print("  health endpoint not responding")
 
     # Count managed containers
-    podman = "/opt/podman/bin/podman"
+    podman = shutil.which("podman") or "/opt/podman/bin/podman"
     try:
         result = subprocess.run(
             [podman, "ps", "-a", "--filter", "label=takopod.managed=true",

@@ -1,3 +1,5 @@
+PODMAN := $(shell command -v podman 2>/dev/null || echo /opt/podman/bin/podman)
+
 .PHONY: build install build-worker setup-ollama start-ollama stop-ollama dev web-ui clean clean-all
 
 build: install build-worker web-ui
@@ -7,22 +9,22 @@ install:
 	cd web && npm install
 
 build-worker:
-	/opt/podman/bin/podman build -t takopod-worker -f worker/Containerfile worker/
+	$(PODMAN) build -t takopod-worker -f worker/Containerfile worker/
 
 setup-ollama:
-	/opt/podman/bin/podman pull ollama/ollama:latest
-	/opt/podman/bin/podman run -d --name ollama-setup -v ollama-models:/root/.ollama:Z ollama/ollama:latest
-	/opt/podman/bin/podman exec ollama-setup ollama pull nomic-embed-text
-	/opt/podman/bin/podman rm -f ollama-setup
+	$(PODMAN) pull ollama/ollama:latest
+	$(PODMAN) run -d --name ollama-setup -v ollama-models:/root/.ollama:Z ollama/ollama:latest
+	$(PODMAN) exec ollama-setup ollama pull nomic-embed-text
+	$(PODMAN) rm -f ollama-setup
 
 start-ollama:
-	/opt/podman/bin/podman network create --ignore takopod-internal
-	/opt/podman/bin/podman rm -f ollama 2>/dev/null || true
-	/opt/podman/bin/podman run -d --name ollama --network takopod-internal --memory 4g --cpus 2 --label takopod.role=ollama -v ollama-models:/root/.ollama:Z ollama/ollama:latest
+	$(PODMAN) network create --ignore takopod-internal
+	$(PODMAN) rm -f ollama 2>/dev/null || true
+	$(PODMAN) run -d --name ollama --network takopod-internal --memory 4g --cpus 2 --label takopod.role=ollama -v ollama-models:/root/.ollama:Z ollama/ollama:latest
 
 stop-ollama:
-	/opt/podman/bin/podman stop -t 10 ollama 2>/dev/null || true
-	/opt/podman/bin/podman rm -f ollama 2>/dev/null || true
+	$(PODMAN) stop -t 10 ollama 2>/dev/null || true
+	$(PODMAN) rm -f ollama 2>/dev/null || true
 
 web-ui:
 	cd web && npm run build
