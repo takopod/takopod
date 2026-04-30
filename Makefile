@@ -18,6 +18,7 @@ setup-ollama:
 	$(PODMAN) rm -f ollama-setup
 
 start-ollama:
+	$(PODMAN) network create --ignore takopod-internal
 	$(PODMAN) rm -f ollama 2>/dev/null || true
 	$(PODMAN) run -d --name ollama --network takopod-internal --memory 4g --cpus 2 --label takopod.role=ollama -v ollama-models:/root/.ollama:Z ollama/ollama:latest
 

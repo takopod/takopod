@@ -101,17 +101,21 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (modelOptions.length > 0 && !selectedModel) {
-      const saved = localStorage.getItem("takopod:selectedModel")
-      const valid = modelOptions.find(m => m.value === saved)
-      setSelectedModel(valid?.value ?? modelOptions[0].value)
-    }
-  }, [modelOptions, selectedModel])
+    if (modelOptions.length === 0) return
+    const agentKey = selectedAgentId ? `takopod:model:${selectedAgentId}` : null
+    const saved = agentKey && localStorage.getItem(agentKey)
+    const fallback = localStorage.getItem("takopod:selectedModel")
+    const pick = saved || fallback
+    const valid = modelOptions.find(m => m.value === pick)
+    setSelectedModel(valid?.value ?? modelOptions[0].value)
+  }, [modelOptions, selectedAgentId])
 
   const handleModelChange = useCallback((v: string) => {
     setSelectedModel(v)
-    localStorage.setItem("takopod:selectedModel", v)
-  }, [])
+    if (selectedAgentId) {
+      localStorage.setItem(`takopod:model:${selectedAgentId}`, v)
+    }
+  }, [selectedAgentId])
 
   useEffect(() => {
     if (agents.length === 0) return

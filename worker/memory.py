@@ -382,9 +382,25 @@ def strip_retrieved_context(text: str) -> str:
 
 COMPACT_SYSTEM_PROMPT = (
     "You are a memory compactor. The following contains multiple session summaries "
-    "from the same day. Distill them into a single coherent narrative summary.\n\n"
-    "Preserve key decisions, topics discussed, entities mentioned, and "
-    "unresolved questions. Remove redundancy.\n\n"
+    "from the same day. Distill them into a single compact summary organized by "
+    "importance.\n\n"
+    "Process:\n"
+    "1. Extract key facts from all sessions: decisions, commitments, user "
+    "preferences, technical conclusions, action items, and unresolved questions.\n"
+    "2. Rank each fact by long-term importance:\n"
+    "   - HIGH: Decisions that affect future work, user preferences, commitments, "
+    "architectural choices, unresolved blockers\n"
+    "   - MEDIUM: Specific technical details, intermediate findings, context that "
+    "explains why a decision was made\n"
+    "   - LOW: Routine actions, exploratory steps that led nowhere, transient "
+    "status updates, information superseded by later events\n"
+    "3. Write the compacted summary:\n"
+    "   - HIGH items: preserve in full detail\n"
+    "   - MEDIUM items: condense to one sentence each\n"
+    "   - LOW items: drop entirely unless they provide essential context for a "
+    "HIGH item\n\n"
+    "Structure the output as a narrative summary with the most important "
+    "information first. Do not use importance labels in the output.\n\n"
     "Output only the summary, no preamble, no JSON blocks."
 )
 
@@ -528,7 +544,7 @@ async def compact_memory_files(
     # 3. Write clean content to disk
     canonical_path = f"memory/{date}.md"
     abs_canonical = WORKSPACE / canonical_path
-    abs_canonical.write_text(f"## Compacted Memory — {date}\n\n{clean_distilled}\n")
+    abs_canonical.write_text(f"## Session: {date}T00:00:00Z (compacted)\n\n{clean_distilled}\n")
 
     # Delete continuation files and their search indexes
     from worker.search import delete_memory_index, index_memory_file, index_memory_vectors
@@ -603,7 +619,7 @@ def write_memory_file(
     try:
         parsed_facts = parse_facts_json(summary)
         if parsed_facts:
-            session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+            session_ref = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             store_facts(conn, parsed_facts, source=f"session:{session_ref}")
     except Exception as e:
         logger.error("Fact storage after write failed: %s", e)
@@ -715,7 +731,7 @@ async def run_session_end(
         logger.warning("No summary produced, skipping memory write")
         return None
 
-    session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    session_ref = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     _path, needs_compaction = write_memory_file(conn, summary, session_ref)
 
     # Trigger async vector indexing for the written file
