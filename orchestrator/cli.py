@@ -69,6 +69,7 @@ def start(host: str = "0.0.0.0", port: int = 8000) -> None:
         print(f"Error: failed to start takopod: {exc}")
         sys.exit(1)
 
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(str(proc.pid))
     print(f"takopod starting on {host}:{port} (pid {proc.pid})...")
 
