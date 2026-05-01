@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { FileEditor } from "@/components/file-editor"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
-import { Info, Pencil, Plus, Trash2, RotateCcw, X, ArrowLeft } from "lucide-react"
+import { Info, Pencil, Plus, Trash2, RotateCcw, Upload, X, ArrowLeft } from "lucide-react"
 
 interface SkillSummary {
   id: string
@@ -23,15 +28,17 @@ interface SkillDetail extends SkillSummary {
 export function SystemSkillsView() {
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [showAdd, setShowAdd] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
   const [selected, setSelected] = useState<SkillDetail | null>(null)
   const [editContent, setEditContent] = useState("")
-  const [newName, setNewName] = useState("")
-  const [newDesc, setNewDesc] = useState("")
-  const [newContent, setNewContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [zipFile, setZipFile] = useState<File | null>(null)
+  const [zipError, setZipError] = useState("")
+  const [uploading, setUploading] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchSkills = useCallback(async () => {
     const res = await fetch("/api/skills")
@@ -43,26 +50,45 @@ export function SystemSkillsView() {
     fetchSkills()
   }, [fetchSkills])
 
-  const handleCreate = async () => {
-    if (!newName.trim()) return
-    setSaving(true)
-    const res = await fetch("/api/skills", {
+  const handleFileSelect = (file: File) => {
+    setZipError("")
+    if (!file.name.endsWith(".zip")) {
+      setZipError("Only .zip files are accepted")
+      return
+    }
+    setZipFile(file)
+  }
+
+  const closeUploadDialog = () => {
+    setShowUpload(false)
+    setZipFile(null)
+    setZipError("")
+  }
+
+  const handleUpload = async () => {
+    if (!zipFile) return
+    setUploading(true)
+    setZipError("")
+    const formData = new FormData()
+    formData.append("file", zipFile)
+    const res = await fetch("/api/skills/upload", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: newName.trim(),
-        description: newDesc.trim(),
-        content: newContent.trim(),
-      }),
+      body: formData,
     })
     if (res.ok) {
       await fetchSkills()
-      setShowAdd(false)
-      setNewName("")
-      setNewDesc("")
-      setNewContent("")
+      closeUploadDialog()
+    } else {
+      const err = await res.json().catch(() => ({ detail: "Upload failed" }))
+      setZipError(err.detail || "Upload failed")
     }
-    setSaving(false)
+    setUploading(false)
+  }
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
   const handleSelect = async (skillId: string) => {
@@ -204,7 +230,7 @@ export function SystemSkillsView() {
         <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
         <span className="text-sm font-medium">Available Skills</span>
         <div className="ml-auto">
-          <Button size="sm" onClick={() => setShowAdd(true)} disabled={showAdd}>
+          <Button size="sm" onClick={() => setShowUpload(true)}>
             <Plus className="mr-1.5 size-3.5" />
             Add Skill
           </Button>
@@ -225,7 +251,7 @@ export function SystemSkillsView() {
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : (
             <div className="flex flex-col gap-3">
-              {skills.length === 0 && !showAdd && (
+              {skills.length === 0 && (
                 <p className="text-sm text-muted-foreground">
                   No default skills configured. Add one to give new agents
                   reusable capabilities out of the box.
@@ -271,81 +297,93 @@ export function SystemSkillsView() {
                   </div>
                 </div>
               ))}
-
-              {showAdd && (
-                <div className="rounded-md border p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="text-sm font-medium">Add Default Skill</span>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => setShowAdd(false)}
-                    >
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="flex flex-col gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="skill-name" className="text-xs">
-                        Name (lowercase, hyphens)
-                      </Label>
-                      <Input
-                        id="skill-name"
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        placeholder="e.g. review-pr"
-                        autoFocus
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="skill-desc" className="text-xs">
-                        Description
-                      </Label>
-                      <Input
-                        id="skill-desc"
-                        value={newDesc}
-                        onChange={(e) => setNewDesc(e.target.value)}
-                        placeholder="When to use this skill"
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="skill-content" className="text-xs">
-                        SKILL.md Content (optional, auto-generated if empty)
-                      </Label>
-                      <Textarea
-                        id="skill-content"
-                        value={newContent}
-                        onChange={(e) => setNewContent(e.target.value)}
-                        placeholder={
-                          "---\nname: review-pr\ndescription: Review a GitHub PR\n---\n\n# Review PR\n\nInstructions here..."
-                        }
-                        className="min-h-32 resize-none font-mono text-xs"
-                        spellCheck={false}
-                      />
-                    </div>
-                    <div className="flex justify-end gap-2 pt-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowAdd(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={handleCreate}
-                        disabled={!newName.trim() || saving}
-                      >
-                        {saving ? "Creating..." : "Create"}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
       </div>
+
+      <Dialog open={showUpload} onOpenChange={(open) => { if (!open) closeUploadDialog() }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upload Skill</DialogTitle>
+            <DialogDescription>
+              Upload a .zip file containing SKILL.md with name and description in the frontmatter.
+            </DialogDescription>
+          </DialogHeader>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) handleFileSelect(f)
+              e.target.value = ""
+            }}
+          />
+
+          {!zipFile ? (
+            <div
+              className={`flex cursor-pointer flex-col items-center gap-2 rounded-md border-2 border-dashed px-4 py-10 transition-colors ${
+                dragging
+                  ? "border-primary bg-primary/5"
+                  : "border-muted-foreground/25 hover:border-muted-foreground/50"
+              }`}
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+              onDragEnter={(e) => { e.preventDefault(); setDragging(true) }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragging(false)
+                const f = e.dataTransfer.files[0]
+                if (f) handleFileSelect(f)
+              }}
+            >
+              <Upload className="size-6 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                Drop .zip file here or click to browse
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <Upload className="size-4 shrink-0 text-muted-foreground" />
+                <span className="truncate text-sm">{zipFile.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {formatSize(zipFile.size)}
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => { setZipFile(null); setZipError("") }}
+              >
+                <X className="size-3.5" />
+              </Button>
+            </div>
+          )}
+
+          {zipError && (
+            <p className="text-xs text-destructive">{zipError}</p>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={closeUploadDialog}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleUpload}
+              disabled={!zipFile || uploading}
+            >
+              {uploading ? "Uploading..." : "Upload"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <ConfirmDialog
         open={confirmDeleteId !== null}
         onOpenChange={(open) => { if (!open) setConfirmDeleteId(null) }}

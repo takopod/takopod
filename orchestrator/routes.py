@@ -1,13 +1,16 @@
 import asyncio
 import dataclasses
+import io
 import json
 import logging
 import os
 import re
 import secrets
 import shutil
+import tempfile
 import time
 import uuid
+import zipfile
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -1031,6 +1034,9 @@ async def remove_registry_skill(agent_id: str, skill_id: str):
 
 BUILTIN_SKILLS_DIR = Path("skills")
 USER_SKILLS_DIR = Path("data/skills")
+_SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+_ZIP_MAX_UNCOMPRESSED = 5 * 1024 * 1024
+_ZIP_MAX_FILES = 100
 
 
 def _scan_skills_in_dir(sdir: Path) -> list[tuple[str, Path, str]]:
@@ -1094,6 +1100,98 @@ def _is_always_enabled_skill(skill_id: str) -> bool:
     return always_on
 
 
+def _extract_and_validate_zip(zip_bytes: bytes, target_dir: Path) -> tuple[str, str]:
+    """Extract zip to target_dir after validation.
+
+    Returns (name, description) from SKILL.md frontmatter.
+    Raises HTTPException(400) on validation failure.
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
+
+    infos = [i for i in zf.infolist() if not i.filename.startswith("__MACOSX/")]
+    if not infos:
+        raise HTTPException(status_code=400, detail="Zip archive is empty")
+
+    # Detect single top-level directory prefix (handles `zip -r skill.zip my-skill/`)
+    parts_list = [info.filename.rstrip("/").split("/") for info in infos]
+    top_dirs = {parts[0] for parts in parts_list if parts[0]}
+    strip_prefix = ""
+    if len(top_dirs) == 1:
+        candidate = next(iter(top_dirs))
+        if any(len(parts) > 1 for parts in parts_list):
+            strip_prefix = candidate + "/"
+
+    # Validate entries
+    total_size = 0
+    file_count = 0
+    _SYMLINK = 0o120000
+
+    for info in infos:
+        rel_name = info.filename
+        if strip_prefix and rel_name.startswith(strip_prefix):
+            rel_name = rel_name[len(strip_prefix):]
+        if not rel_name or rel_name == "/":
+            continue
+
+        if (info.external_attr >> 16) & 0o170000 == _SYMLINK:
+            raise HTTPException(status_code=400, detail=f"Zip contains a symlink: {info.filename}")
+
+        rel_path = Path(rel_name)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            raise HTTPException(status_code=400, detail=f"Invalid path in zip: {info.filename}")
+
+        if not info.is_dir():
+            file_count += 1
+            total_size += info.file_size
+
+    if total_size > _ZIP_MAX_UNCOMPRESSED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Zip contents exceed {_ZIP_MAX_UNCOMPRESSED // (1024 * 1024)}MB limit ({total_size} bytes uncompressed)",
+        )
+    if file_count > _ZIP_MAX_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Zip contains too many files ({file_count}, max {_ZIP_MAX_FILES})",
+        )
+
+    # Extract with prefix stripping
+    for info in infos:
+        rel_name = info.filename
+        if strip_prefix and rel_name.startswith(strip_prefix):
+            rel_name = rel_name[len(strip_prefix):]
+        if not rel_name or rel_name == "/":
+            continue
+
+        dest = target_dir / rel_name
+        if info.is_dir():
+            dest.mkdir(parents=True, exist_ok=True)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(zf.read(info))
+            if dest.suffix in (".sh", ".py"):
+                dest.chmod(0o755)
+
+    # Validate SKILL.md and parse frontmatter
+    skill_md = target_dir / "SKILL.md"
+    if not skill_md.is_file():
+        raise HTTPException(status_code=400, detail="Zip must contain SKILL.md at root level")
+
+    content = skill_md.read_text()
+    name, description, _ = _parse_skill_frontmatter(content)
+
+    if not name:
+        raise HTTPException(status_code=400, detail="SKILL.md must have YAML frontmatter with a 'name' field")
+    if not _SKILL_NAME_RE.fullmatch(name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Skill name '{name}' is invalid — must be lowercase letters, digits, and hyphens, starting with a letter",
+        )
+
+    return name, description
 
 
 @router.get("/skills")
@@ -1163,50 +1261,38 @@ async def _remove_skill_from_all_agents(skill_id: str) -> None:
     await db.commit()
 
 
-@router.post("/skills")
-async def create_system_skill(req: CreateSkillRequest) -> SkillDetail:
-    # Check for conflicts in both directories
-    if _find_system_skill(req.name):
-        raise HTTPException(status_code=409, detail=f"Skill '{req.name}' already exists")
+@router.post("/skills/upload")
+async def upload_system_skill(file: UploadFile) -> SkillDetail:
+    zip_bytes = await file.read()
+    if not zip_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    # User-created skills go to data/skills/
-    USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    skill_dir = USER_SKILLS_DIR / req.name
-    skill_dir.mkdir(parents=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="skill-upload-"))
+    try:
+        skill_id, description = _extract_and_validate_zip(zip_bytes, tmp_dir)
+        existing = _find_system_skill(skill_id)
 
-    content = req.content
-    if not content.strip():
-        content = (
-            f"---\nname: {req.name}\n"
-            f"description: {req.description}\n"
-            f"---\n\n# {req.name}\n\nTODO: Add skill instructions here.\n"
-        )
-    (skill_dir / "SKILL.md").write_text(content)
+        USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        skill_dir = USER_SKILLS_DIR / skill_id
 
-    # Enable for all existing agents by default
-    db = await get_db()
-    async with db.execute(
-        "SELECT id, host_dir FROM agents WHERE status = 'active'"
-    ) as cur:
-        agents = await cur.fetchall()
-    for agent_id, host_dir in agents:
-        await db.execute(
-            "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
-            (agent_id, req.name),
-        )
-    await db.commit()
+        if skill_dir.exists():
+            shutil.rmtree(skill_dir)
+        shutil.copytree(tmp_dir, skill_dir)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    # Sync to all agents
-    for agent_id, host_dir in agents:
-        await sync_agent_skills(agent_id, Path(host_dir))
+    if existing is not None:
+        await _propagate_skill_to_agents(skill_id)
 
+    content = (skill_dir / "SKILL.md").read_text()
     name, desc, _ = _parse_skill_frontmatter(content)
     return SkillDetail(
-        id=req.name,
-        name=name or req.name,
+        id=skill_id,
+        name=name or skill_id,
         description=desc,
         content=content,
-        files=[],
+        files=_collect_supporting_files(skill_dir),
+        builtin=_is_builtin_skill(skill_id),
     )
 
 
