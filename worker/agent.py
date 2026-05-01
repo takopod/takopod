@@ -37,6 +37,7 @@ from worker.tools import (
     TOOL_NAMES as BUILTIN_TOOL_NAMES,
     create_mcp_proxy_servers,
     create_memory_server,
+    create_pipeline_server,
     create_schedule_server,
     create_slack_thread_server,
 )
@@ -336,6 +337,7 @@ async def run_query(
 
     schedule_server = create_schedule_server()
     slack_thread_server = create_slack_thread_server()
+    pipeline_server = create_pipeline_server()
     mcp_proxy_servers = create_mcp_proxy_servers()
     builtin_tools, permission_mode = _load_tool_config()
 
@@ -346,6 +348,7 @@ async def run_query(
     mcp_servers: dict[str, Any] = {
         "schedule": schedule_server,
         "slack_thread": slack_thread_server,
+        "pipeline": pipeline_server,
     }
     if memory_server is not None:
         mcp_servers["memory"] = memory_server
@@ -375,6 +378,9 @@ async def run_query(
         if sdk_agents and "Agent" not in allowed:
             allowed.append("Agent")
 
+    def _on_cli_stderr(line: str) -> None:
+        logger.warning("CLI stderr: %s", line.rstrip())
+
     opts_kwargs: dict[str, Any] = {
         "cwd": str(WORKSPACE),
         "allowed_tools": allowed,
@@ -383,6 +389,7 @@ async def run_query(
         "system_prompt": system_prompt,
         "max_turns": pipeline_max_turns or MAX_TURNS,
         "mcp_servers": mcp_servers,
+        "stderr": _on_cli_stderr,
         "hooks": {
             "PreToolUse": [HookMatcher(matcher=".*", hooks=[on_pre_tool])],
             "PostToolUse": [HookMatcher(matcher=".*", hooks=[on_post_tool])],
@@ -404,8 +411,13 @@ async def run_query(
     options = ClaudeAgentOptions(**opts_kwargs)
 
     # Log the full query() call for debugging
-    log_kwargs = {k: v for k, v in opts_kwargs.items() if k not in ("hooks", "mcp_servers")}
-    log_kwargs["prompt"] = content
+    log_kwargs: dict[str, Any] = {"prompt": content}
+    for k, v in opts_kwargs.items():
+        try:
+            json.dumps(v)
+            log_kwargs[k] = v
+        except (TypeError, ValueError):
+            log_kwargs[k] = f"<{type(v).__name__}>"
     logger.debug("query() call:\n%s", json.dumps(log_kwargs, indent=2))
 
     captured_session_id = session_id

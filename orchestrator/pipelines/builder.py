@@ -28,15 +28,13 @@ class PipelineBuilder:
 
         Args:
             config: Validated pipeline configuration.
-            extracted_vars: Variables captured from trigger match
+            extracted_vars: Variables for template resolution
                             (e.g. {"run_id": "PROJQUAY-1234"}).
 
         Returns:
             PipelinePayload ready for IPC serialization.
         """
-        # Use the trigger's extract name to find the run_id
-        trigger_extract = config.workflow.triggers[0].extract if config.workflow.triggers else "run_id"
-        run_id = extracted_vars.get(trigger_extract, next(iter(extracted_vars.values()), "unknown"))
+        run_id = extracted_vars.get("run_id", "unknown")
 
         # Resolve the artifacts directory template using the full resolver.
         # Build a minimal context first (without artifacts_dir itself),

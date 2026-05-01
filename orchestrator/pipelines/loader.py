@@ -1,7 +1,9 @@
 """Pipeline configuration loader and validator.
 
 Discovers, parses, and validates user-provided pipeline configs
-from .pipelines/<project>/ directories in the agent workspace.
+from a skill directory (e.g. .claude/skills/quay-pipeline/).
+The loader is scoped to a single project — the base directory
+IS the project root.
 """
 
 from __future__ import annotations
@@ -67,36 +69,30 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 class PipelineLoader:
-    """Discovers and loads pipeline configurations from the workspace."""
+    """Loads pipeline configurations from a skill directory.
 
-    def __init__(self, workspace: Path):
-        self.workspace = workspace
-        self.pipelines_dir = workspace / ".pipelines"
+    The base_dir is the skill directory root (e.g. .claude/skills/quay-pipeline/).
+    It contains profile.yaml, workflow .md files, and an agents/ subdirectory.
+    """
 
-    def discover_projects(self) -> list[str]:
-        """List all projects with pipeline definitions."""
-        if not self.pipelines_dir.is_dir():
-            return []
-        return sorted(
-            d.name
-            for d in self.pipelines_dir.iterdir()
-            if d.is_dir() and not d.name.startswith(".")
-        )
+    def __init__(self, base_dir: Path):
+        self.base_dir = base_dir
 
-    def discover_workflows(self, project: str) -> list[str]:
-        """List all workflow files for a project (without .md extension)."""
-        project_dir = self.pipelines_dir / project
-        if not project_dir.is_dir():
+    def discover_workflows(self) -> list[str]:
+        """List all workflow files (without .md extension)."""
+        if not self.base_dir.is_dir():
             return []
         return sorted(
             f.stem
-            for f in project_dir.iterdir()
-            if f.is_file() and f.suffix == ".md" and f.stem != "README"
+            for f in self.base_dir.iterdir()
+            if f.is_file()
+            and f.suffix == ".md"
+            and f.stem not in ("README", "SKILL")
         )
 
-    def load_agents(self, project: str) -> dict[str, AgentConfig]:
-        """Load all agent definitions from .pipelines/<project>/agents/."""
-        agents_dir = self.pipelines_dir / project / "agents"
+    def load_agents(self) -> dict[str, AgentConfig]:
+        """Load all agent definitions from agents/ subdirectory."""
+        agents_dir = self.base_dir / "agents"
         if not agents_dir.is_dir():
             raise PipelineLoadError(
                 f"No agents/ directory found at {agents_dir}"
@@ -122,9 +118,9 @@ class PipelineLoader:
 
         return agents
 
-    def load_profile(self, project: str) -> ProfileConfig:
-        """Load the project profile from .pipelines/<project>/profile.yaml."""
-        profile_path = self.pipelines_dir / project / "profile.yaml"
+    def load_profile(self) -> ProfileConfig:
+        """Load the project profile from profile.yaml."""
+        profile_path = self.base_dir / "profile.yaml"
         if not profile_path.is_file():
             raise PipelineLoadError(
                 f"No profile.yaml found at {profile_path}"
@@ -144,14 +140,12 @@ class PipelineLoader:
                 f"Invalid profile at {profile_path}: {e}"
             ) from e
 
-    def load_workflow(
-        self, project: str, workflow: str
-    ) -> tuple[WorkflowFrontmatter, str]:
+    def load_workflow(self, workflow: str) -> tuple[WorkflowFrontmatter, str]:
         """Load a workflow definition.
 
         Returns (parsed_frontmatter, prose_body).
         """
-        workflow_path = self.pipelines_dir / project / f"{workflow}.md"
+        workflow_path = self.base_dir / f"{workflow}.md"
         if not workflow_path.is_file():
             raise PipelineLoadError(
                 f"Workflow file not found: {workflow_path}"
@@ -174,15 +168,15 @@ class PipelineLoader:
 
         return parsed, prose
 
-    def load_pipeline(self, project: str, workflow: str) -> PipelineConfig:
+    def load_pipeline(self, workflow: str) -> PipelineConfig:
         """Load and validate a complete pipeline configuration.
 
         Loads agents, profile, and workflow, then validates structural
-        integrity (agent references, phase DAG, trigger patterns).
+        integrity (agent references, phase DAG).
         """
-        agents = self.load_agents(project)
-        profile = self.load_profile(project)
-        wf_frontmatter, wf_prose = self.load_workflow(project, workflow)
+        agents = self.load_agents()
+        profile = self.load_profile()
+        wf_frontmatter, wf_prose = self.load_workflow(workflow)
 
         config = PipelineConfig(
             agents=agents,
@@ -198,10 +192,6 @@ class PipelineLoader:
         """Validate structural integrity of a pipeline config."""
         errors: list[str] = []
         available_agents = set(config.agents.keys())
-
-        # Check triggers
-        if not config.workflow.triggers:
-            errors.append("Workflow must define at least one trigger")
 
         # Check required agents exist
         for name in config.workflow.agents.required:
@@ -254,21 +244,6 @@ class PipelineLoader:
                     f"already produced by an earlier phase"
                 )
             produced_outputs.add(phase.output)
-
-        # Validate trigger patterns compile
-        for trigger in config.workflow.triggers:
-            try:
-                compiled = re.compile(trigger.pattern, re.IGNORECASE)
-                if compiled.groups < 1:
-                    errors.append(
-                        f"Trigger pattern '{trigger.pattern}' must have "
-                        f"at least one capture group for '{trigger.extract}'"
-                    )
-            except re.error as e:
-                errors.append(
-                    f"Trigger pattern '{trigger.pattern}' is not valid "
-                    f"regex: {e}"
-                )
 
         if errors:
             msg = f"Pipeline validation failed with {len(errors)} error(s):\n"

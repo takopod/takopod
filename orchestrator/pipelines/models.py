@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -52,13 +52,6 @@ class PhaseConfig(BaseModel):
     rework: ReworkConfig | None = None
 
 
-class TriggerConfig(BaseModel):
-    """Message pattern that activates a pipeline."""
-
-    pattern: str
-    extract: str  # variable name for the first capture group
-
-
 class AgentRoster(BaseModel):
     """Agents used by a workflow."""
 
@@ -87,7 +80,6 @@ class WorkflowFrontmatter(BaseModel):
     name: str
     description: str
     version: int = 1
-    triggers: list[TriggerConfig]
     agents: AgentRoster
     phases: list[PhaseConfig]
     artifacts: ArtifactConfig
