@@ -299,11 +299,23 @@ export function useWebSocket(agentId: string | null) {
     }))
   }, [])
 
+  const deleteMessage = useCallback(async (messageId: string) => {
+    if (!agentId) return
+    try {
+      const res = await fetch(`/api/agents/${agentId}/messages/${messageId}`, { method: "DELETE" })
+      if (res.ok) {
+        setMessages((prev) => prev.filter((m) => m.id !== messageId))
+      }
+    } catch {
+      // ignore
+    }
+  }, [agentId])
+
   const reconnect = useCallback(() => {
     setSessionEnded(null)
     reconnectAttempt.current = 0
     connect()
   }, [connect])
 
-  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages }
+  return { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages, deleteMessage }
 }

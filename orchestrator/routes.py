@@ -2220,6 +2220,24 @@ async def get_agent_message(agent_id: str, message_id: str):
     }
 
 
+@router.delete("/agents/{agent_id}/messages/{message_id}")
+async def delete_agent_message(agent_id: str, message_id: str):
+    """Hard-delete a single message from the database."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT 1 FROM messages WHERE id = ? AND agent_id = ?",
+        (message_id, agent_id),
+    ) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Message not found")
+    await db.execute(
+        "DELETE FROM messages WHERE id = ? AND agent_id = ?",
+        (message_id, agent_id),
+    )
+    await db.commit()
+    return {"status": "ok"}
+
+
 # --- WebSocket ---
 
 

@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { ChatMessage, ContentBlock, ToolCallInfo } from "@/lib/types"
-import { Check, ChevronDown, ChevronRight, Clock, FileIcon, ImageIcon, Shield, Terminal, Wrench, X } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Clock, EllipsisVertical, FileIcon, ImageIcon, Shield, Terminal, Trash2, Wrench, X } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 function ToolCallBlock({ tool }: { tool: ToolCallInfo }) {
   const [open, setOpen] = useState(false)
@@ -241,6 +247,7 @@ interface ChatMessageListProps {
   loadingOlder?: boolean
   onLoadOlder?: () => void
   onApprovalRespond?: (requestId: string, approved: boolean) => void
+  onDeleteMessage?: (messageId: string) => void
 }
 
 export function ChatMessageList({
@@ -249,6 +256,7 @@ export function ChatMessageList({
   loadingOlder,
   onLoadOlder,
   onApprovalRespond,
+  onDeleteMessage,
 }: ChatMessageListProps) {
   const endRef = useRef<HTMLDivElement>(null)
   const prevLastIdRef = useRef<string | null>(null)
@@ -287,8 +295,26 @@ export function ChatMessageList({
         {messages.map((msg) => (
           <div
             key={msg.id}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            className={`group flex items-start gap-1 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
+            {msg.role === "user" && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="mt-1.5 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                  >
+                    <EllipsisVertical className="size-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="destructive" onClick={() => onDeleteMessage?.(msg.id)}>
+                    <Trash2 className="size-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             <div className="max-w-[75%] min-w-0 overflow-hidden">
               {msg.source === "scheduled_task" && (
                 <div className="mb-1 flex items-center gap-1 text-xs text-amber-600">
@@ -329,6 +355,24 @@ export function ChatMessageList({
               )}
               </div>
             </div>
+            {msg.role === "assistant" && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="mt-1.5 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                  >
+                    <EllipsisVertical className="size-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem variant="destructive" onClick={() => onDeleteMessage?.(msg.id)}>
+                    <Trash2 className="size-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         ))}
         <div ref={endRef} />

@@ -82,7 +82,7 @@ export function App() {
     }
   }, [selectedAgent])
 
-  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages } =
+  const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages, deleteMessage } =
     useWebSocket(selectedAgentId)
 
   const fetchAgents = useCallback(async () => {
@@ -276,7 +276,7 @@ export function App() {
                         </Button>
                       </div>
                     </div>
-                    <ChatMessageList messages={messages} hasOlderMessages={hasOlderMessages} loadingOlder={loadingOlder} onLoadOlder={loadOlderMessages} onApprovalRespond={sendApprovalResponse} />
+                    <ChatMessageList messages={messages} hasOlderMessages={hasOlderMessages} loadingOlder={loadingOlder} onLoadOlder={loadOlderMessages} onApprovalRespond={sendApprovalResponse} onDeleteMessage={deleteMessage} />
                     {(queueStatus.queued > 0 || queueStatus.in_flight > 0) &&
                       !messages.some((m) => m.status === "streaming") && (
                         <div className="flex items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
