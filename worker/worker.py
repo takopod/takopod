@@ -448,6 +448,12 @@ async def process_message(msg: dict[str, Any], conn) -> None:
         _session_transcript.append(("user", content))
         _session_transcript.append(("assistant", stopped_text))
         _persist_session_history()
+        # Build continuation summary so the next query retains context
+        window = _get_window_size()
+        recent = _session_transcript[-window:]
+        if recent:
+            lines = [f"[{role}]: {text}" for role, text in recent]
+            _continuation_summary = "\n\n".join(lines)
     except Exception as e:
         logger.error("Query error: %s", e)
         emit({
