@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
+import { useAgentOrder } from "@/hooks/use-agent-order"
 import { useWebSocket } from "@/hooks/use-websocket"
 import type { Agent, ModelOption } from "@/lib/types"
 import { Input } from "@/components/ui/input"
@@ -81,6 +82,8 @@ export function App() {
       localStorage.setItem("takopod:lastAgent", selectedAgent.name)
     }
   }, [selectedAgent])
+
+  const { orderedAgents, reorder } = useAgentOrder(agents)
 
   const { messages, queueStatus, error, systemError, connected, sessionEnded, sendMessage, sendSystemCommand, sendApprovalResponse, stopQuery, reconnect, hasOlderMessages, loadingOlder, loadOlderMessages, deleteMessage } =
     useWebSocket(selectedAgentId)
@@ -208,7 +211,7 @@ export function App() {
   return (
     <SidebarProvider className="h-svh overflow-hidden">
       <AppSidebar
-        agents={agents}
+        agents={orderedAgents}
         selectedAgentId={selectedAgentId}
         onAgentChange={(value) => {
           if (value === "__create__") {
@@ -218,6 +221,7 @@ export function App() {
             if (agent) navigate(agentUrl(agent.name))
           }
         }}
+        onReorderAgents={reorder}
       />
 
       <SidebarInset>

@@ -1,4 +1,19 @@
+import { useCallback } from "react"
 import { Link, useLocation } from "react-router-dom"
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
 import {
   Collapsible,
   CollapsibleContent,
@@ -21,12 +36,10 @@ import {
   SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { AgentIcon } from "@/components/agent-icon"
+import { SortableAgentItem } from "@/components/sortable-agent-item"
 import type { Agent } from "@/lib/types"
 import {
-  Bot,
   Calendar,
-  Check,
   ChevronRight,
   Hash,
   MessageSquare,
@@ -42,17 +55,34 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   agents: Agent[]
   selectedAgentId: string | null
   onAgentChange: (value: string) => void
+  onReorderAgents: (activeId: string, overId: string) => void
 }
 
 export function AppSidebar({
   agents,
   selectedAgentId,
   onAgentChange,
+  onReorderAgents,
   ...props
 }: AppSidebarProps) {
   const { theme, setTheme } = useTheme()
   const location = useLocation()
   const currentPath = location.pathname
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event
+      if (over && active.id !== over.id) {
+        onReorderAgents(String(active.id), String(over.id))
+      }
+    },
+    [onReorderAgents],
+  )
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -88,35 +118,36 @@ export function AppSidebar({
         </SidebarMenu>
 
         <SidebarGroupLabel className="uppercase tracking-wider">Agents</SidebarGroupLabel>
-        <SidebarMenu>
-          {agents.map((agent) => (
-            <SidebarMenuItem key={agent.id}>
-              <SidebarMenuButton
-                onClick={() => onAgentChange(agent.id)}
-                tooltip={agent.name}
-              >
-                {agent.icon ? (
-                  <AgentIcon name={agent.icon} className="size-4" />
-                ) : (
-                  <Bot className="size-4" />
-                )}
-                <span>{agent.name}</span>
-                {selectedAgentId === agent.id && (
-                  <Check className="ml-auto size-3.5" />
-                )}
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              onClick={() => onAgentChange("__create__")}
-              tooltip="Add Agent"
-            >
-              <Plus className="size-4" />
-              <span>Add Agent</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={agents.map((a) => a.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <SidebarMenu>
+              {agents.map((agent) => (
+                <SortableAgentItem
+                  key={agent.id}
+                  agent={agent}
+                  isSelected={selectedAgentId === agent.id}
+                  onSelect={() => onAgentChange(agent.id)}
+                />
+              ))}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  onClick={() => onAgentChange("__create__")}
+                  tooltip="Add Agent"
+                >
+                  <Plus className="size-4" />
+                  <span>Add Agent</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SortableContext>
+        </DndContext>
       </SidebarHeader>
 
       <SidebarContent>
