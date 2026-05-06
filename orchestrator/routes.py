@@ -2046,8 +2046,9 @@ async def kill_agent(agent_id: str):
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     await db.execute(
-        "UPDATE agent_containers SET status = 'stopped', stopped_at = ? WHERE id = ?",
-        (now, record_id),
+        "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
+        "WHERE agent_id = ? AND status IN ('running', 'idle', 'starting', 'stopping')",
+        (now, agent_id),
     )
     await db.commit()
 
@@ -2232,6 +2233,10 @@ async def delete_agent_message(agent_id: str, message_id: str):
             raise HTTPException(status_code=404, detail="Message not found")
     await db.execute(
         "DELETE FROM messages WHERE id = ? AND agent_id = ?",
+        (message_id, agent_id),
+    )
+    await db.execute(
+        "DELETE FROM message_queue WHERE id = ? AND agent_id = ? AND status = 'QUEUED'",
         (message_id, agent_id),
     )
     await db.commit()
@@ -2517,12 +2522,22 @@ async def _monitor_worker(agent_id: str) -> None:
             return  # Worker was replaced (e.g., by _ensure_worker)
 
         # Clean shutdown initiated by reaper or admin kill — skip crash recovery
+        # but still mark DB record stopped as a safety net (caller may not have
+        # updated yet, or may update a different record).
         if worker.shutting_down:
             logger.info(
                 "Worker for agent %s shut down cleanly (code %s)",
                 agent_id, returncode,
             )
-            return  # Reaper/admin kill handles cleanup
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            db = await get_db()
+            await db.execute(
+                "UPDATE agent_containers SET status = 'stopped', stopped_at = ? "
+                "WHERE id = ? AND status != 'stopped'",
+                (now, worker.container_record_id),
+            )
+            await db.commit()
+            return  # Reaper/admin kill handles remaining cleanup
 
         logger.warning(
             "Worker for agent %s exited with code %s", agent_id, returncode,
