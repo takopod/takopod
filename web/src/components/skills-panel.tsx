@@ -228,7 +228,6 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
 
   const filtered = available
     .filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
-    .slice(0, 5)
 
   // Detail view for a selected draft
   if (selectedDraft) {
@@ -509,7 +508,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                 className="pl-8"
               />
               {searchFocused && availableLoaded && (
-                <div className="absolute left-0 right-0 top-full z-50 mt-1 flex flex-col rounded-md border bg-popover shadow-md">
+                <div className="absolute left-0 right-0 top-full z-50 mt-1 flex max-h-[280px] flex-col overflow-y-auto rounded-md border bg-popover shadow-md">
                   {filtered.length === 0 ? (
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {available.length === 0
