@@ -12,8 +12,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Python Agent SDK
-RUN pip install --no-cache-dir claude-agent-sdk sqlite-vec
+# Install Python Agent SDK and Playwright
+RUN pip install --no-cache-dir claude-agent-sdk sqlite-vec playwright && \
+    python -m playwright install --with-deps chromium
 
 WORKDIR /app
 COPY worker.py agent.py db.py embed.py search.py memory.py context_budget.py model_config.py __init__.py ./worker/
