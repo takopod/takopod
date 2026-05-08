@@ -279,10 +279,9 @@ async def _db_ensure_row(
     row_id: str, agent_id: str, extra_metadata: dict | None = None,
 ) -> None:
     meta: dict = {"blocks": []}
-    source = "web"
     if extra_metadata:
         meta.update(extra_metadata)
-        source = extra_metadata.get("source", "web")
+    meta.pop("source", None)
     metadata = json.dumps(meta)
     try:
         db = await get_db()
@@ -290,7 +289,7 @@ async def _db_ensure_row(
             "INSERT OR IGNORE INTO messages "
             "(id, agent_id, role, content, status, metadata, source) "
             "VALUES (?, ?, 'assistant', '', 'streaming', ?, ?)",
-            (row_id, agent_id, metadata, source),
+            (row_id, agent_id, metadata, "web"),
         )
         await db.commit()
     except SqliteError:
@@ -1178,7 +1177,7 @@ async def _process_output(
             row_id = await _process_event(
                 event, agent_id, ws_mgr, source_meta,
             )
-            if row_id and (not source_meta or source_meta.get("source") != "scheduled_task"):
+            if row_id:
                 notified.add(row_id)
             if event.get("type") in ("complete", "system_error", "script_result") and msg_id:
                 _inflight_source.pop(msg_id, None)

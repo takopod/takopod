@@ -433,6 +433,23 @@ export function ChatMessageList({
                 <AttachmentChips paths={msg.attachments} agentId={agentId} />
               )}
               </div>
+              <time
+                className={`mt-1 block text-[10px] leading-none text-muted-foreground/70 ${
+                  msg.role === "user" ? "text-right" : "text-left"
+                }`}
+                dateTime={new Date(msg.timestamp).toISOString()}
+              >
+                {new Date(msg.timestamp).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                })}{" "}
+                {new Date(msg.timestamp).toLocaleTimeString("en-US", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                  hour12: false,
+                })}
+              </time>
             </div>
             {msg.role === "assistant" && (
               <DropdownMenu>
