@@ -105,7 +105,67 @@ def create_agent_workspace(
         if content:
             target.write_text(content)
 
+    _seed_credential_guard(host_dir)
+
     return host_dir
+
+
+CREDENTIAL_GUARD_HOOKS = {
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Write|Edit|Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/workspace/scripts/credential-guard.sh",
+                        "timeout": 5,
+                    }
+                ],
+            }
+        ],
+        "PostToolUse": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/workspace/scripts/credential-guard.sh",
+                        "timeout": 5,
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/workspace/scripts/credential-guard.sh",
+                        "timeout": 5,
+                    }
+                ]
+            }
+        ],
+    }
+}
+
+
+def _seed_credential_guard(host_dir: Path) -> None:
+    """Seed the credential guard script and hook config into a new workspace."""
+    scripts_dir = host_dir / "scripts"
+    scripts_dir.mkdir(exist_ok=True)
+
+    guard_dest = scripts_dir / "credential-guard.sh"
+    guard_src = SEED_DIR / "scripts" / "credential-guard.sh"
+    if guard_src.is_file() and not guard_dest.exists():
+        shutil.copy2(guard_src, guard_dest)
+        guard_dest.chmod(0o755)
+
+    claude_dir = host_dir / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    settings_path = claude_dir / "settings.json"
+    if not settings_path.exists():
+        settings_path.write_text(json.dumps(CREDENTIAL_GUARD_HOOKS, indent=2))
 
 
 BUILTIN_SKILLS_DIR = Path("skills")
