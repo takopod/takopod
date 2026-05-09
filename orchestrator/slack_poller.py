@@ -398,16 +398,29 @@ async def _poll_thread(
 
         to_dispatch.append({"msg": msg, "prompt": prompt, "has_files": has_files})
 
-    # Fetch full thread history once if any mentions were found.
-    # Exclude the triggering message(s) — they appear in "Respond to:" instead.
+    # Only fetch thread context if the agent has no prior messages in this
+    # thread (first-time mention).  If the agent already has a conversation
+    # session, its SDK context carries the history.
     thread_context = ""
     if to_dispatch:
-        # When there's a single dispatch (common case), exclude its ts
-        # to avoid duplicating it in context + "Respond to:".
-        exclude = to_dispatch[-1]["msg"].get("ts", "") if len(to_dispatch) == 1 else ""
-        thread_context = await _fetch_thread_context(
-            client, channel_id, thread_ts, exclude_ts=exclude,
-        )
+        conversation_id = f"slack:{channel_id}:{thread_ts}"
+        has_prior = False
+        try:
+            _db = await get_db()
+            async with _db.execute(
+                "SELECT 1 FROM messages "
+                "WHERE agent_id = ? AND conversation_id = ? LIMIT 1",
+                (agent_id, conversation_id),
+            ) as cur:
+                has_prior = await cur.fetchone() is not None
+        except Exception:
+            logger.exception("Failed to check prior messages for thread")
+
+        if not has_prior:
+            exclude = to_dispatch[-1]["msg"].get("ts", "") if len(to_dispatch) == 1 else ""
+            thread_context = await _fetch_thread_context(
+                client, channel_id, thread_ts, exclude_ts=exclude,
+            )
 
     for item in to_dispatch:
         msg = item["msg"]
@@ -424,7 +437,9 @@ async def _poll_thread(
         if not prompt.strip():
             prompt = "See attached files."
 
-        # Prepend thread context so the agent has full conversation history
+        bare_prompt = prompt
+
+        # Prepend thread context only for first-time thread mentions
         if thread_context:
             prompt = (
                 f"Here is the Slack thread conversation so far:\n"
@@ -435,6 +450,7 @@ async def _poll_thread(
         try:
             await _dispatch_to_agent(
                 agent_id, prompt, channel_id, thread_ts,
+                display_content=bare_prompt,
                 attachments=attachments or None,
             )
             logger.info(
@@ -661,6 +677,7 @@ async def _dispatch_to_agent(
     channel_id: str,
     thread_ts: str,
     *,
+    display_content: str | None = None,
     attachments: list[str] | None = None,
 ) -> None:
     """Route a Slack message through the normal message pipeline."""
@@ -670,16 +687,19 @@ async def _dispatch_to_agent(
     await ensure_worker_headless(agent_id)
 
     message_id = str(uuid.uuid4())
+    conversation_id = f"slack:{channel_id}:{thread_ts}"
 
     # Track source metadata so the completion hook can post the reply
     _inflight_source[message_id] = {
         "source": "slack",
         "channel_id": channel_id,
         "thread_ts": thread_ts,
+        "conversation_id": conversation_id,
     }
 
     await store_slack_message(
         agent_id, message_id, content, channel_id, thread_ts,
+        display_content=display_content,
         attachments=attachments,
     )
 

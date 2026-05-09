@@ -2239,6 +2239,7 @@ async def get_agent_messages(agent_id: str, limit: int = 100):
         "FROM messages m "
         "WHERE m.agent_id = ? AND m.visibility = 'visible' "
         "  AND m.source != 'bootstrap' "
+        "  AND m.conversation_id IS NULL "
         "ORDER BY m.created_at DESC LIMIT ?",
         (agent_id, limit),
     ) as cur:
@@ -2261,7 +2262,8 @@ async def hide_agent_messages(agent_id: str):
     await db.execute(
         "UPDATE messages SET visibility = 'hidden' "
         "WHERE visibility = 'visible' AND agent_id = ? "
-        "  AND source NOT IN ('bootstrap', 'system')",
+        "  AND source NOT IN ('bootstrap', 'system') "
+        "  AND conversation_id IS NULL",
         (agent_id,),
     )
     await db.commit()
@@ -2279,6 +2281,7 @@ async def get_older_messages(agent_id: str, before: str | None = None, limit: in
             "FROM messages m "
             "WHERE m.agent_id = ? AND m.visibility = 'hidden' AND m.created_at < ? "
             "  AND m.source != 'bootstrap' "
+            "  AND m.conversation_id IS NULL "
             "ORDER BY m.created_at DESC LIMIT ?",
             (agent_id, before, limit),
         ) as cur:
@@ -2289,6 +2292,7 @@ async def get_older_messages(agent_id: str, before: str | None = None, limit: in
             "FROM messages m "
             "WHERE m.agent_id = ? AND m.visibility = 'hidden' "
             "  AND m.source != 'bootstrap' "
+            "  AND m.conversation_id IS NULL "
             "ORDER BY m.created_at DESC LIMIT ?",
             (agent_id, limit),
         ) as cur:
@@ -2311,6 +2315,7 @@ async def get_older_messages(agent_id: str, before: str | None = None, limit: in
             "SELECT 1 FROM messages "
             "WHERE agent_id = ? AND visibility = 'hidden' "
             "  AND source NOT IN ('scheduled_task', 'bootstrap') "
+            "  AND conversation_id IS NULL "
             "  AND created_at < ? "
             "LIMIT 1",
             (agent_id, oldest_ts),
@@ -2985,6 +2990,7 @@ async def websocket_endpoint(ws: WebSocket):
         "FROM messages "
         "WHERE agent_id = ? AND visibility = 'visible' "
         "  AND source != 'bootstrap' "
+        "  AND conversation_id IS NULL "
         "ORDER BY created_at DESC LIMIT 100",
         (agent_id,),
     ) as cur:

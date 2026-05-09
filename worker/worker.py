@@ -31,23 +31,19 @@ DEFAULT_WINDOW_SIZE = 20
 CONTEXT_WINDOW = 200_000  # tokens (Claude model context window)
 CONTEXT_THRESHOLD = 0.80  # trigger split at this fraction
 
-# SDK manages sessions internally via JSONL files in /workspace/sessions/.
-# We track the session_id so we can resume on subsequent queries.
-_session_id: str | None = None
+# Per-conversation session state.  Keyed by conversation_id
+# ("web" for web UI, "slack:{channel}:{thread_ts}" for Slack threads).
+_sessions: dict[str, str | None] = {}          # conv_id → SDK session_id
+_transcripts: dict[str, list[tuple[str, str]]] = {}  # conv_id → transcript
+_continuations: dict[str, str | None] = {}     # conv_id → continuation summary
+
+# Default conversation for web UI and backward compat.
+_DEFAULT_CONV = "web"
 
 # Orchestrator session ID, set from user_message payloads.
 # System commands (shutdown, clear_context) don't carry session_id,
 # so we remember the last one seen.
 _orch_session_id: str | None = None
-
-# After a context-overflow split, the summary is stored here and injected
-# into the next query's system prompt so the new SDK session has continuity.
-_continuation_summary: str | None = None
-
-# In-memory transcript of the current session's conversation.
-# Accumulates (role, content) tuples for summarization at session end
-# or context overflow.  Cleared on split/end.
-_session_transcript: list[tuple[str, str]] = []
 
 # In-memory buffer for events waiting to be flushed to output.json.
 _pending_events: list[dict[str, Any]] = []
@@ -173,19 +169,74 @@ def _get_window_size() -> int:
     return DEFAULT_WINDOW_SIZE
 
 
-def _persist_session_history() -> None:
+SESSION_HISTORY_DIR = WORKSPACE / "session_history"
+
+# Conversation ID ↔ filename mapping.  Uses base64url to avoid any
+# filesystem-unsafe characters while remaining reversible.
+import base64 as _b64
+
+
+def _conv_id_to_filename(conv_id: str) -> str:
+    if conv_id == _DEFAULT_CONV:
+        return "web"
+    return _b64.urlsafe_b64encode(conv_id.encode()).decode().rstrip("=")
+
+
+def _filename_to_conv_id(stem: str) -> str:
+    if stem == "web":
+        return _DEFAULT_CONV
+    padded = stem + "=" * (-len(stem) % 4)
+    return _b64.urlsafe_b64decode(padded.encode()).decode()
+
+
+def _session_history_path(conv_id: str) -> Path:
+    return SESSION_HISTORY_DIR / f"{_conv_id_to_filename(conv_id)}.json"
+
+
+def _persist_session_history(conv_id: str = _DEFAULT_CONV) -> None:
+    transcript = _transcripts.get(conv_id, [])
+    if not transcript:
+        return
     window = _get_window_size()
-    entries = _session_transcript[-window:]
+    entries = transcript[-window:]
     data = [{"role": role, "content": content} for role, content in entries]
-    atomic_write(SESSION_HISTORY_PATH, json.dumps(data).encode())
+    SESSION_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    atomic_write(_session_history_path(conv_id), json.dumps(data).encode())
 
 
-def _load_session_history() -> tuple[list[tuple[str, str]], str | None]:
-    """Load session history, returning raw entries and formatted summary."""
-    if not SESSION_HISTORY_PATH.is_file():
-        return [], None
+def _load_all_session_histories() -> None:
+    """Load all per-conversation session histories from disk on startup."""
+    # Migrate legacy single-file format
+    if SESSION_HISTORY_PATH.is_file():
+        entries, summary = _load_session_history_file(SESSION_HISTORY_PATH)
+        if entries:
+            _transcripts[_DEFAULT_CONV] = entries
+            _continuations[_DEFAULT_CONV] = summary
+            logger.info("Migrated legacy session_history.json -> web (%d entries)", len(entries))
+        try:
+            SESSION_HISTORY_PATH.unlink()
+        except OSError:
+            pass
+
+    if not SESSION_HISTORY_DIR.is_dir():
+        return
+    for path in SESSION_HISTORY_DIR.glob("*.json"):
+        try:
+            conv_id = _filename_to_conv_id(path.stem)
+        except Exception:
+            logger.warning("Skipping unrecognized session history file: %s", path.name)
+            continue
+        entries, summary = _load_session_history_file(path)
+        if entries:
+            _transcripts[conv_id] = entries
+            _continuations[conv_id] = summary
+            logger.info("Loaded session history for %s (%d entries)", conv_id, len(entries))
+
+
+def _load_session_history_file(path: Path) -> tuple[list[tuple[str, str]], str | None]:
+    """Load a single session history file."""
     try:
-        raw = json.loads(SESSION_HISTORY_PATH.read_text())
+        raw = json.loads(path.read_text())
         if not raw:
             return [], None
         entries = []
@@ -200,27 +251,20 @@ def _load_session_history() -> tuple[list[tuple[str, str]], str | None]:
         return [], None
 
 
-async def _split_session(conn) -> None:
-    """Split the SDK session due to context overflow.
-
-    Summarizes the current session, writes a memory file, stores the summary
-    for the next query, and resets the SDK session.  The orchestrator session
-    and WebSocket connection are unaffected.
-    """
-    global _session_id, _continuation_summary, _session_transcript
+async def _split_session(conn, conv_id: str = _DEFAULT_CONV) -> None:
+    """Split the SDK session for a specific conversation due to context overflow."""
+    transcript = _transcripts.get(conv_id, [])
 
     try:
         from worker.memory import summarize_session, write_memory_file
         from worker.search import index_memory_vectors
 
-        # Summarize from in-memory transcript
-        summary = await summarize_session(_session_transcript)
+        summary = await summarize_session(transcript)
         if summary:
             session_ref = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
             _path, needs_compaction = write_memory_file(conn, summary, session_ref)
-            _continuation_summary = summary
+            _continuations[conv_id] = summary
 
-            # Async vector indexing
             if _path:
                 file_content = (WORKSPACE / _path).read_text()
                 await index_memory_vectors(conn, _path, file_content)
@@ -230,14 +274,13 @@ async def _split_session(conn) -> None:
                 emit({"type": "schedule_compaction", "date": today, "message_id": ""})
                 logger.info("Scheduled compaction for %s", today)
 
-        # Reset SDK session; keep last N transcript entries for session history
-        _session_id = None
+        _sessions[conv_id] = None
         window = _get_window_size()
-        _session_transcript = _session_transcript[-window:]
-        logger.info("Session split complete")
+        _transcripts[conv_id] = transcript[-window:]
+        logger.info("Session split complete for conversation %s", conv_id)
 
     except Exception as e:
-        logger.error("Session split failed: %s", e)
+        logger.error("Session split failed for %s: %s", conv_id, e)
 
 
 async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
@@ -260,42 +303,46 @@ async def _handle_scheduled_task(conn, msg: dict[str, Any]) -> dict:
 
 
 async def process_message(msg: dict[str, Any], conn) -> None:
-    global _session_id, _orch_session_id, _continuation_summary, _session_transcript, _current_agentic_task_id
+    global _orch_session_id, _current_agentic_task_id
     msg_type = msg.get("type")
 
     if msg_type == "system_command":
         command = msg.get("command")
         message_id = msg.get("message_id", "")
         if command == "clear_context":
-            # Summarize the current session before clearing
+            # Clear web UI session only
+            conv_id = _DEFAULT_CONV
+            transcript = _transcripts.get(conv_id, [])
             try:
                 from worker.memory import run_session_end
-                compaction_date = await run_session_end(
-                    conn, _session_transcript,
-                )
+                compaction_date = await run_session_end(conn, transcript)
                 if compaction_date:
                     emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
             except Exception as e:
                 logger.error("Session-end summary failed: %s", e)
-            _session_id = None  # Next query starts a fresh SDK session
-            _continuation_summary = None
-            _session_transcript = []
-            if SESSION_HISTORY_PATH.exists():
-                os.remove(SESSION_HISTORY_PATH)
+            _sessions.pop(conv_id, None)
+            _continuations.pop(conv_id, None)
+            _transcripts.pop(conv_id, None)
+            hist_path = _session_history_path(conv_id)
+            if hist_path.exists():
+                os.remove(hist_path)
             emit({"type": "status", "status": "context_cleared", "message_id": message_id})
             emit({"type": "complete", "content": "", "message_id": message_id, "usage": {}})
         elif command == "shutdown":
-            logger.info("Received shutdown command, summarizing session")
-            try:
-                from worker.memory import run_session_end
-                compaction_date = await run_session_end(
-                    conn, _session_transcript,
-                )
-                if compaction_date:
-                    emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
-            except Exception as e:
-                logger.error("Session-end summary failed: %s", e)
-            _persist_session_history()
+            logger.info("Received shutdown command, summarizing sessions")
+            # Summarize all active conversations
+            for cid, transcript in _transcripts.items():
+                if not transcript:
+                    continue
+                try:
+                    from worker.memory import run_session_end
+                    compaction_date = await run_session_end(conn, transcript)
+                    if compaction_date:
+                        emit({"type": "schedule_compaction", "date": compaction_date, "message_id": ""})
+                except Exception as e:
+                    logger.error("Session-end summary failed for %s: %s", cid, e)
+            for cid in _transcripts:
+                _persist_session_history(cid)
             emit({"type": "complete", "content": "", "message_id": message_id, "usage": {}})
             flush_responses()
             sys.exit(0)
@@ -448,9 +495,10 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 
     _current_agentic_task_id = msg.get("agentic_task_id")
     attachments: list[str] = msg.get("attachments", [])
+    conv_id = msg.get("conversation_id", _DEFAULT_CONV)
     session_id_from_msg = msg.get("session_id", "")
     _orch_session_id = session_id_from_msg or _orch_session_id
-    logger.debug("Query message_id=%s content=%r", message_id, content)
+    logger.debug("Query message_id=%s conv=%s content=%r", message_id, conv_id, content)
     if attachments:
         logger.debug("Attachments=%s", attachments)
     emit({"type": "status", "status": "thinking", "message_id": message_id})
@@ -508,12 +556,15 @@ async def process_message(msg: dict[str, Any], conn) -> None:
     partial_text_ref = [""]
     model_spec = msg.get("model")
 
+    session_id = _sessions.get(conv_id)
+    continuation = _continuations.get(conv_id)
+
     query_task = asyncio.create_task(run_query(
-        message_id, content, _session_id, emit,
+        message_id, content, session_id, emit,
         conn=conn,
         retrieved_context=retrieved_context,
         memory_context=memory_context,
-        continuation_summary=_continuation_summary,
+        continuation_summary=continuation,
         facts_context=facts_context,
         msg_payload=msg,
         partial_text_ref=partial_text_ref,
@@ -522,25 +573,22 @@ async def process_message(msg: dict[str, Any], conn) -> None:
     monitor_task = asyncio.create_task(_cancel_monitor(query_task))
     try:
         new_session_id, _usage, response_text = await query_task
-        _session_id = new_session_id
-        # Clear continuation summary after it has been consumed
-        _continuation_summary = None
+        _sessions[conv_id] = new_session_id
+        _continuations.pop(conv_id, None)
 
-        # Accumulate transcript before potential split (which clears it)
-        _session_transcript.append(("user", content))
+        transcript = _transcripts.setdefault(conv_id, [])
+        transcript.append(("user", content))
         if response_text:
-            _session_transcript.append(("assistant", response_text))
-        _persist_session_history()
+            transcript.append(("assistant", response_text))
+        _persist_session_history(conv_id)
 
-        # Context overflow check: if input tokens exceed the threshold,
-        # split the SDK session.  The orchestrator session is unaffected.
         input_tokens = _usage.get("input_tokens", 0)
         if input_tokens > CONTEXT_WINDOW * CONTEXT_THRESHOLD:
             logger.warning(
-                "Context overflow detected (%d/%d tokens, threshold %.0f%%), splitting session",
-                input_tokens, CONTEXT_WINDOW, CONTEXT_THRESHOLD * 100,
+                "Context overflow detected (%d/%d tokens, threshold %.0f%%) for %s, splitting session",
+                input_tokens, CONTEXT_WINDOW, CONTEXT_THRESHOLD * 100, conv_id,
             )
-            await _split_session(conn)
+            await _split_session(conn, conv_id)
     except asyncio.CancelledError:
         response_text = partial_text_ref[0]
         stopped_text = (
@@ -556,16 +604,16 @@ async def process_message(msg: dict[str, Any], conn) -> None:
             "usage": {},
         })
         drain_pending()
-        _session_id = None
-        _session_transcript.append(("user", content))
-        _session_transcript.append(("assistant", stopped_text))
-        _persist_session_history()
-        # Build continuation summary so the next query retains context
+        _sessions[conv_id] = None
+        transcript = _transcripts.setdefault(conv_id, [])
+        transcript.append(("user", content))
+        transcript.append(("assistant", stopped_text))
+        _persist_session_history(conv_id)
         window = _get_window_size()
-        recent = _session_transcript[-window:]
+        recent = transcript[-window:]
         if recent:
             lines = [f"[{role}]: {text}" for role, text in recent]
-            _continuation_summary = "\n\n".join(lines)
+            _continuations[conv_id] = "\n\n".join(lines)
     except Exception as e:
         logger.error("Query error: %s", e)
         emit({
@@ -586,7 +634,7 @@ async def process_message(msg: dict[str, Any], conn) -> None:
 
 
 async def main() -> None:
-    global _conn, _continuation_summary
+    global _conn
 
     logs_dir = WORKSPACE / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -665,16 +713,8 @@ async def main() -> None:
     except Exception as e:
         logger.error("Index pruning failed: %s", e)
 
-    # Restore conversation context from previous session if available.
-    # Pre-populate _session_transcript so old entries survive the next persist.
-    history_entries, history_summary = _load_session_history()
-    if history_entries:
-        _session_transcript = history_entries
-        _continuation_summary = history_summary
-        logger.info(
-            "Loaded %d session history entries as continuation context",
-            len(history_entries),
-        )
+    # Restore conversation contexts from previous sessions.
+    _load_all_session_histories()
 
     logger.info("Ready, polling for input.json")
 

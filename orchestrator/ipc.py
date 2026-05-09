@@ -42,6 +42,7 @@ async def queue_message(
     channel_id: str | None = None,
     thread_ts: str | None = None,
     full_context: bool = False,
+    conversation_id: str | None = None,
 ) -> None:
     db = await get_db()
     payload_dict: dict = {
@@ -65,6 +66,8 @@ async def queue_message(
         payload_dict["thread_ts"] = thread_ts
     if full_context:
         payload_dict["full_context"] = True
+    if conversation_id:
+        payload_dict["conversation_id"] = conversation_id
 
     payload = json.dumps(payload_dict)
     await db.execute(
@@ -159,9 +162,16 @@ async def store_slack_message(
     channel_id: str,
     thread_ts: str,
     *,
+    display_content: str | None = None,
     attachments: list[str] | None = None,
 ) -> None:
-    """Store a user message from Slack and queue it for processing."""
+    """Store a user message from Slack and queue it for processing.
+
+    *display_content* is what appears in the web UI.  When omitted the
+    full *content* is stored.  The queue always receives the full
+    *content* (which may include thread context for the agent).
+    """
+    conversation_id = f"slack:{channel_id}:{thread_ts}"
     db = await get_db()
     meta: dict = {
         "source": "slack",
@@ -172,14 +182,17 @@ async def store_slack_message(
         meta["attachments"] = attachments
     metadata = json.dumps(meta)
     await db.execute(
-        "INSERT INTO messages (id, agent_id, role, content, metadata, source) "
-        "VALUES (?, ?, 'user', ?, ?, 'slack')",
-        (message_id, agent_id, content, metadata),
+        "INSERT INTO messages "
+        "(id, agent_id, role, content, metadata, source, conversation_id) "
+        "VALUES (?, ?, 'user', ?, ?, 'slack', ?)",
+        (message_id, agent_id, display_content or content, metadata,
+         conversation_id),
     )
     await db.commit()
     await queue_message(
         agent_id, message_id, content, source="slack", attachments=attachments,
         channel_id=channel_id, thread_ts=thread_ts,
+        conversation_id=conversation_id,
     )
 
 
@@ -281,15 +294,17 @@ async def _db_ensure_row(
     meta: dict = {"blocks": []}
     if extra_metadata:
         meta.update(extra_metadata)
-    meta.pop("source", None)
+    source = meta.pop("source", "web")
+    conversation_id = meta.pop("conversation_id", None)
     metadata = json.dumps(meta)
     try:
         db = await get_db()
         await db.execute(
             "INSERT OR IGNORE INTO messages "
-            "(id, agent_id, role, content, status, metadata, source) "
-            "VALUES (?, ?, 'assistant', '', 'streaming', ?, ?)",
-            (row_id, agent_id, metadata, "web"),
+            "(id, agent_id, role, content, status, metadata, source, "
+            "conversation_id) "
+            "VALUES (?, ?, 'assistant', '', 'streaming', ?, ?, ?)",
+            (row_id, agent_id, metadata, source, conversation_id),
         )
         await db.commit()
     except SqliteError:
@@ -1313,6 +1328,8 @@ async def _polling_loop(
                             if source == "slack":
                                 entry["channel_id"] = msg.get("channel_id", "")
                                 entry["thread_ts"] = msg.get("thread_ts", "")
+                            if msg.get("conversation_id"):
+                                entry["conversation_id"] = msg["conversation_id"]
                             _inflight_source[message_id] = entry
 
                 atomic_write(input_path, json.dumps(messages).encode())
