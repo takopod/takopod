@@ -1227,14 +1227,17 @@ async def _process_output(
         await _send_queue_status(ws_mgr, agent_id)
     for row_id in notified:
         msg_data = None
+        conversation_id = None
         try:
             async with db.execute(
-                "SELECT id, role, content, created_at, metadata, status "
+                "SELECT id, role, content, created_at, metadata, status, "
+                "conversation_id "
                 "FROM messages WHERE id = ?",
                 (row_id,),
             ) as cur:
                 msg_row = await cur.fetchone()
             if msg_row:
+                conversation_id = msg_row[6]
                 msg_data = {
                     "id": msg_row[0],
                     "role": msg_row[1],
@@ -1246,12 +1249,14 @@ async def _process_output(
         except SqliteError:
             logger.exception("Failed to read message %s for WS frame", row_id)
 
+        if conversation_id or not msg_data:
+            continue
+
         payload: dict[str, typing.Any] = {
             "type": "message_updated",
             "message_id": row_id,
+            "message": msg_data,
         }
-        if msg_data:
-            payload["message"] = msg_data
         await ws_mgr.send(json.dumps(payload))
 
 
