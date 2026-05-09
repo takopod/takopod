@@ -150,7 +150,7 @@ function GhApprovalBlock({
         <Shield className="size-3" />
         {displayLabel}
       </div>
-      <code className="block bg-background/50 px-2 py-1 rounded text-[11px] mb-2">
+      <code className="block bg-background/50 px-2 py-1 rounded text-[11px] mb-2 break-all whitespace-pre-wrap">
         {commandPrefix} {block.command}
       </code>
       <div className="flex gap-2">
@@ -344,7 +344,7 @@ export function ChatMessageList({
   }, [filtered])
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
       <div className="flex flex-col gap-3">
         {hasOlderMessages && (
           <div className="flex justify-center py-2">
@@ -392,7 +392,7 @@ export function ChatMessageList({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <div className="max-w-[75%] min-w-0 overflow-hidden">
+            <div className="max-w-[75%] min-w-0">
               {msg.source === "scheduled_task" && (
                 <div className="mb-1 flex items-center gap-1 text-xs text-amber-600">
                   <Clock className="size-3" />
@@ -400,7 +400,7 @@ export function ChatMessageList({
                 </div>
               )}
               <div
-                className={`rounded-lg px-3 py-2 text-sm overflow-hidden ${
+                className={`rounded-lg px-3 py-2 text-sm overflow-hidden break-words ${
                   msg.role === "user"
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted text-foreground"
