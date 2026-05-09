@@ -6,6 +6,7 @@ Kept in a separate file to avoid entangling with the main routes.py.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import ssl
@@ -22,10 +23,8 @@ from orchestrator.models import (
     SlackConfigRequest,
     SlackPollingChannelRequest,
     SlackPollingChannelUpdate,
-    SlackPollingToggle,
     SlackThreadRequest,
 )
-from orchestrator.settings import get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,27 @@ def _read_slack_config() -> dict | None:
         return json.loads(SLACK_CONFIG_PATH.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+
+
+async def _resolve_channel_name(channel_id: str) -> str:
+    """Look up a Slack channel's name via the API. Returns empty string on failure."""
+    config = _read_slack_config()
+    if not config:
+        return ""
+    try:
+        from slack_sdk import WebClient
+        client = WebClient(
+            token=config["xoxc_token"],
+            headers={"Cookie": f"d={config['d_cookie']}"},
+            ssl=_get_ssl_context(),
+        )
+        resp = await asyncio.to_thread(
+            client.conversations_info, channel=channel_id,
+        )
+        return resp.get("channel", {}).get("name", "")
+    except Exception:
+        logger.warning("Failed to resolve channel name for %s", channel_id)
+        return ""
 
 
 def _mask_token(token: str) -> str:
@@ -188,36 +208,47 @@ async def put_agent_slack(agent_id: str, req: SlackAgentToggle):
 
 @router.get("/slack/polling")
 async def get_slack_polling():
-    """Return global polling toggle and list of configured channels."""
+    """Return list of configured polling channels."""
     db = await get_db()
-    enabled = (await get_setting("slack_polling_enabled", "false")) == "true"
     async with db.execute(
         "SELECT id, channel_id, channel_name, interval_seconds, enabled, last_ts, created_at "
         "FROM slack_polling_channels ORDER BY created_at",
     ) as cur:
         rows = await cur.fetchall()
-    channels = [
-        {
-            "id": r[0],
-            "channel_id": r[1],
-            "channel_name": r[2],
+
+    channels = []
+    to_backfill: list[tuple[str, str]] = []
+    for r in rows:
+        row_id, channel_id, channel_name = r[0], r[1], r[2]
+        if not channel_name:
+            to_backfill.append((row_id, channel_id))
+        channels.append({
+            "id": row_id,
+            "channel_id": channel_id,
+            "channel_name": channel_name,
             "interval_seconds": r[3],
             "enabled": bool(r[4]),
             "last_ts": r[5],
             "created_at": r[6],
-        }
-        for r in rows
-    ]
-    return {"enabled": enabled, "channels": channels}
+        })
+
+    if to_backfill:
+        asyncio.create_task(_backfill_channel_names(to_backfill))
+
+    return {"channels": channels}
 
 
-@router.put("/slack/polling")
-async def put_slack_polling(req: SlackPollingToggle):
-    """Toggle global Slack polling on/off."""
-    await set_setting(
-        "slack_polling_enabled", "true" if req.enabled else "false",
-    )
-    return await get_slack_polling()
+async def _backfill_channel_names(items: list[tuple[str, str]]) -> None:
+    """Resolve and persist missing channel names in the background."""
+    db = await get_db()
+    for row_id, channel_id in items:
+        name = await _resolve_channel_name(channel_id)
+        if name:
+            await db.execute(
+                "UPDATE slack_polling_channels SET channel_name = ? WHERE id = ?",
+                (name, row_id),
+            )
+            await db.commit()
 
 
 @router.post("/slack/polling/channels")
@@ -225,6 +256,10 @@ async def add_polling_channel(req: SlackPollingChannelRequest):
     """Add a channel to poll."""
     import time
     import uuid
+
+    channel_name = req.channel_name
+    if not channel_name:
+        channel_name = await _resolve_channel_name(req.channel_id)
 
     db = await get_db()
     row_id = str(uuid.uuid4())
@@ -234,7 +269,7 @@ async def add_polling_channel(req: SlackPollingChannelRequest):
             "INSERT INTO slack_polling_channels "
             "(id, channel_id, channel_name, interval_seconds, last_ts) "
             "VALUES (?, ?, ?, ?, ?)",
-            (row_id, req.channel_id, req.channel_name, req.interval_seconds, now_ts),
+            (row_id, req.channel_id, channel_name, req.interval_seconds, now_ts),
         )
         await db.commit()
     except IntegrityError:

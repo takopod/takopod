@@ -304,10 +304,6 @@ class SlackAgentToggle(BaseModel):
     enabled: bool
 
 
-class SlackPollingToggle(BaseModel):
-    enabled: bool
-
-
 class SlackPollingChannelRequest(BaseModel):
     channel_id: str = Field(..., min_length=1)
     channel_name: str = ""

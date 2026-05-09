@@ -35,7 +35,6 @@ interface PollingChannel {
 }
 
 interface PollingState {
-  enabled: boolean
   channels: PollingChannel[]
 }
 
@@ -47,10 +46,10 @@ export function SlackView() {
   const [testing, setTesting] = useState(false)
 
   // Polling state
-  const [polling, setPolling] = useState<PollingState>({ enabled: false, channels: [] })
+  const [polling, setPolling] = useState<PollingState>({ channels: [] })
   const [slackChannels, setSlackChannels] = useState<SlackChannel[]>([])
   const [loadingChannels, setLoadingChannels] = useState(false)
-  const [savingPolling, setSavingPolling] = useState(false)
+  const [savingChannel, setSavingChannel] = useState(false)
   const [addingChannel, setAddingChannel] = useState(false)
   const [manualChannelId, setManualChannelId] = useState("")
   const [manualInterval, setManualInterval] = useState(30)
@@ -172,22 +171,8 @@ export function SlackView() {
     setMemberId("")
   }
 
-  const handleTogglePolling = async () => {
-    setSavingPolling(true)
-    try {
-      const res = await fetch("/api/slack/polling", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: !polling.enabled }),
-      })
-      if (res.ok) setPolling(await res.json())
-    } finally {
-      setSavingPolling(false)
-    }
-  }
-
   const handleAddChannel = async (channelId: string, channelName: string) => {
-    setSavingPolling(true)
+    setSavingChannel(true)
     try {
       const res = await fetch("/api/slack/polling/channels", {
         method: "POST",
@@ -205,7 +190,7 @@ export function SlackView() {
         setManualInterval(30)
       }
     } finally {
-      setSavingPolling(false)
+      setSavingChannel(false)
     }
   }
 
@@ -219,6 +204,27 @@ export function SlackView() {
       body: JSON.stringify({ interval_seconds: intervalSeconds }),
     })
     if (res.ok) setPolling(await res.json())
+  }
+
+  const handleToggleChannel = async (rowId: string, enabled: boolean) => {
+    const prev = polling
+    setPolling((p) => ({
+      ...p,
+      channels: p.channels.map((c) =>
+        c.id === rowId ? { ...c, enabled } : c,
+      ),
+    }))
+    try {
+      const res = await fetch(`/api/slack/polling/channels/${rowId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      })
+      if (res.ok) setPolling(await res.json())
+      else setPolling(prev)
+    } catch {
+      setPolling(prev)
+    }
   }
 
   const handleDeleteChannel = async (rowId: string) => {
@@ -381,21 +387,8 @@ export function SlackView() {
 
           {/* Channel Polling */}
           <div className="rounded-md border px-4 py-3">
-            <div className="flex items-center justify-between mb-3">
+            <div className="mb-3">
               <span className="text-sm font-medium">Channel Polling</span>
-              <button
-                onClick={handleTogglePolling}
-                disabled={savingPolling}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                  polling.enabled ? "bg-primary" : "bg-muted"
-                } ${savingPolling ? "opacity-50" : ""}`}
-              >
-                <span
-                  className={`pointer-events-none inline-block size-5 rounded-full bg-background shadow-sm ring-0 transition-transform ${
-                    polling.enabled ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
             </div>
 
             {/* Added channels list */}
@@ -403,8 +396,23 @@ export function SlackView() {
               {polling.channels.map((ch) => (
                 <div
                   key={ch.id}
-                  className="flex items-center gap-3 rounded-md border px-3 py-2"
+                  className={`flex items-center gap-3 rounded-md border px-3 py-2 ${!ch.enabled ? "opacity-50" : ""}`}
                 >
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={ch.enabled}
+                    onClick={() => handleToggleChannel(ch.id, !ch.enabled)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                      ch.enabled ? "bg-primary" : "bg-muted"
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform ${
+                        ch.enabled ? "translate-x-4" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
                   <div className="min-w-0 flex-1">
                     <div className="text-sm truncate">
                       # {ch.channel_name || ch.channel_id}
@@ -423,7 +431,6 @@ export function SlackView() {
                       value={ch.interval_seconds}
                       onChange={(e) => {
                         const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 30))
-                        // Optimistic update
                         setPolling((prev) => ({
                           ...prev,
                           channels: prev.channels.map((c) =>
@@ -472,7 +479,7 @@ export function SlackView() {
                         )
                         if (ch) handleAddChannel(ch.id, ch.name)
                       }}
-                      disabled={loadingChannels || savingPolling}
+                      disabled={loadingChannels || savingChannel}
                       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value=""
                     >
@@ -545,9 +552,9 @@ export function SlackView() {
                   <Button
                     size="sm"
                     onClick={() => handleAddChannel(manualChannelId.trim(), "")}
-                    disabled={savingPolling || !manualChannelId.trim()}
+                    disabled={savingChannel || !manualChannelId.trim()}
                   >
-                    {savingPolling ? "Adding..." : "Add"}
+                    {savingChannel ? "Adding..." : "Add"}
                   </Button>
                 </div>
               </div>
@@ -562,9 +569,9 @@ export function SlackView() {
             )}
 
             <p className="mt-3 text-xs text-muted-foreground">
-              When enabled, the orchestrator polls added channels for messages
-              mentioning agents by name (e.g., @Agent-Name). The agent
-              processes the message and replies in a Slack thread.
+              The orchestrator polls enabled channels for messages mentioning
+              agents by name (e.g., Agent-Name: message). The agent processes
+              the message and replies in a Slack thread.
             </p>
 
             {/* Thread expiry */}

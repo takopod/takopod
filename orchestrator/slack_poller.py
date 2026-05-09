@@ -49,53 +49,51 @@ async def run_slack_poller() -> None:
 
     while True:
         try:
-            enabled = (await get_setting("slack_polling_enabled", "false")) == "true"
-            if enabled:
-                channels = await _get_polling_channels()
-                now = asyncio.get_running_loop().time()
-                for ch in channels:
-                    row_id = ch["id"]
-                    base_interval = max(ch["interval_seconds"], MIN_POLL_INTERVAL)
-                    backoff = fail_count.get(row_id, 0) * BACKOFF_STEP
-                    max_backoff = max(base_interval * 2, 60) - base_interval
-                    interval = base_interval + min(backoff, max_backoff)
-                    if now - last_poll.get(row_id, 0) >= interval:
-                        try:
-                            await _poll_channel(ch["channel_id"], ch["last_ts"])
-                            last_poll[row_id] = now
+            channels = await _get_polling_channels()
+            now = asyncio.get_running_loop().time()
+            for ch in channels:
+                row_id = ch["id"]
+                base_interval = max(ch["interval_seconds"], MIN_POLL_INTERVAL)
+                backoff = fail_count.get(row_id, 0) * BACKOFF_STEP
+                max_backoff = max(base_interval * 2, 60) - base_interval
+                interval = base_interval + min(backoff, max_backoff)
+                if now - last_poll.get(row_id, 0) >= interval:
+                    try:
+                        await _poll_channel(ch["channel_id"], ch["last_ts"])
+                        last_poll[row_id] = now
+                        fail_count.pop(row_id, None)
+                    except Exception:
+                        last_poll[row_id] = now
+                        fail_count[row_id] = fail_count.get(row_id, 0) + 1
+                        at_max = backoff >= max_backoff
+                        if at_max:
+                            logger.error(
+                                "Slack poller giving up on channel %s "
+                                "after %d consecutive failures, "
+                                "disabling channel",
+                                ch["channel_id"],
+                                fail_count[row_id],
+                            )
+                            await _disable_channel(row_id)
                             fail_count.pop(row_id, None)
-                        except Exception:
-                            last_poll[row_id] = now
-                            fail_count[row_id] = fail_count.get(row_id, 0) + 1
-                            at_max = backoff >= max_backoff
-                            if at_max:
-                                logger.error(
-                                    "Slack poller giving up on channel %s "
-                                    "after %d consecutive failures, "
-                                    "disabling channel",
-                                    ch["channel_id"],
-                                    fail_count[row_id],
-                                )
-                                await _disable_channel(row_id)
-                                fail_count.pop(row_id, None)
-                            else:
-                                next_interval = base_interval + min(
-                                    fail_count[row_id] * BACKOFF_STEP,
-                                    max_backoff,
-                                )
-                                logger.exception(
-                                    "Slack poller failed for channel %s "
-                                    "(attempt %d, next retry in %ds)",
-                                    ch["channel_id"],
-                                    fail_count[row_id],
-                                    next_interval,
-                                )
-                # Clean up removed channels from tracking
-                active_ids = {ch["id"] for ch in channels}
-                for rid in list(last_poll):
-                    if rid not in active_ids:
-                        del last_poll[rid]
-                        fail_count.pop(rid, None)
+                        else:
+                            next_interval = base_interval + min(
+                                fail_count[row_id] * BACKOFF_STEP,
+                                max_backoff,
+                            )
+                            logger.exception(
+                                "Slack poller failed for channel %s "
+                                "(attempt %d, next retry in %ds)",
+                                ch["channel_id"],
+                                fail_count[row_id],
+                                next_interval,
+                            )
+            # Clean up removed channels from tracking
+            active_ids = {ch["id"] for ch in channels}
+            for rid in list(last_poll):
+                if rid not in active_ids:
+                    del last_poll[rid]
+                    fail_count.pop(rid, None)
 
             # Poll active threads regardless of channel polling toggle
             await _poll_active_threads()
