@@ -254,9 +254,10 @@ def get_oauth_provider(
     # The SDK doesn't persist token_expiry_time or oauth_metadata, so a
     # freshly-created provider considers stored tokens valid even after
     # they expire, and doesn't know the correct token endpoint for
-    # refreshes. Setting expiry to 0 forces a refresh, and restoring
-    # oauth_metadata ensures the refresh hits the right URL.
-    provider.context.token_expiry_time = 0
+    # refreshes. Setting expiry to 1 (epoch+1s, always in the past)
+    # forces a refresh. Must be non-zero: the SDK's is_token_valid()
+    # treats 0 as "no expiry set" via `not self.token_expiry_time`.
+    provider.context.token_expiry_time = 1
     oauth_metadata = storage.get_oauth_metadata()
     if oauth_metadata:
         provider.context.oauth_metadata = oauth_metadata
