@@ -110,19 +110,15 @@ function formatPollInterval(seconds: number | undefined): string {
 function MonitoredThreadsSection({
   threads,
   deletingThread,
-  bulkDeleting,
   slackTeamUrl,
   onDelete,
-  onBulkDelete,
   onUpdateInterval,
   onRefresh,
 }: {
   threads: MonitoredThread[]
   deletingThread: string | null
-  bulkDeleting: boolean
   slackTeamUrl: string
   onDelete: (id: string) => void
-  onBulkDelete: (agentId?: string) => void
   onUpdateInterval: (id: string, interval: number) => void
   onRefresh: () => void
 }) {
@@ -157,18 +153,6 @@ function MonitoredThreadsSection({
             )}
           </div>
           <div className="flex items-center gap-1">
-            {threads.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onBulkDelete(filterAgent ?? undefined)}
-                disabled={bulkDeleting}
-                className="text-xs text-muted-foreground hover:text-destructive h-7"
-              >
-                <Trash2 className="mr-1 size-3" />
-                {filterAgent ? "Remove filtered" : "Remove all"}
-              </Button>
-            )}
             <Button variant="ghost" size="icon-sm" onClick={onRefresh}>
               <RefreshCw className="size-3" />
             </Button>
@@ -386,7 +370,6 @@ export function SlackView() {
   // Monitored threads state
   const [threads, setThreads] = useState<MonitoredThread[]>([])
   const [deletingThread, setDeletingThread] = useState<string | null>(null)
-  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   const [token, setToken] = useState("")
   const [cookie, setCookie] = useState("")
@@ -490,22 +473,6 @@ export function SlackView() {
       }
     } catch {
       setThreads(prev)
-    }
-  }
-
-  const handleBulkDeleteThreads = async (agentId?: string) => {
-    setBulkDeleting(true)
-    try {
-      const url = agentId
-        ? `/api/slack/threads/bulk?agent_id=${encodeURIComponent(agentId)}`
-        : "/api/slack/threads/bulk"
-      const res = await fetch(url, { method: "DELETE" })
-      if (res.ok) {
-        const data = await res.json()
-        setThreads(data.threads || [])
-      }
-    } finally {
-      setBulkDeleting(false)
     }
   }
 
@@ -1008,10 +975,8 @@ export function SlackView() {
           <MonitoredThreadsSection
             threads={threads}
             deletingThread={deletingThread}
-            bulkDeleting={bulkDeleting}
             slackTeamUrl={status?.url || ""}
             onDelete={handleDeleteThread}
-            onBulkDelete={handleBulkDeleteThreads}
             onUpdateInterval={handleUpdateThreadInterval}
             onRefresh={fetchThreads}
           />
