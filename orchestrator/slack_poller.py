@@ -33,10 +33,22 @@ BACKOFF_STEP = 10  # seconds added per consecutive failure
 
 THREAD_BASE_INTERVAL = 10  # seconds — initial poll interval for threads
 THREAD_MAX_INTERVAL = 21600  # 6 hours — cap after idle backoff
+THREAD_BACKOFF_GRACE = 10800  # 3 hours — stay at base interval before backing off
 
 # In-memory last-poll monotonic timestamps per thread row_id.
 # The actual interval is persisted in the DB; this only tracks timing.
 _thread_last_poll: dict[str, float] = {}
+
+
+def _seconds_since(iso_ts: str, now_iso: str) -> float:
+    """Return seconds elapsed between two ISO-8601 UTC timestamps."""
+    from datetime import datetime
+    try:
+        then = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+        return max((now - then).total_seconds(), 0)
+    except (ValueError, TypeError):
+        return 0
 
 
 async def run_slack_poller() -> None:
@@ -270,7 +282,7 @@ async def _poll_active_threads() -> None:
 
     async with db.execute(
         "SELECT t.id, t.channel_id, t.thread_ts, t.agent_id, t.last_ts, "
-        "t.poll_interval, a.name AS agent_name "
+        "t.poll_interval, a.name AS agent_name, t.last_activity_at "
         "FROM slack_active_threads t "
         "JOIN agents a ON a.id = t.agent_id AND a.status = 'active'",
     ) as cur:
@@ -285,9 +297,10 @@ async def _poll_active_threads() -> None:
 
     config = _read_slack_config()
     now = asyncio.get_running_loop().time()
+    now_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     active_ids: set[str] = set()
 
-    for row_id, channel_id, thread_ts, agent_id, last_ts, poll_interval, agent_name in threads:
+    for row_id, channel_id, thread_ts, agent_id, last_ts, poll_interval, agent_name, last_activity_at in threads:
         active_ids.add(row_id)
         last = _thread_last_poll.get(row_id, 0)
         if now - last < poll_interval:
@@ -298,11 +311,16 @@ async def _poll_active_threads() -> None:
                 agent_id, agent_name, last_ts, config,
             )
             _thread_last_poll[row_id] = now
-            new_interval = (
-                THREAD_BASE_INTERVAL
-                if dispatched
-                else min(poll_interval * 2, THREAD_MAX_INTERVAL)
-            )
+            if dispatched:
+                new_interval = THREAD_BASE_INTERVAL
+            else:
+                # Stay at base interval during the grace period, then
+                # double on each poll after that.
+                idle_seconds = _seconds_since(last_activity_at, now_utc)
+                if idle_seconds < THREAD_BACKOFF_GRACE:
+                    new_interval = THREAD_BASE_INTERVAL
+                else:
+                    new_interval = min(poll_interval * 2, THREAD_MAX_INTERVAL)
             if new_interval != poll_interval:
                 await db.execute(
                     "UPDATE slack_active_threads SET poll_interval = ? "
