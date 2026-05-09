@@ -120,6 +120,7 @@ class OAuthFlowManager:
     ) -> str:
         """Initiate an OAuth flow. Returns the authorization URL."""
         storage = FileTokenStorage(server_name)
+        storage.delete()
         self._authorize_url = None
 
         # Future that callback_handler will await
