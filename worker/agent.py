@@ -169,10 +169,9 @@ def _build_system_prompt(
     Priority order (1 = highest):
       1. Identity (CLAUDE.md + SOUL.md)
       2. Continuation summary
-      3. Active plan (task plan from .plans/)
-      4. Facts (structured key-value pairs from memory)
-      5. MEMORY.md (persistent user-curated context)
-      6. Search results
+      3. Facts (structured key-value pairs from memory)
+      4. MEMORY.md (persistent user-curated context)
+      5. Search results
     """
     if config is None:
         config = get_config()
@@ -187,21 +186,6 @@ def _build_system_prompt(
     if soul_md.is_file():
         identity_parts.append(soul_md.read_text().strip())
     identity_content = "\n\n".join(identity_parts)
-
-    # Load active plan content
-    plan_content = ""
-    plans_dir = WORKSPACE / ".plans"
-    if plans_dir.is_dir():
-        active_plans = [f for f in sorted(plans_dir.glob("*.md")) if f.is_file()]
-        if active_plans:
-            plan_file = active_plans[0]
-            plan_text = plan_file.read_text().strip()
-            plan_content = (
-                "## Active Plan\n\n"
-                "You have an active task plan. Resume from the first unchecked item.\n"
-                f"Plan file: /workspace/.plans/{plan_file.name}\n\n"
-                f"{plan_text}"
-            )
 
     search_content = ""
     if retrieved_context:
@@ -237,27 +221,21 @@ def _build_system_prompt(
             content=continuation_content,
         ),
         SectionBudget(
-            name="active_plan",
-            max_tokens=config.plan_tokens,
-            priority=3,
-            content=plan_content,
-        ),
-        SectionBudget(
             name="facts",
             max_tokens=config.facts_tokens,
-            priority=4,
+            priority=3,
             content=facts_context or "",
         ),
         SectionBudget(
             name="memory_md",
             max_tokens=config.memory_md_tokens,
-            priority=5,
+            priority=4,
             content=memory_context or "",
         ),
         SectionBudget(
             name="search",
             max_tokens=config.search_tokens,
-            priority=6,
+            priority=5,
             content=search_content,
         ),
     ]
