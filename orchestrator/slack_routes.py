@@ -24,6 +24,7 @@ from orchestrator.models import (
     SlackPollingChannelRequest,
     SlackPollingChannelUpdate,
     SlackThreadRequest,
+    SlackThreadUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,7 @@ async def get_slack_status():
             "connected": True,
             "team": response.get("team"),
             "user": response.get("user"),
+            "url": response.get("url", ""),
         }
     except Exception as e:
         return {"connected": False, "error": str(e)}
@@ -365,12 +367,20 @@ async def get_active_threads():
     db = await get_db()
     async with db.execute(
         "SELECT t.id, t.channel_id, t.thread_ts, t.agent_id, t.last_ts, "
-        "t.created_at, a.name AS agent_name "
+        "t.created_at, a.name AS agent_name, t.poll_interval, t.last_activity_at "
         "FROM slack_active_threads t "
         "LEFT JOIN agents a ON a.id = t.agent_id "
         "ORDER BY t.created_at",
     ) as cur:
         rows = await cur.fetchall()
+    # Build channel_id -> name map from polling channels table
+    channel_names: dict[str, str] = {}
+    async with db.execute(
+        "SELECT channel_id, channel_name FROM slack_polling_channels "
+        "WHERE channel_name IS NOT NULL AND channel_name != ''",
+    ) as cur:
+        for cid, cname in await cur.fetchall():
+            channel_names[cid] = cname
     threads = [
         {
             "id": r[0],
@@ -380,6 +390,9 @@ async def get_active_threads():
             "last_ts": r[4],
             "created_at": r[5],
             "agent_name": r[6],
+            "poll_interval": r[7],
+            "last_activity_at": r[8],
+            "channel_name": channel_names.get(r[1], ""),
         }
         for r in rows
     ]
@@ -417,6 +430,36 @@ async def add_active_thread(req: SlackThreadRequest):
             status_code=409,
             detail="This agent is already monitoring this thread",
         )
+    return await get_active_threads()
+
+
+@router.delete("/slack/threads/bulk")
+async def delete_threads_bulk(agent_id: str | None = None):
+    """Remove all monitored threads, optionally filtered by agent."""
+    db = await get_db()
+    if agent_id:
+        await db.execute(
+            "DELETE FROM slack_active_threads WHERE agent_id = ?",
+            (agent_id,),
+        )
+    else:
+        await db.execute("DELETE FROM slack_active_threads")
+    await db.commit()
+    return await get_active_threads()
+
+
+@router.put("/slack/threads/{thread_row_id}")
+async def update_active_thread(thread_row_id: str, req: SlackThreadUpdate):
+    """Update a monitored thread's poll interval."""
+    db = await get_db()
+    if req.poll_interval is not None:
+        cursor = await db.execute(
+            "UPDATE slack_active_threads SET poll_interval = ? WHERE id = ?",
+            (req.poll_interval, thread_row_id),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Thread not found")
     return await get_active_threads()
 
 

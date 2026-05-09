@@ -321,6 +321,10 @@ class SlackThreadRequest(BaseModel):
     agent_id: str = Field(..., min_length=1)
 
 
+class SlackThreadUpdate(BaseModel):
+    poll_interval: int | None = Field(None, ge=10, le=21600)
+
+
 
 # --- Search Index ---
 

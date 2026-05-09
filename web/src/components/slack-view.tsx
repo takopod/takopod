@@ -4,7 +4,21 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Plus, RefreshCw, Trash2, X } from "lucide-react"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { ArrowLeft, Check, Pencil, Plus, RefreshCw, Trash2, X, MessageSquare } from "lucide-react"
 
 interface SlackConfig {
   configured: boolean
@@ -17,6 +31,7 @@ interface SlackStatus {
   connected: boolean
   team?: string
   user?: string
+  url?: string
   error?: string
 }
 
@@ -34,8 +49,321 @@ interface PollingChannel {
   enabled: boolean
 }
 
+interface MonitoredThread {
+  id: string
+  channel_id: string
+  channel_name?: string
+  thread_ts: string
+  agent_id: string
+  agent_name: string | null
+  last_ts: string
+  created_at: string
+  poll_interval?: number
+  last_activity_at?: string
+}
+
 interface PollingState {
   channels: PollingChannel[]
+}
+
+function formatThreadTs(ts: string): string {
+  const epoch = parseFloat(ts)
+  if (!epoch) return ts
+  const d = new Date(epoch * 1000)
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+}
+
+function slackThreadUrl(
+  teamUrl: string,
+  channelId: string,
+  threadTs: string,
+): string {
+  const base = teamUrl.replace(/\/$/, "")
+  const ts = threadTs.replace(".", "")
+  return `${base}/archives/${channelId}/p${ts}`
+}
+
+function formatRelativeTime(iso: string): string {
+  if (!iso || iso === "1970-01-01T00:00:00Z") return "never"
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
+function formatPollInterval(seconds: number | undefined): string {
+  if (seconds == null) return "--"
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  return `${(seconds / 3600).toFixed(1)}h`
+}
+
+function MonitoredThreadsSection({
+  threads,
+  deletingThread,
+  bulkDeleting,
+  slackTeamUrl,
+  onDelete,
+  onBulkDelete,
+  onUpdateInterval,
+  onRefresh,
+}: {
+  threads: MonitoredThread[]
+  deletingThread: string | null
+  bulkDeleting: boolean
+  slackTeamUrl: string
+  onDelete: (id: string) => void
+  onBulkDelete: (agentId?: string) => void
+  onUpdateInterval: (id: string, interval: number) => void
+  onRefresh: () => void
+}) {
+  const [filterAgent, setFilterAgent] = useState<string | null>(null)
+  const [editingThread, setEditingThread] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState(0)
+
+  const agentGroups = threads.reduce<
+    Record<string, { name: string; count: number }>
+  >((acc, t) => {
+    const key = t.agent_id
+    if (!acc[key]) acc[key] = { name: t.agent_name || t.agent_id, count: 0 }
+    acc[key].count++
+    return acc
+  }, {})
+
+  const filtered = filterAgent
+    ? threads.filter((t) => t.agent_id === filterAgent)
+    : threads
+
+  return (
+    <TooltipProvider>
+      <div className="rounded-md border px-4 py-3">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="size-3.5 text-muted-foreground" />
+            <span className="text-sm font-medium">Monitored Threads</span>
+            {threads.length > 0 && (
+              <Badge variant="secondary" className="text-xs">
+                {threads.length}
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {threads.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onBulkDelete(filterAgent ?? undefined)}
+                disabled={bulkDeleting}
+                className="text-xs text-muted-foreground hover:text-destructive h-7"
+              >
+                <Trash2 className="mr-1 size-3" />
+                {filterAgent ? "Remove filtered" : "Remove all"}
+              </Button>
+            )}
+            <Button variant="ghost" size="icon-sm" onClick={onRefresh}>
+              <RefreshCw className="size-3" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Agent filter chips */}
+        {Object.keys(agentGroups).length > 1 && (
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            <Badge
+              variant={filterAgent === null ? "default" : "outline"}
+              className="cursor-pointer text-xs"
+              onClick={() => setFilterAgent(null)}
+            >
+              All ({threads.length})
+            </Badge>
+            {Object.entries(agentGroups).map(
+              ([agentId, { name, count }]) => (
+                <Badge
+                  key={agentId}
+                  variant={filterAgent === agentId ? "default" : "outline"}
+                  className="cursor-pointer text-xs"
+                  onClick={() =>
+                    setFilterAgent(
+                      filterAgent === agentId ? null : agentId,
+                    )
+                  }
+                >
+                  {name} ({count})
+                </Badge>
+              ),
+            )}
+          </div>
+        )}
+
+        {/* Thread table */}
+        {filtered.length > 0 ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">Thread</TableHead>
+                <TableHead className="text-xs">Agent</TableHead>
+                <TableHead className="text-xs">Activity</TableHead>
+                <TableHead className="text-xs">Polling</TableHead>
+                <TableHead className="w-8" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((t) => (
+                <TableRow key={t.id}>
+                  <TableCell className="text-xs py-2">
+                    {slackTeamUrl ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <a
+                            href={slackThreadUrl(
+                              slackTeamUrl,
+                              t.channel_id,
+                              t.thread_ts,
+                            )}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:underline"
+                          >
+                            {formatThreadTs(t.thread_ts)}
+                          </a>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs">
+                          Open thread in Slack
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <span>{formatThreadTs(t.thread_ts)}</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs py-2 text-muted-foreground">
+                    {t.agent_name || t.agent_id}
+                  </TableCell>
+                  <TableCell className="text-xs py-2">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="text-muted-foreground">
+                          {formatRelativeTime(
+                            t.last_activity_at || t.created_at,
+                          )}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        <div>Started: {t.created_at}</div>
+                        {t.last_activity_at && (
+                          <div>Last activity: {t.last_activity_at}</div>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell className="text-xs py-2">
+                    {editingThread === t.id ? (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="number"
+                          min={10}
+                          max={21600}
+                          value={editValue}
+                          onChange={(e) =>
+                            setEditValue(parseInt(e.target.value) || 10)
+                          }
+                          className="w-16 h-7 text-xs text-center"
+                          title="Poll interval (seconds)"
+                          autoFocus
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          s
+                        </span>
+                      </div>
+                    ) : (
+                      <Badge
+                        variant={
+                          !t.poll_interval || t.poll_interval <= 10
+                            ? "default"
+                            : "secondary"
+                        }
+                        className="text-xs"
+                      >
+                        {formatPollInterval(t.poll_interval)}
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="py-2">
+                    <div className="flex items-center gap-0.5">
+                      {editingThread === t.id ? (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => {
+                              const clamped = Math.max(
+                                10,
+                                Math.min(21600, editValue),
+                              )
+                              onUpdateInterval(t.id, clamped)
+                              setEditingThread(null)
+                            }}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <Check className="size-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => setEditingThread(null)}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="size-3" />
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => {
+                              setEditingThread(t.id)
+                              setEditValue(t.poll_interval ?? 10)
+                            }}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <Pencil className="size-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => onDelete(t.id)}
+                            disabled={deletingThread === t.id}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <X className="size-3" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <p className="py-2 text-xs text-muted-foreground">
+            {threads.length === 0
+              ? "No threads being monitored."
+              : "No threads match the selected filter."}
+          </p>
+        )}
+      </div>
+    </TooltipProvider>
+  )
 }
 
 export function SlackView() {
@@ -54,6 +382,11 @@ export function SlackView() {
   const [manualChannelId, setManualChannelId] = useState("")
   const [manualInterval, setManualInterval] = useState(30)
   const [threadTtlDays, setThreadTtlDays] = useState(7)
+
+  // Monitored threads state
+  const [threads, setThreads] = useState<MonitoredThread[]>([])
+  const [deletingThread, setDeletingThread] = useState<string | null>(null)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   const [token, setToken] = useState("")
   const [cookie, setCookie] = useState("")
@@ -110,6 +443,72 @@ export function SlackView() {
     }
   }, [])
 
+  const fetchThreads = useCallback(async () => {
+    const res = await fetch("/api/slack/threads")
+    if (res.ok) {
+      const data = await res.json()
+      setThreads(data.threads || [])
+    }
+  }, [])
+
+  const handleDeleteThread = async (threadId: string) => {
+    setDeletingThread(threadId)
+    try {
+      const res = await fetch(`/api/slack/threads/${threadId}`, {
+        method: "DELETE",
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setThreads(data.threads || [])
+      }
+    } finally {
+      setDeletingThread(null)
+    }
+  }
+
+  const handleUpdateThreadInterval = async (
+    threadId: string,
+    interval: number,
+  ) => {
+    const prev = threads
+    setThreads((cur) =>
+      cur.map((t) =>
+        t.id === threadId ? { ...t, poll_interval: interval } : t,
+      ),
+    )
+    try {
+      const res = await fetch(`/api/slack/threads/${threadId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ poll_interval: interval }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setThreads(data.threads || [])
+      } else {
+        setThreads(prev)
+      }
+    } catch {
+      setThreads(prev)
+    }
+  }
+
+  const handleBulkDeleteThreads = async (agentId?: string) => {
+    setBulkDeleting(true)
+    try {
+      const url = agentId
+        ? `/api/slack/threads/bulk?agent_id=${encodeURIComponent(agentId)}`
+        : "/api/slack/threads/bulk"
+      const res = await fetch(url, { method: "DELETE" })
+      if (res.ok) {
+        const data = await res.json()
+        setThreads(data.threads || [])
+      }
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
+
   const handleSaveThreadTtl = async (days: number) => {
     setThreadTtlDays(days)
     await fetch("/api/settings/slack_thread_ttl_days", {
@@ -122,11 +521,16 @@ export function SlackView() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      await Promise.all([fetchConfig(), fetchPolling(), fetchThreadTtl()])
+      await Promise.all([
+        fetchConfig(),
+        fetchPolling(),
+        fetchThreadTtl(),
+        fetchThreads(),
+      ])
     } finally {
       setLoading(false)
     }
-  }, [fetchConfig, fetchPolling, fetchThreadTtl])
+  }, [fetchConfig, fetchPolling, fetchThreadTtl, fetchThreads])
 
   useEffect(() => {
     loadAll()
@@ -599,6 +1003,18 @@ export function SlackView() {
               </div>
             </div>
           </div>
+
+          {/* Monitored Threads */}
+          <MonitoredThreadsSection
+            threads={threads}
+            deletingThread={deletingThread}
+            bulkDeleting={bulkDeleting}
+            slackTeamUrl={status?.url || ""}
+            onDelete={handleDeleteThread}
+            onBulkDelete={handleBulkDeleteThreads}
+            onUpdateInterval={handleUpdateThreadInterval}
+            onRefresh={fetchThreads}
+          />
         </div>
       </div>
     </div>
