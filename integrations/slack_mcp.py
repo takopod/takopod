@@ -17,6 +17,8 @@ from mcp.server.fastmcp import FastMCP
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
+from orchestrator.slack_poller import markdown_to_slack_mrkdwn
+
 mcp = FastMCP("SlackIntegration")
 
 SLACK_TOKEN = os.environ.get("SLACK_XOXC_TOKEN", "")
@@ -290,7 +292,7 @@ async def send_note_to_self(message: str) -> str:
     try:
         dm = client.conversations_open(users=[MY_MEMBER_ID])
         channel_id = dm["channel"]["id"]
-        prefixed = f"[takopod]: {message}"
+        prefixed = f"[takopod]: {markdown_to_slack_mrkdwn(message)}"
         response = client.chat_postMessage(
             channel=channel_id,
             text=prefixed,

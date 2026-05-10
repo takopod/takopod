@@ -723,6 +723,68 @@ async def _dispatch_to_agent(
 
 
 # ---------------------------------------------------------------------------
+# Markdown → Slack mrkdwn conversion
+# ---------------------------------------------------------------------------
+
+_CODE_PLACEHOLDER = "\x00CODE{}\x00"
+_BOLD_STAR = "\x01"
+
+
+def markdown_to_slack_mrkdwn(text: str) -> str:
+    """Convert standard Markdown to Slack's mrkdwn dialect.
+
+    Handles bold, italic, strikethrough, links, images, and headers.
+    Code blocks and inline code are preserved untouched.
+    """
+    if not text:
+        return text
+
+    # 1. Extract code blocks and inline code so regex passes skip them.
+    #    Fenced blocks first (greedy), then inline backticks.
+    protected: list[str] = []
+
+    def _protect(m: re.Match[str]) -> str:
+        idx = len(protected)
+        protected.append(m.group(0))
+        return _CODE_PLACEHOLDER.format(idx)
+
+    text = re.sub(r"```[\s\S]*?```", _protect, text)
+    text = re.sub(r"`[^`\n]+`", _protect, text)
+
+    # 2. Bold+italic (***text***) → render as bold (Slack doesn't nest).
+    text = re.sub(r"\*{3}(.+?)\*{3}", rf"{_BOLD_STAR}\1{_BOLD_STAR}", text)
+
+    # 3. Bold: **text** or __text__ → temporary placeholder so the italic
+    #    pass below doesn't re-match them.
+    text = re.sub(r"\*{2}(.+?)\*{2}", rf"{_BOLD_STAR}\1{_BOLD_STAR}", text)
+    text = re.sub(r"__(.+?)__", rf"{_BOLD_STAR}\1{_BOLD_STAR}", text)
+
+    # 4. Italic: remaining *text* → _text_
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"_\1_", text)
+
+    # 5. Restore bold placeholders → *text*
+    text = text.replace(_BOLD_STAR, "*")
+
+    # 6. Strikethrough: ~~text~~ → ~text~
+    text = re.sub(r"~~(.+?)~~", r"~\1~", text)
+
+    # 7. Images: ![alt](url) → <url|alt>  (must come before links)
+    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r"<\2|\1>", text)
+
+    # 8. Links: [text](url) → <url|text>
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
+
+    # 9. Headers: lines starting with #{1,6} → bold text
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+
+    # 10. Restore protected code blocks / inline code
+    for idx, original in enumerate(protected):
+        text = text.replace(_CODE_PLACEHOLDER.format(idx), original)
+
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Slack reply posting
 # ---------------------------------------------------------------------------
 
@@ -747,6 +809,8 @@ async def post_slack_reply(
     # Prefix agent responses so pollers can skip them (feedback loop guard)
     if agent_name:
         text = f"[bot:{agent_name}] {text}"
+
+    text = markdown_to_slack_mrkdwn(text)
 
     # Respect Slack's message length limit
     if len(text) > SLACK_MESSAGE_CHAR_LIMIT:
