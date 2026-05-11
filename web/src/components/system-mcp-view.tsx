@@ -18,6 +18,7 @@ interface McpServer {
   auth: "none" | "basic" | "oauth"
   env: Record<string, string>
   timeout: number
+  scope: string
   builtin: boolean
   note?: string
   display_name?: string
@@ -33,6 +34,7 @@ export function SystemMcpView() {
   const [newArgs, setNewArgs] = useState("")
   const [newUrl, setNewUrl] = useState("")
   const [newAuth, setNewAuth] = useState<"none" | "basic" | "oauth">("none")
+  const [newScope, setNewScope] = useState("")
   const [newEnvVars, setNewEnvVars] = useState("")
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
@@ -41,6 +43,7 @@ export function SystemMcpView() {
   const [editArgs, setEditArgs] = useState("")
   const [editUrl, setEditUrl] = useState("")
   const [editAuth, setEditAuth] = useState<"none" | "basic" | "oauth">("none")
+  const [editScope, setEditScope] = useState("")
   const [editEnvVars, setEditEnvVars] = useState("")
   const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({})
   const [authorizing, setAuthorizing] = useState<string | null>(null)
@@ -127,6 +130,7 @@ export function SystemMcpView() {
     if (newTransport === "http") {
       body.url = newUrl.trim()
       body.auth = newAuth
+      if (newAuth === "oauth" && newScope.trim()) body.scope = newScope.trim()
     } else {
       body.command = newCommand.trim()
       const args = newArgs.trim()
@@ -150,6 +154,7 @@ export function SystemMcpView() {
       setNewArgs("")
       setNewUrl("")
       setNewAuth("none")
+      setNewScope("")
       setNewEnvVars("")
     }
     setSaving(false)
@@ -172,6 +177,7 @@ export function SystemMcpView() {
     setEditArgs((srv.args || []).join("\n"))
     setEditUrl(srv.url || "")
     setEditAuth(srv.auth || "none")
+    setEditScope(srv.scope || "")
     setEditEnvVars(
       srv.env
         ? Object.entries(srv.env)
@@ -193,6 +199,7 @@ export function SystemMcpView() {
     if (editTransport === "http") {
       body.url = editUrl.trim()
       body.auth = editAuth
+      body.scope = editAuth === "oauth" ? editScope.trim() : ""
     } else {
       body.command = editCommand.trim()
       const args = editArgs.trim()
@@ -330,6 +337,21 @@ export function SystemMcpView() {
                             </select>
                           </div>
                         </>
+                      )}
+                      {editAuth === "oauth" && (
+                        <div className="flex flex-col gap-1.5">
+                          <Label className="text-xs">OAuth Scopes (space-separated)</Label>
+                          <Input
+                            value={editScope}
+                            onChange={(e) => setEditScope(e.target.value)}
+                            placeholder="read:jira-work write:jira-work read:jira-user read:me offline_access"
+                            className="font-mono text-xs"
+                            spellCheck={false}
+                          />
+                          <p className="text-[10px] text-muted-foreground">
+                            Leave empty to let the server decide. Required for Atlassian Rovo write access.
+                          </p>
+                        </div>
                       )}
                       {editAuth !== "oauth" && (
                         <div className="flex flex-col gap-1.5">
@@ -549,6 +571,21 @@ export function SystemMcpView() {
                           </select>
                         </div>
                       </>
+                    )}
+                    {newAuth === "oauth" && (
+                      <div className="flex flex-col gap-1.5">
+                        <Label className="text-xs">OAuth Scopes (space-separated)</Label>
+                        <Input
+                          value={newScope}
+                          onChange={(e) => setNewScope(e.target.value)}
+                          placeholder="read:jira-work write:jira-work read:jira-user read:me offline_access"
+                          className="font-mono text-xs"
+                          spellCheck={false}
+                        />
+                        <p className="text-[10px] text-muted-foreground">
+                          Leave empty to let the server decide. Required for Atlassian Rovo write access.
+                        </p>
+                      </div>
                     )}
                     {newAuth !== "oauth" && (
                       <div className="flex flex-col gap-1.5">

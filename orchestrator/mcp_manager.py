@@ -209,7 +209,8 @@ class McpServerManager:
                     auth = config.get("auth", "none")
                     if auth == "oauth":
                         from orchestrator.oauth import get_oauth_provider
-                        provider = get_oauth_provider(name, url)
+                        scope = config.get("scope", "")
+                        provider = get_oauth_provider(name, url, scope=scope)
                         client = httpx.AsyncClient(
                             auth=provider,
                             timeout=httpx.Timeout(30.0, read=300.0),

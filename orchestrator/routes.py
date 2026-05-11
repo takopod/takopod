@@ -155,7 +155,7 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
     db = await get_db()
     async with db.execute(
         "SELECT ms.name, ms.transport, ms.command, ms.args, ms.url, ms.auth, "
-        "ms.env, ms.timeout "
+        "ms.env, ms.timeout, ms.scope "
         "FROM mcp_servers ms "
         "JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
         "WHERE ams.agent_id = ?",
@@ -178,6 +178,7 @@ async def _start_mcp_manager(host_dir: Path, agent_id: str) -> McpServerManager 
             "auth": row[5],
             "env": env,
             "timeout": row[7],
+            "scope": row[8] or "",
         }
 
     if "github" in servers:
@@ -531,7 +532,7 @@ async def get_agent_mcp(agent_id: str):
     # Servers added to this agent
     async with db.execute(
         "SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.url, "
-        "ms.auth, ms.env, ms.timeout, ms.builtin "
+        "ms.auth, ms.env, ms.timeout, ms.builtin, ms.scope "
         "FROM mcp_servers ms JOIN agent_mcp_servers ams ON ms.id = ams.mcp_server_id "
         "WHERE ams.agent_id = ? ORDER BY ms.builtin DESC, ms.name",
         (agent_id,),
@@ -543,7 +544,7 @@ async def get_agent_mcp(agent_id: str):
 
     # Available servers not yet added to this agent
     async with db.execute(
-        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin, scope "
         "FROM mcp_servers ORDER BY builtin DESC, name",
     ) as cur:
         all_rows = await cur.fetchall()
@@ -1469,6 +1470,7 @@ def _row_to_mcp_server(row) -> McpServerResponse:
         note=note,
         display_name=display_name,
         builtin=bool(row[9]),
+        scope=row[10] or "",
     )
 
 
@@ -1476,7 +1478,7 @@ def _row_to_mcp_server(row) -> McpServerResponse:
 async def list_mcp_servers() -> list[McpServerResponse]:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin, scope "
         "FROM mcp_servers ORDER BY builtin DESC, name",
     ) as cur:
         rows = await cur.fetchall()
@@ -1488,17 +1490,17 @@ async def create_mcp_server(req: CreateMcpServerRequest) -> McpServerResponse:
     db = await get_db()
     server_id = str(uuid.uuid4())
     await db.execute(
-        "INSERT INTO mcp_servers (id, name, transport, command, args, url, auth, env, timeout) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO mcp_servers (id, name, transport, command, args, url, auth, env, timeout, scope) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             server_id, req.name, req.transport, req.command,
             json.dumps(req.args), req.url, req.auth,
-            json.dumps(req.env), req.timeout,
+            json.dumps(req.env), req.timeout, req.scope,
         ),
     )
     await db.commit()
     async with db.execute(
-        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin, scope "
         "FROM mcp_servers WHERE id = ?",
         (server_id,),
     ) as cur:
@@ -1532,7 +1534,7 @@ async def update_mcp_server(server_id: str, req: UpdateMcpServerRequest) -> McpS
     await db.commit()
 
     async with db.execute(
-        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin "
+        "SELECT id, name, transport, command, args, url, auth, env, timeout, builtin, scope "
         "FROM mcp_servers WHERE id = ?",
         (server_id,),
     ) as cur:

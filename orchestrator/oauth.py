@@ -116,7 +116,7 @@ class OAuthFlowManager:
         self._authorize_url: str | None = None
 
     async def start_flow(
-        self, server_name: str, server_url: str,
+        self, server_name: str, server_url: str, *, scope: str = "",
     ) -> str:
         """Initiate an OAuth flow. Returns the authorization URL."""
         storage = FileTokenStorage(server_name)
@@ -151,6 +151,7 @@ class OAuthFlowManager:
                 client_name="takopod",
                 grant_types=["authorization_code", "refresh_token"],
                 response_types=["code"],
+                scope=scope or None,
             ),
             storage=storage,
             redirect_handler=redirect_handler,
@@ -234,7 +235,7 @@ flow_manager = OAuthFlowManager()
 
 
 def get_oauth_provider(
-    server_name: str, server_url: str,
+    server_name: str, server_url: str, *, scope: str = "",
 ) -> OAuthClientProvider:
     """Create an OAuthClientProvider using stored tokens.
 
@@ -249,6 +250,7 @@ def get_oauth_provider(
             client_name="takopod",
             grant_types=["authorization_code", "refresh_token"],
             response_types=["code"],
+            scope=scope or None,
         ),
         storage=storage,
     )

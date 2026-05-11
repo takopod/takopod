@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _get_server_url(server_name: str) -> str:
-    """Look up the URL for an HTTP MCP server from the database."""
+async def _get_server_info(server_name: str) -> tuple[str, str]:
+    """Look up the URL and scope for an HTTP MCP server from the database."""
     db = await get_db()
     async with db.execute(
-        "SELECT transport, url FROM mcp_servers WHERE name = ?",
+        "SELECT transport, url, scope FROM mcp_servers WHERE name = ?",
         (server_name,),
     ) as cur:
         row = await cur.fetchone()
@@ -37,15 +37,17 @@ async def _get_server_url(server_name: str) -> str:
             status_code=400,
             detail=f"Server '{server_name}' has no URL configured",
         )
-    return row[1]
+    return row[1], row[2] or ""
 
 
 @router.get("/oauth/start/{server_name}")
 async def start_oauth(server_name: str):
     """Initiate OAuth flow for an HTTP MCP server."""
-    server_url = await _get_server_url(server_name)
+    server_url, scope = await _get_server_info(server_name)
     try:
-        authorize_url = await flow_manager.start_flow(server_name, server_url)
+        authorize_url = await flow_manager.start_flow(
+            server_name, server_url, scope=scope,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return {"authorize_url": authorize_url}

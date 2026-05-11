@@ -168,6 +168,7 @@ class McpServerResponse(BaseModel):
     auth: str = "none"
     env: dict[str, str] = {}
     timeout: float = 30.0
+    scope: str = ""
     builtin: bool = False
     note: str = ""
     display_name: str = ""
@@ -182,6 +183,7 @@ class CreateMcpServerRequest(BaseModel):
     auth: Literal["none", "basic", "oauth"] = "none"
     env: dict[str, str] = {}
     timeout: float = 30.0
+    scope: str = ""
 
     @model_validator(mode="after")
     def validate_transport_fields(self):
@@ -200,6 +202,7 @@ class UpdateMcpServerRequest(BaseModel):
     auth: Literal["none", "basic", "oauth"] | None = None
     env: dict[str, str] | None = None
     timeout: float | None = None
+    scope: str | None = None
 
 
 class ToolConfigRequest(BaseModel):
