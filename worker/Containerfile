@@ -21,14 +21,16 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     apt-get install -y --no-install-recommends gh && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install uv from Astral
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
 # Install Python Agent SDK and Playwright
-RUN pip install --no-cache-dir claude-agent-sdk sqlite-vec pyyaml playwright && \
+RUN uv pip install --system --no-cache claude-agent-sdk sqlite-vec pyyaml playwright && \
     playwright install chromium --with-deps && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY worker.py agent.py db.py embed.py search.py memory.py context_budget.py model_config.py __init__.py ./worker/
-COPY tools/ ./worker/tools/
-COPY migrations/ ./worker/migrations/
+COPY . ./worker/
 ENV PYTHONPATH=/app
 CMD ["python", "-u", "-m", "worker.worker"]
