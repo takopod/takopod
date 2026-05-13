@@ -28,13 +28,13 @@ import { Input } from "@/components/ui/input"
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   ChevronRight,
   Cpu,
   File,
   FolderOpen,
   HardDrive,
   MessageSquare,
-  MoreHorizontal,
   Pencil,
   Plus,
   Search,
@@ -561,15 +561,13 @@ function AgentSettingsDashboard({
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-        <span className="text-sm font-medium truncate flex items-center gap-1.5">
-          <AgentIcon name={detail.icon} className="size-4" />
-          {detail.name}
-        </span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm">
-              <MoreHorizontal className="size-4" />
-            </Button>
+            <button className="flex items-center gap-1.5 text-sm font-medium truncate rounded-sm px-1 py-0.5 hover:bg-accent transition-colors">
+              <AgentIcon name={detail.icon} className="size-4 shrink-0" />
+              <span className="truncate">{detail.name}</span>
+              <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+            </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
             <DropdownMenuCheckboxItem checked={false} onClick={() => onSelectAgent(detail.id)}>
@@ -582,6 +580,8 @@ function AgentSettingsDashboard({
             </DropdownMenuCheckboxItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <span className="text-muted-foreground">/</span>
+        <span className="text-sm text-muted-foreground">Settings</span>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-1 flex-col overflow-hidden">
