@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import Markdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Textarea } from "@/components/ui/textarea"
 import type { FileEntry } from "@/lib/types"
-import { ArrowLeft, File, Folder, Save, Trash2 } from "lucide-react"
+import { ArrowLeft, Eye, File, Folder, Pencil, Save, Trash2 } from "lucide-react"
 
 interface FileBrowserProps {
   agentId: string
@@ -13,6 +15,7 @@ interface FileBrowserProps {
 }
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i
+const MARKDOWN_RE = /\.md$/i
 
 export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProps) {
   const navigate = useNavigate()
@@ -27,8 +30,11 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
 
   const basePath = `/a/${encodeURIComponent(agentName ?? agentId)}/settings/files`
 
+  const [previewMode, setPreviewMode] = useState(true)
+
   const IDENTITY_FILES = new Set(["CLAUDE.md", "SOUL.md", "MEMORY.md"])
   const isImage = openFile ? IMAGE_RE.test(openFile) : false
+  const isMarkdown = openFile ? MARKDOWN_RE.test(openFile) : false
   const dirty = !isImage && content !== originalContent
 
   // Resolve initialPath: determine if it's a file or directory
@@ -46,6 +52,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
       setCurrentPath(dir)
       setContent("")
       setOriginalContent("")
+      setPreviewMode(true)
       return
     }
     // Try loading as a file first
@@ -57,6 +64,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
             setCurrentPath(dir)
             setContent(text)
             setOriginalContent(text)
+            setPreviewMode(MARKDOWN_RE.test(initialPath))
           })
         } else {
           setOpenFile(null)
@@ -154,7 +162,20 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
           <span className="text-sm font-medium">{fileName}</span>
           <span className="text-xs text-muted-foreground">{openFile}</span>
           {!isImage && (
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2">
+              {isMarkdown && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPreviewMode(!previewMode)}
+                >
+                  {previewMode ? (
+                    <><Pencil className="mr-1.5 size-3.5" />Edit</>
+                  ) : (
+                    <><Eye className="mr-1.5 size-3.5" />Preview</>
+                  )}
+                </Button>
+              )}
               <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
                 <Save className="mr-1.5 size-3.5" />
                 {saving ? "Saving..." : "Save"}
@@ -169,6 +190,21 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
               alt={fileName}
               className="max-h-full max-w-full object-contain"
             />
+          </div>
+        ) : isMarkdown && previewMode ? (
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <Markdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ children, ...props }) => (
+                    <a {...props} target="_blank" rel="noopener noreferrer">{children}</a>
+                  ),
+                }}
+              >
+                {content}
+              </Markdown>
+            </div>
           </div>
         ) : (
           <div className="flex flex-1 overflow-hidden font-mono text-xs">
