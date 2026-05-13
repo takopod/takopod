@@ -1,9 +1,15 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Eye, Pencil } from "lucide-react"
+
+const FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/
+
+function stripFrontmatter(text: string): string {
+  return text.replace(FRONTMATTER_RE, "")
+}
 
 interface FileEditorProps {
   value: string
@@ -16,6 +22,7 @@ export function FileEditor({ value, onChange, readOnly, markdown }: FileEditorPr
   const [preview, setPreview] = useState(!!markdown)
   const lineCount = value.split("\n").length
   const showPreview = markdown && preview
+  const renderedValue = useMemo(() => showPreview ? stripFrontmatter(value) : value, [showPreview, value])
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -45,7 +52,7 @@ export function FileEditor({ value, onChange, readOnly, markdown }: FileEditorPr
                 ),
               }}
             >
-              {value}
+              {renderedValue}
             </Markdown>
           </div>
         </div>

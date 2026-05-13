@@ -292,15 +292,16 @@ export function SkillFilesDialog({
       <DialogContent
         showCloseButton
         className="!max-w-none !w-[70vw] !h-[70vh] !p-0 flex flex-col overflow-hidden !gap-0"
+        onInteractOutside={(e) => e.preventDefault()}
       >
-        <div className="flex items-center gap-3 border-b pl-4 pr-12 py-2.5 shrink-0">
-          <DialogTitle className="text-sm font-medium truncate">{skill.name}</DialogTitle>
-          {skill.description && (
-            <span className="text-xs text-muted-foreground truncate">{skill.description}</span>
-          )}
-          <div className="ml-auto flex items-center gap-2">
+        <div className="flex flex-col gap-0.5 border-b pl-4 pr-14 py-3 shrink-0">
+          <div className="flex items-center gap-2">
+            <DialogTitle className="text-sm font-medium">{skill.name}</DialogTitle>
             {skill.builtin && <Badge variant="outline">BUILTIN</Badge>}
           </div>
+          {skill.description && (
+            <span className="text-xs text-muted-foreground line-clamp-2">{skill.description}</span>
+          )}
         </div>
 
         <div className="flex flex-1 min-h-0">
@@ -360,7 +361,7 @@ export function SkillFilesDialog({
                           ),
                         }}
                       >
-                        {fileContent}
+                        {fileContent.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, "")}
                       </Markdown>
                     </div>
                   </div>
