@@ -1334,6 +1334,13 @@ async def upload_system_skill(file: UploadFile) -> SkillDetail:
     tmp_dir = Path(tempfile.mkdtemp(prefix="skill-upload-"))
     try:
         skill_id, description = _extract_and_validate_zip(zip_bytes, tmp_dir)
+
+        if _is_builtin_skill(skill_id):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Cannot override builtin skill '{skill_id}'. Use a different skill name.",
+            )
+
         existing = _find_system_skill(skill_id)
 
         USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1366,7 +1373,12 @@ async def update_system_skill(skill_id: str, req: UpdateSkillRequest) -> SkillDe
     if not found:
         raise HTTPException(status_code=404, detail="Skill not found")
 
-    # Always write updates to data/skills/ (creates an override for builtins)
+    if _is_builtin_skill(skill_id):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot edit builtin skill '{skill_id}'. Create a new skill with a different name instead.",
+        )
+
     USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     override_dir = USER_SKILLS_DIR / skill_id
     override_dir.mkdir(parents=True, exist_ok=True)

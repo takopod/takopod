@@ -11,6 +11,7 @@ from orchestrator.container_manager import (
     PODMAN,
     _is_always_enabled_skill,
     _scan_skills_dir,
+    sync_agent_skills,
 )
 from orchestrator.db import get_db
 
@@ -105,10 +106,10 @@ async def boot_recovery() -> None:
         sid for sid in _scan_skills_dir(BUILTIN_SKILLS_DIR)
         if _is_always_enabled_skill(sid)
     ]
-    async with db.execute("SELECT id FROM agents") as cur:
+    async with db.execute("SELECT id, host_dir FROM agents") as cur:
         agent_rows = await cur.fetchall()
     skills_seeded = 0
-    for (agent_id,) in agent_rows:
+    for agent_id, _ in agent_rows:
         for skill_id in builtin_skill_ids:
             cursor = await db.execute(
                 "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id) VALUES (?, ?)",
@@ -118,11 +119,19 @@ async def boot_recovery() -> None:
 
     await db.commit()
 
+    # Step 10: Sync registry skill files to disk for all agents
+    skills_synced = 0
+    for agent_id, host_dir in agent_rows:
+        if host_dir and Path(host_dir).is_dir():
+            await sync_agent_skills(agent_id, Path(host_dir))
+            skills_synced += 1
+
     logger.info(
         "Boot recovery complete: %d containers killed, %d messages re-queued, "
         "%d IPC files cleaned, %d streaming messages finalized, "
         "%d container statuses reset, "
-        "%d scheduled tasks failed, %d builtin skills seeded",
+        "%d scheduled tasks failed, %d builtin skills seeded, "
+        "%d agent skills synced",
         killed, requeued, files_cleaned, streaming_finalized, statuses_reset,
-        tasks_failed, skills_seeded,
+        tasks_failed, skills_seeded, skills_synced,
     )

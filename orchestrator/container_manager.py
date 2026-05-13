@@ -455,6 +455,7 @@ async def spawn_container(
 
     host_dir.mkdir(parents=True, exist_ok=True)
     await write_workspace_settings(host_dir)
+    await sync_agent_skills(agent_id, host_dir)
     await seed_session_history(agent_id, host_dir)
 
     record_id = str(uuid.uuid4())
@@ -537,6 +538,7 @@ async def spawn_scheduled_container(
 
     host_dir.mkdir(parents=True, exist_ok=True)
     await write_workspace_settings(host_dir)
+    await sync_agent_skills(agent_id, host_dir)
 
     record_id = str(uuid.uuid4())
     await db.execute(
