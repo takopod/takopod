@@ -50,7 +50,7 @@ from worker.tools import (
 from worker.tools.schedule import TOOL_NAMES as SCHEDULE_TOOL_NAMES
 
 WORKSPACE = Path("/workspace")
-MAX_TURNS = 25
+MAX_TURNS = 50
 
 
 DEFAULT_BUILTIN_TOOLS = [
