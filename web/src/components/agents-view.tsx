@@ -804,7 +804,7 @@ function AgentSettingsDashboard({
           </div>
         </TabsContent>
 
-        <TabsContent value="files" className="flex-1 overflow-hidden">
+        <TabsContent value="files" className="flex flex-1 flex-col overflow-hidden">
           <FileBrowser agentId={agentId} agentName={agentName} initialPath={fileSplat} />
         </TabsContent>
       </Tabs>

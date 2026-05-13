@@ -1293,6 +1293,22 @@ async def get_system_skill(skill_id: str) -> SkillDetail:
     )
 
 
+@router.get("/skills/{skill_id}/files/{file_path:path}")
+async def get_system_skill_file(skill_id: str, file_path: str):
+    found = _find_system_skill(skill_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    skill_dir, _, fmt = found
+    if fmt == "flat":
+        raise HTTPException(status_code=404, detail="Flat skills have no supporting files")
+    target = (skill_dir / file_path).resolve()
+    if not str(target).startswith(str(skill_dir.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(target)
+
+
 async def _propagate_skill_to_agents(skill_id: str) -> None:
     """Re-sync a registry skill to all agents that have it."""
     db = await get_db()

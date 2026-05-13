@@ -2,12 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   Dialog,
   DialogContent,
@@ -16,18 +10,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { FileEditor } from "@/components/file-editor"
+import { SkillFilesDialog } from "@/components/skill-files-dialog"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import {
-  ArrowLeft,
-  ChevronDown,
-  ChevronRight,
-  File,
-  Folder,
   Info,
   Plus,
-  RotateCcw,
   Trash2,
   Upload,
   X,
@@ -45,82 +33,16 @@ interface SkillDetail extends SkillSummary {
   files: string[]
 }
 
-interface FileNode {
-  name: string
-  path: string
-  children?: FileNode[]
-}
-
-function buildFileTree(files: string[]): FileNode[] {
-  const root: FileNode[] = []
-  for (const filePath of files) {
-    const parts = filePath.split("/")
-    let current = root
-    for (let i = 0; i < parts.length; i++) {
-      const name = parts[i]
-      const isFile = i === parts.length - 1
-      const existing = current.find((n) => n.name === name)
-      if (existing) {
-        current = existing.children || []
-      } else {
-        const node: FileNode = { name, path: filePath }
-        if (!isFile) {
-          node.children = []
-        }
-        current.push(node)
-        current = node.children || []
-      }
-    }
-  }
-  return root
-}
-
-function FileTreeNode({ node, depth = 0 }: { node: FileNode; depth?: number }) {
-  const [open, setOpen] = useState(true)
-  const isDir = !!node.children
-
-  if (isDir) {
-    return (
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 transition-colors" style={{ paddingLeft: `${depth * 16 + 8}px` }}>
-          {open ? <ChevronDown className="size-3 text-muted-foreground" /> : <ChevronRight className="size-3 text-muted-foreground" />}
-          <Folder className="size-3.5 text-muted-foreground" />
-          <span>{node.name}</span>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          {node.children!.map((child) => (
-            <FileTreeNode key={child.path} node={child} depth={depth + 1} />
-          ))}
-        </CollapsibleContent>
-      </Collapsible>
-    )
-  }
-
-  return (
-    <div
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground"
-      style={{ paddingLeft: `${depth * 16 + 24}px` }}
-    >
-      <File className="size-3.5" />
-      <span>{node.name}</span>
-    </div>
-  )
-}
-
 export function SystemSkillsView() {
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [showUpload, setShowUpload] = useState(false)
   const [selected, setSelected] = useState<SkillDetail | null>(null)
-  const [editContent, setEditContent] = useState("")
-  const [saving, setSaving] = useState(false)
-  const [confirmReset, setConfirmReset] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [zipFile, setZipFile] = useState<File | null>(null)
   const [zipError, setZipError] = useState("")
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
-  const [detailTab, setDetailTab] = useState("content")
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchSkills = useCallback(async () => {
@@ -177,43 +99,8 @@ export function SystemSkillsView() {
   const handleSelect = async (skillId: string) => {
     const res = await fetch(`/api/skills/${skillId}`)
     if (res.ok) {
-      const detail: SkillDetail = await res.json()
-      setSelected(detail)
-      setEditContent(detail.content)
-      setDetailTab("content")
+      setSelected(await res.json())
     }
-  }
-
-  const handleSave = async () => {
-    if (!selected) return
-    setSaving(true)
-    const res = await fetch(`/api/skills/${selected.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: editContent }),
-    })
-    if (res.ok) {
-      const detail: SkillDetail = await res.json()
-      setSelected(detail)
-      setEditContent(detail.content)
-      await fetchSkills()
-    }
-    setSaving(false)
-  }
-
-  const handleResetConfirm = async () => {
-    if (!selected) return
-    setSaving(true)
-    const res = await fetch(`/api/skills/${selected.id}/reset`, {
-      method: "POST",
-    })
-    if (res.ok) {
-      const detail: SkillDetail = await res.json()
-      setSelected(detail)
-      setEditContent(detail.content)
-      await fetchSkills()
-    }
-    setSaving(false)
   }
 
   const handleDeleteConfirm = async () => {
@@ -222,135 +109,10 @@ export function SystemSkillsView() {
       method: "DELETE",
     })
     if (res.ok) {
-      setSelected(null)
       await fetchSkills()
     }
   }
 
-  const dirty = selected !== null && editContent !== selected.content
-
-  // Detail view for a selected skill
-  if (selected) {
-    const fileTree = buildFileTree(selected.files)
-    const hasFiles = selected.files.length > 0
-
-    return (
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setSelected(null)}
-          >
-            <ArrowLeft className="size-4" />
-          </Button>
-          <div className="flex-1 min-w-0">
-            <span className="text-sm font-medium">{selected.name}</span>
-            {selected.description && (
-              <span className="ml-2 text-xs text-muted-foreground truncate">
-                {selected.description}
-              </span>
-            )}
-          </div>
-          {selected.builtin && (
-            <Badge variant="outline">BUILTIN</Badge>
-          )}
-        </div>
-
-        {hasFiles ? (
-          <Tabs value={detailTab} onValueChange={setDetailTab} className="flex flex-1 flex-col overflow-hidden">
-            <div className="border-b px-4">
-              <TabsList variant="line">
-                <TabsTrigger value="content">SKILL.md</TabsTrigger>
-                <TabsTrigger value="files">
-                  Files ({selected.files.length})
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <TabsContent value="content" className="flex-1 overflow-hidden">
-              <FileEditor
-                value={editContent}
-                onChange={(v) => setEditContent(v)}
-                markdown
-              />
-            </TabsContent>
-
-            <TabsContent value="files" className="flex-1 overflow-y-auto p-4">
-              <div className="mx-auto max-w-2xl">
-                <div className="rounded-md border">
-                  {fileTree.map((node) => (
-                    <FileTreeNode key={node.path} node={node} />
-                  ))}
-                </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        ) : (
-          <FileEditor
-            value={editContent}
-            onChange={(v) => setEditContent(v)}
-            markdown
-          />
-        )}
-
-        <div className="flex items-center gap-2 border-t px-4 py-2">
-          {selected.builtin ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setConfirmReset(true)}
-              disabled={saving}
-            >
-              <RotateCcw className="mr-1.5 size-3.5" />
-              Reset
-            </Button>
-          ) : (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setConfirmDeleteId(selected.id)}
-            >
-              <Trash2 className="mr-1.5 size-3.5" />
-              Delete
-            </Button>
-          )}
-          <div className="ml-auto">
-            <Button
-              size="sm"
-              onClick={handleSave}
-              disabled={!dirty || saving}
-            >
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </div>
-        </div>
-
-        <ConfirmDialog
-          open={confirmReset}
-          onOpenChange={setConfirmReset}
-          title="Reset skill"
-          description={`Reset "${selected.name}" to its default content? This cannot be undone.`}
-          confirmLabel="Reset"
-          destructive
-          onConfirm={handleResetConfirm}
-        />
-        <ConfirmDialog
-          open={confirmDeleteId !== null}
-          onOpenChange={(open) => { if (!open) setConfirmDeleteId(null) }}
-          title="Delete skill"
-          description="Delete this system skill? This won't affect existing agents."
-          confirmLabel="Delete"
-          destructive
-          onConfirm={handleDeleteConfirm}
-        />
-      </div>
-    )
-  }
-
-  // List view
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
@@ -425,6 +187,22 @@ export function SystemSkillsView() {
           )}
         </div>
       </div>
+
+      {selected && (
+        <SkillFilesDialog
+          open
+          onOpenChange={(open) => { if (!open) setSelected(null) }}
+          skill={selected}
+          onSaved={(updated) => {
+            setSelected(updated)
+            fetchSkills()
+          }}
+          onDeleted={() => {
+            setSelected(null)
+            fetchSkills()
+          }}
+        />
+      )}
 
       <Dialog open={showUpload} onOpenChange={(open) => { if (!open) closeUploadDialog() }}>
         <DialogContent className="sm:max-w-md">
