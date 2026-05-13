@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -10,12 +10,60 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { SendHorizontal, Square, Paperclip, X, FileIcon, ImageIcon, Loader2 } from "lucide-react"
+import { SendHorizontal, Square, Paperclip, X, FileIcon, ImageIcon, Loader2, Upload } from "lucide-react"
 import type { ModelOption } from "@/lib/types"
 
 interface PendingFile {
   file: File
   name: string
+}
+
+export function useFileDropZone() {
+  const [dragging, setDragging] = useState(false)
+  const [droppedFiles, setDroppedFiles] = useState<File[]>([])
+  const dragCounterRef = useRef(0)
+
+  const onDragEnter = useCallback((e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current++
+    if (e.dataTransfer.types.includes("Files")) {
+      setDragging(true)
+    }
+  }, [])
+
+  const onDragLeave = useCallback((e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current--
+    if (dragCounterRef.current === 0) {
+      setDragging(false)
+    }
+  }, [])
+
+  const onDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const onDrop = useCallback((e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current = 0
+    setDragging(false)
+    if (e.dataTransfer.files.length > 0) {
+      setDroppedFiles(Array.from(e.dataTransfer.files))
+    }
+  }, [])
+
+  const clearDroppedFiles = useCallback(() => setDroppedFiles([]), [])
+
+  return {
+    dragging,
+    droppedFiles,
+    clearDroppedFiles,
+    dropHandlers: { onDragEnter, onDragLeave, onDragOver, onDrop },
+  }
 }
 
 interface ChatInputProps {
@@ -28,13 +76,23 @@ interface ChatInputProps {
   modelOptions: ModelOption[]
   selectedModel: string
   onModelChange: (value: string) => void
+  droppedFiles?: File[]
+  onDroppedFilesConsumed?: () => void
 }
 
-export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded, agentId, modelOptions, selectedModel, onModelChange }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded, agentId, modelOptions, selectedModel, onModelChange, droppedFiles, onDroppedFilesConsumed }: ChatInputProps) {
   const [value, setValue] = useState("")
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (droppedFiles && droppedFiles.length > 0) {
+      const newFiles: PendingFile[] = droppedFiles.map((f) => ({ file: f, name: f.name }))
+      setPendingFiles((prev) => [...prev, ...newFiles].slice(0, 10))
+      onDroppedFilesConsumed?.()
+    }
+  }, [droppedFiles, onDroppedFilesConsumed])
 
   async function uploadFiles(files: PendingFile[]): Promise<string[]> {
     if (!agentId || files.length === 0) return []
@@ -91,16 +149,10 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded,
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files
-    if (!files) return
-
-    const newFiles: PendingFile[] = Array.from(files).map((f) => ({
-      file: f,
-      name: f.name,
-    }))
-    setPendingFiles((prev) => [...prev, ...newFiles].slice(0, 10))
-
-    // Reset input so the same file can be selected again
+    if (e.target.files) {
+      const newFiles: PendingFile[] = Array.from(e.target.files).map((f) => ({ file: f, name: f.name }))
+      setPendingFiles((prev) => [...prev, ...newFiles].slice(0, 10))
+    }
     e.target.value = ""
   }
 
@@ -202,6 +254,17 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, sessionEnded,
           </Button>
         )}
       </form>
+    </div>
+  )
+}
+
+export function DropZoneOverlay() {
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+      <div className="flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-primary px-12 py-8">
+        <Upload className="size-8 text-primary" />
+        <p className="text-sm font-medium text-primary">Drop files to attach</p>
+      </div>
     </div>
   )
 }

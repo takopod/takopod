@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 import { AgentsView } from "@/components/agents-view"
 import { AppSidebar } from "@/components/app-sidebar"
-import { ChatInput } from "@/components/chat-input"
+import { ChatInput, DropZoneOverlay, useFileDropZone } from "@/components/chat-input"
 import { ContainerLogsView } from "@/components/container-logs-view"
 import { ContainersView } from "@/components/containers-view"
 import { SchedulesView } from "@/components/schedules-view"
@@ -75,6 +75,7 @@ export function App() {
   })
   const resizingRef = useRef(false)
   const startWidthRef = useRef(rightPanelWidth)
+  const { dragging, droppedFiles, clearDroppedFiles, dropHandlers } = useFileDropZone()
 
   const chatMatch = useMatch("/a/:agentName")
   const selectedAgent = chatMatch
@@ -249,7 +250,8 @@ export function App() {
                     <p className="text-sm">Loading...</p>
                   </div>
                 ) : (
-                  <div className="flex flex-1 flex-col min-h-0">
+                  <div className="relative flex flex-1 flex-col min-h-0" {...dropHandlers}>
+                    {dragging && <DropZoneOverlay />}
                     <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
                       <SidebarTrigger className="-ml-1" />
                       <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
@@ -313,7 +315,7 @@ export function App() {
                         {selectedAgent?.name ?? "Agent"} is typing...
                       </div>
                     )}
-                    <ChatInput onSend={(content, attachments) => sendMessage(content, attachments, selectedModel || undefined)} onStop={stopQuery} isStreaming={messages.some((m) => m.status === "streaming")} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} modelOptions={modelOptions} selectedModel={selectedModel} onModelChange={handleModelChange} />
+                    <ChatInput onSend={(content, attachments) => sendMessage(content, attachments, selectedModel || undefined)} onStop={stopQuery} isStreaming={messages.some((m) => m.status === "streaming")} disabled={!connected || !!sessionEnded} sessionEnded={sessionEnded} agentId={selectedAgentId} modelOptions={modelOptions} selectedModel={selectedModel} onModelChange={handleModelChange} droppedFiles={droppedFiles} onDroppedFilesConsumed={clearDroppedFiles} />
                   </div>
                 )
               }
