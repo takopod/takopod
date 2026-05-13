@@ -12,6 +12,8 @@ interface FileBrowserProps {
   initialPath?: string
 }
 
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i
+
 export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProps) {
   const navigate = useNavigate()
   const [entries, setEntries] = useState<FileEntry[]>([])
@@ -26,7 +28,8 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
   const basePath = `/a/${encodeURIComponent(agentName ?? agentId)}/settings/files`
 
   const IDENTITY_FILES = new Set(["CLAUDE.md", "SOUL.md", "MEMORY.md"])
-  const dirty = content !== originalContent
+  const isImage = openFile ? IMAGE_RE.test(openFile) : false
+  const dirty = !isImage && content !== originalContent
 
   // Resolve initialPath: determine if it's a file or directory
   useEffect(() => {
@@ -35,22 +38,27 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
       setCurrentPath("")
       return
     }
+    const dir = initialPath.includes("/")
+      ? initialPath.substring(0, initialPath.lastIndexOf("/"))
+      : ""
+    if (IMAGE_RE.test(initialPath)) {
+      setOpenFile(initialPath)
+      setCurrentPath(dir)
+      setContent("")
+      setOriginalContent("")
+      return
+    }
     // Try loading as a file first
     fetch(`/api/agents/${agentId}/files/${encodeURIComponent(initialPath)}`)
       .then((res) => {
         if (res.ok) {
-          // It's a file
           res.text().then((text) => {
             setOpenFile(initialPath)
-            const dir = initialPath.includes("/")
-              ? initialPath.substring(0, initialPath.lastIndexOf("/"))
-              : ""
             setCurrentPath(dir)
             setContent(text)
             setOriginalContent(text)
           })
         } else {
-          // Treat as directory
           setOpenFile(null)
           setCurrentPath(initialPath)
         }
@@ -145,31 +153,43 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
           </Button>
           <span className="text-sm font-medium">{fileName}</span>
           <span className="text-xs text-muted-foreground">{openFile}</span>
-          <div className="ml-auto">
-            <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
-              <Save className="mr-1.5 size-3.5" />
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </div>
+          {!isImage && (
+            <div className="ml-auto">
+              <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
+                <Save className="mr-1.5 size-3.5" />
+                {saving ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          )}
         </div>
-        <div className="flex flex-1 overflow-hidden font-mono text-xs">
-          <div
-            className="shrink-0 select-none border-r bg-muted/50 px-3 py-3 text-right text-muted-foreground"
-            aria-hidden
-          >
-            {Array.from({ length: lineCount }, (_, i) => (
-              <div key={i} className="leading-5">
-                {i + 1}
-              </div>
-            ))}
+        {isImage ? (
+          <div className="flex flex-1 items-center justify-center overflow-auto bg-muted/30 p-4">
+            <img
+              src={`/api/agents/${agentId}/files/${encodeURIComponent(openFile)}`}
+              alt={fileName}
+              className="max-h-full max-w-full object-contain"
+            />
           </div>
-          <Textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className="flex-1 resize-none rounded-none border-0 p-3 leading-5 shadow-none focus-visible:ring-0"
-            spellCheck={false}
-          />
-        </div>
+        ) : (
+          <div className="flex flex-1 overflow-hidden font-mono text-xs">
+            <div
+              className="shrink-0 select-none border-r bg-muted/50 px-3 py-3 text-right text-muted-foreground"
+              aria-hidden
+            >
+              {Array.from({ length: lineCount }, (_, i) => (
+                <div key={i} className="leading-5">
+                  {i + 1}
+                </div>
+              ))}
+            </div>
+            <Textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              className="flex-1 resize-none rounded-none border-0 p-3 leading-5 shadow-none focus-visible:ring-0"
+              spellCheck={false}
+            />
+          </div>
+        )}
       </div>
     )
   }
