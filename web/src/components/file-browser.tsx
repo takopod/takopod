@@ -72,7 +72,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
       setPreviewMode(true)
       return
     }
-    fetch(`/api/agents/${agentId}/files/${encodeURIComponent(initialPath)}`)
+    fetch(`/api/agents/${agentId}/files/${encodeURIComponent(initialPath)}`, { cache: "no-store" })
       .then((res) => {
         if (res.ok) {
           res.text().then((text) => {
@@ -93,7 +93,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
     async (path: string) => {
       setLoading(true)
       const params = path ? `?path=${encodeURIComponent(path)}` : ""
-      const res = await fetch(`/api/agents/${agentId}/files${params}`)
+      const res = await fetch(`/api/agents/${agentId}/files${params}`, { cache: "no-store" })
       if (res.ok) {
         const data: FileEntry[] = await res.json()
         setEntries(sortEntries(data))

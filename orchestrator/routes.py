@@ -3,6 +3,7 @@ import dataclasses
 import io
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -23,7 +24,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import ValidationError
 
 from orchestrator.search_routes import reindex_memory_file
@@ -434,6 +435,15 @@ async def upload_attachments(agent_id: str, files: list[UploadFile]):
     return {"upload_id": upload_id, "paths": uploaded}
 
 
+def _file_response(path: Path) -> Response:
+    content_type, _ = mimetypes.guess_type(str(path))
+    return Response(
+        content=path.read_bytes(),
+        media_type=content_type or "application/octet-stream",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def _resolve_agent_path(
     agent_id: str, rel_path: str = "",
 ) -> tuple[Path, Path]:
@@ -483,7 +493,7 @@ async def read_agent_file(agent_id: str, file_path: str):
     _, resolved = await _resolve_agent_path(agent_id, file_path)
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(resolved)
+    return _file_response(resolved)
 
 
 @router.put("/agents/{agent_id}/files/{file_path:path}")
@@ -934,7 +944,7 @@ async def get_skill_file(agent_id: str, skill_id: str, file_path: str):
         raise HTTPException(status_code=400, detail="Invalid file path")
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(target)
+    return _file_response(target)
 
 
 @router.delete("/agents/{agent_id}/skills/{skill_id}/files/{file_path:path}")
@@ -1306,7 +1316,7 @@ async def get_system_skill_file(skill_id: str, file_path: str):
         raise HTTPException(status_code=400, detail="Invalid file path")
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(target)
+    return _file_response(target)
 
 
 async def _propagate_skill_to_agents(skill_id: str) -> None:

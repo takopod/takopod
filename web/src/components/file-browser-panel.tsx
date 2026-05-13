@@ -20,7 +20,7 @@ export function FileBrowserPanel({ agentId, agentName }: { agentId: string; agen
     setLoading(true)
     try {
       const query = path ? `?path=${encodeURIComponent(path)}` : ""
-      const res = await fetch(`/api/agents/${agentId}/files${query}`)
+      const res = await fetch(`/api/agents/${agentId}/files${query}`, { cache: "no-store" })
       if (res.ok) {
         setEntries(await res.json())
       }
