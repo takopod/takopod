@@ -3,10 +3,17 @@ import { useNavigate } from "react-router-dom"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Button } from "@/components/ui/button"
-import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Textarea } from "@/components/ui/textarea"
 import type { FileEntry } from "@/lib/types"
-import { ArrowLeft, Eye, File, Folder, Pencil, Save, Trash2 } from "lucide-react"
+import { ArrowLeft, Eye, File, Folder, Pencil, Save } from "lucide-react"
 
 interface FileBrowserProps {
   agentId: string
@@ -17,6 +24,19 @@ interface FileBrowserProps {
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i
 const MARKDOWN_RE = /\.md$/i
 
+function formatSize(bytes: number): string {
+  if (bytes === 0) return "0 B"
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function sortEntries(entries: FileEntry[]): FileEntry[] {
+  const dirs = entries.filter((e) => e.type === "directory").sort((a, b) => a.name.localeCompare(b.name))
+  const files = entries.filter((e) => e.type === "file").sort((a, b) => a.name.localeCompare(b.name))
+  return [...dirs, ...files]
+}
+
 export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProps) {
   const navigate = useNavigate()
   const [entries, setEntries] = useState<FileEntry[]>([])
@@ -26,18 +46,15 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
   const [loading, setLoading] = useState(false)
   const [openFile, setOpenFile] = useState<string | null>(null)
   const [currentPath, setCurrentPath] = useState("")
-  const [confirmDelete, setConfirmDelete] = useState<FileEntry | null>(null)
 
   const basePath = `/a/${encodeURIComponent(agentName ?? agentId)}/settings/files`
 
   const [previewMode, setPreviewMode] = useState(true)
 
-  const IDENTITY_FILES = new Set(["CLAUDE.md", "SOUL.md", "MEMORY.md"])
   const isImage = openFile ? IMAGE_RE.test(openFile) : false
   const isMarkdown = openFile ? MARKDOWN_RE.test(openFile) : false
   const dirty = !isImage && content !== originalContent
 
-  // Resolve initialPath: determine if it's a file or directory
   useEffect(() => {
     if (!initialPath) {
       setOpenFile(null)
@@ -55,7 +72,6 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
       setPreviewMode(true)
       return
     }
-    // Try loading as a file first
     fetch(`/api/agents/${agentId}/files/${encodeURIComponent(initialPath)}`)
       .then((res) => {
         if (res.ok) {
@@ -80,7 +96,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
       const res = await fetch(`/api/agents/${agentId}/files${params}`)
       if (res.ok) {
         const data: FileEntry[] = await res.json()
-        setEntries(data)
+        setEntries(sortEntries(data))
       }
       setLoading(false)
     },
@@ -128,22 +144,7 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
     setSaving(false)
   }
 
-  const handleDeleteConfirm = async () => {
-    if (!confirmDelete) return
-    const res = await fetch(
-      `/api/agents/${agentId}/files/${encodeURIComponent(confirmDelete.path)}`,
-      { method: "DELETE" },
-    )
-    if (res.ok) {
-      fetchEntries(currentPath)
-    }
-  }
-
-  const goUp = () => {
-    const parts = currentPath.split("/").filter(Boolean)
-    parts.pop()
-    navigateToDir(parts.join("/"))
-  }
+  const pathSegments = currentPath ? currentPath.split("/").filter(Boolean) : []
 
   if (openFile) {
     const fileName = openFile.split("/").pop() ?? openFile
@@ -230,72 +231,89 @@ export function FileBrowser({ agentId, agentName, initialPath }: FileBrowserProp
     )
   }
 
+  const dirCount = entries.filter((e) => e.type === "directory").length
+  const fileCount = entries.filter((e) => e.type === "file").length
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b px-4 py-2">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={currentPath ? goUp : () => navigate(`/a/${encodeURIComponent(agentName ?? agentId)}/settings`)}
-        >
-          <ArrowLeft className="size-4" />
-        </Button>
-        <span className="text-sm font-medium">
-          {currentPath ? `/${currentPath}` : "Workspace"}
-        </span>
-      </div>
-      <div className="flex-1 overflow-y-auto p-3">
-        {loading ? (
-          <p className="text-xs text-muted-foreground">Loading...</p>
-        ) : entries.length === 0 ? (
-          <p className="text-xs text-muted-foreground">Empty directory</p>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            {entries.map((entry) => (
-              <div
-                key={entry.path}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
-              >
-                <button
-                  type="button"
-                  onClick={() => handleOpenFile(entry)}
-                  className="flex flex-1 items-center gap-2 text-left"
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              {pathSegments.length > 0 ? (
+                <BreadcrumbLink
+                  className="cursor-pointer"
+                  onClick={() => navigateToDir("")}
                 >
-                  {entry.type === "directory" ? (
-                    <Folder className="size-4 text-muted-foreground" />
-                  ) : (
-                    <File className="size-4 text-muted-foreground" />
-                  )}
-                  <span>{entry.name}</span>
-                  {entry.size != null && (
-                    <span className="text-xs text-muted-foreground">
-                      {entry.size} B
-                    </span>
-                  )}
-                </button>
-                {entry.type === "file" && !IDENTITY_FILES.has(entry.name) && (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => setConfirmDelete(entry)}
-                  >
-                    <Trash2 className="size-3.5 text-muted-foreground" />
-                  </Button>
+                  Workspace
+                </BreadcrumbLink>
+              ) : (
+                <BreadcrumbPage>Workspace</BreadcrumbPage>
+              )}
+            </BreadcrumbItem>
+            {pathSegments.map((seg, i) => {
+              const segPath = pathSegments.slice(0, i + 1).join("/")
+              const isLast = i === pathSegments.length - 1
+              return (
+                <span key={segPath} className="contents">
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    {isLast ? (
+                      <BreadcrumbPage>{seg}</BreadcrumbPage>
+                    ) : (
+                      <BreadcrumbLink
+                        className="cursor-pointer"
+                        onClick={() => navigateToDir(segPath)}
+                      >
+                        {seg}
+                      </BreadcrumbLink>
+                    )}
+                  </BreadcrumbItem>
+                </span>
+              )
+            })}
+          </BreadcrumbList>
+        </Breadcrumb>
+        {!loading && entries.length > 0 && (
+          <span className="ml-auto text-xs text-muted-foreground">
+            {dirCount > 0 && `${dirCount} ${dirCount === 1 ? "folder" : "folders"}`}
+            {dirCount > 0 && fileCount > 0 && ", "}
+            {fileCount > 0 && `${fileCount} ${fileCount === 1 ? "file" : "files"}`}
+          </span>
+        )}
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <p className="p-4 text-xs text-muted-foreground">Loading...</p>
+        ) : entries.length === 0 ? (
+          <p className="p-4 text-xs text-muted-foreground">Empty directory</p>
+        ) : (
+          <div className="divide-y">
+            {entries.map((entry) => (
+              <button
+                key={entry.path}
+                type="button"
+                onClick={() => handleOpenFile(entry)}
+                className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors hover:bg-accent/50"
+              >
+                {entry.type === "directory" ? (
+                  <Folder className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <File className="size-4 shrink-0 text-muted-foreground" />
                 )}
-              </div>
+                <span className={entry.type === "directory" ? "font-medium" : ""}>
+                  {entry.name}
+                </span>
+                {entry.size != null && (
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {formatSize(entry.size)}
+                  </span>
+                )}
+              </button>
             ))}
           </div>
         )}
       </div>
-      <ConfirmDialog
-        open={confirmDelete !== null}
-        onOpenChange={(open) => { if (!open) setConfirmDelete(null) }}
-        title="Delete file"
-        description={confirmDelete ? `Delete ${confirmDelete.name}?` : ""}
-        confirmLabel="Delete"
-        destructive
-        onConfirm={handleDeleteConfirm}
-      />
     </div>
   )
 }

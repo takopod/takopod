@@ -1,23 +1,15 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom"
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import {
   Dialog,
   DialogContent,
@@ -38,6 +30,7 @@ import {
   Check,
   ChevronRight,
   Cpu,
+  File,
   FolderOpen,
   HardDrive,
   MessageSquare,
@@ -176,7 +169,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => navigate(`/a/${encodeURIComponent(agentName!)}/settings`)}
+          onClick={() => navigate(`/a/${encodeURIComponent(agentName!)}/settings?tab=extensions`)}
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -229,9 +222,7 @@ function McpConfigPanel({ agentId, agentName }: { agentId: string; agentName?: s
                           )}
                         </div>
                         {srv.builtin && (
-                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            BUILTIN
-                          </span>
+                          <Badge variant="outline" className="text-[10px]">BUILTIN</Badge>
                         )}
                         <Button
                           variant="ghost"
@@ -450,6 +441,423 @@ function ContainerResourcesPanel({
   )
 }
 
+interface ExtMcpServer {
+  id: string
+  name: string
+  builtin?: boolean
+  transport?: "stdio" | "http"
+  auth?: "none" | "basic" | "oauth"
+  display_name?: string
+}
+
+interface ExtSkill {
+  id: string
+  name: string
+  description: string
+  builtin: boolean
+  always_enabled: boolean
+}
+
+interface ExtDraft {
+  id: string
+  name: string
+}
+
+function AgentSettingsDashboard({
+  agentId,
+  agentName,
+  detail,
+  onSelectAgent,
+  onDeleteAgent,
+  onUpdateDetail,
+  filesMode,
+  fileSplat,
+}: {
+  agentId: string
+  agentName: string
+  detail: AgentDetail
+  onSelectAgent: (id: string) => void
+  onDeleteAgent: (id: string, deleteWorkDir?: boolean) => void
+  onUpdateDetail: (d: AgentDetail) => void
+  filesMode?: boolean
+  fileSplat?: string
+}) {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const activeTab = filesMode ? "files" : (searchParams.get("tab") || "general")
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+
+  const [mcpServers, setMcpServers] = useState<ExtMcpServer[]>([])
+  const [mcpOauth, setMcpOauth] = useState<Record<string, boolean>>({})
+  const [skills, setSkills] = useState<ExtSkill[]>([])
+  const [drafts, setDrafts] = useState<ExtDraft[]>([])
+  const [extLoading, setExtLoading] = useState(false)
+
+  const encodedName = encodeURIComponent(agentName)
+
+  const fetchExtensions = useCallback(async () => {
+    setExtLoading(true)
+    try {
+      const [mcpRes, skillsRes, draftsRes] = await Promise.all([
+        fetch(`/api/agents/${agentId}/mcp`),
+        fetch(`/api/agents/${agentId}/registry-skills`),
+        fetch(`/api/agents/${agentId}/skill-drafts`),
+      ])
+      if (mcpRes.ok) {
+        const data = await mcpRes.json()
+        const srvs: ExtMcpServer[] = data.servers || []
+        setMcpServers(srvs)
+        const statuses: Record<string, boolean> = {}
+        await Promise.all(
+          srvs
+            .filter((s) => s.auth === "oauth")
+            .map(async (s) => {
+              try {
+                const r = await fetch(`/oauth/status/${s.name}`)
+                if (r.ok) {
+                  const st = await r.json()
+                  statuses[s.name] = st.authorized
+                }
+              } catch { /* ignore */ }
+            }),
+        )
+        setMcpOauth(statuses)
+      }
+      if (skillsRes.ok) {
+        const data = await skillsRes.json()
+        setSkills(data.skills || [])
+      }
+      if (draftsRes.ok) {
+        setDrafts(await draftsRes.json())
+      }
+    } finally {
+      setExtLoading(false)
+    }
+  }, [agentId])
+
+  useEffect(() => {
+    setMcpServers([])
+    setMcpOauth({})
+    setSkills([])
+    setDrafts([])
+  }, [agentId])
+
+  useEffect(() => {
+    if (activeTab === "extensions") {
+      fetchExtensions()
+    }
+  }, [activeTab, fetchExtensions])
+
+  const handleTabChange = (value: string) => {
+    if (value === "files") {
+      navigate(`/a/${encodedName}/settings/files`)
+    } else {
+      navigate(`/a/${encodedName}/settings?tab=${value}`)
+    }
+  }
+
+  return (
+    <>
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
+        <SidebarTrigger className="-ml-1" />
+        <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+        <span className="text-sm font-medium truncate flex items-center gap-1.5">
+          <AgentIcon name={detail.icon} className="size-4" />
+          {detail.name}
+        </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm">
+              <MoreHorizontal className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuCheckboxItem checked={false} onClick={() => onSelectAgent(detail.id)}>
+              <MessageSquare className="mr-2 size-3.5" />
+              Chat
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem checked={true} className="whitespace-nowrap">
+              <Settings className="mr-2 size-3.5" />
+              Agent Settings
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-1 flex-col overflow-hidden">
+        <div className="border-b px-4">
+          <TabsList variant="line">
+            <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="extensions">Extensions</TabsTrigger>
+            <TabsTrigger value="infrastructure">Infrastructure</TabsTrigger>
+            <TabsTrigger value="files">Files</TabsTrigger>
+          </TabsList>
+        </div>
+
+        <TabsContent value="general" className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl space-y-6 p-6">
+            {/* Identity Files */}
+            <div>
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Identity Files
+              </h3>
+              <div className="rounded-md border divide-y">
+                {IDENTITY_FILES.map(({ file: f, description }) => (
+                  <button
+                    key={f}
+                    type="button"
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50"
+                    onClick={() => navigate(`/a/${encodedName}/settings/${f}`)}
+                  >
+                    <File className="size-4 shrink-0 text-muted-foreground" />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium">{f}</span>
+                      <p className="text-xs text-muted-foreground">{description}</p>
+                    </div>
+                    <Pencil className="size-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Danger Zone */}
+            <Separator />
+            <div>
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-destructive">
+                Danger Zone
+              </h3>
+              <div className="flex items-center justify-between rounded-md border border-destructive/30 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Delete this agent</p>
+                  <p className="text-xs text-muted-foreground">
+                    Once deleted, this agent cannot be recovered.
+                  </p>
+                </div>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setShowDeleteModal(true)}
+                >
+                  <Trash2 className="mr-1.5 size-3.5" />
+                  Delete Agent
+                </Button>
+              </div>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="extensions" className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl space-y-6 p-6">
+            {extLoading ? (
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            ) : (
+              <>
+                {/* MCP Servers */}
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      MCP Servers
+                      {mcpServers.length > 0 && (
+                        <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/60">
+                          ({mcpServers.length})
+                        </span>
+                      )}
+                    </h3>
+                    <Link
+                      to={`/a/${encodedName}/settings/mcp`}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Manage
+                      <ChevronRight className="size-3" />
+                    </Link>
+                  </div>
+                  {mcpServers.length === 0 ? (
+                    <div className="rounded-md border border-dashed px-4 py-6 text-center">
+                      <Server className="mx-auto mb-2 size-5 text-muted-foreground/50" />
+                      <p className="text-sm text-muted-foreground">
+                        No MCP servers attached.
+                      </p>
+                      <p className="text-xs text-muted-foreground/60 mt-1">
+                        Add one to give this agent external tool access.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3"
+                        onClick={() => navigate(`/a/${encodedName}/settings/mcp`)}
+                      >
+                        Add Server
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border divide-y">
+                      {mcpServers.map((srv) => (
+                        <div
+                          key={srv.id}
+                          className="flex items-center gap-3 px-4 py-2.5"
+                        >
+                          <span className="text-sm font-medium">
+                            {srv.display_name || srv.name}
+                          </span>
+                          <Badge variant="secondary" className="text-[10px]">
+                            {srv.transport || "stdio"}
+                          </Badge>
+                          {srv.builtin && (
+                            <Badge variant="outline" className="text-[10px]">
+                              BUILTIN
+                            </Badge>
+                          )}
+                          {srv.auth === "oauth" && (
+                            <span className={`ml-auto flex items-center gap-1.5 text-xs ${mcpOauth[srv.name] ? "text-green-600" : "text-yellow-600"}`}>
+                              <span className={`size-1.5 rounded-full ${mcpOauth[srv.name] ? "bg-green-500" : "bg-yellow-500"}`} />
+                              {mcpOauth[srv.name] ? "Authorized" : "Not authorized"}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Skills */}
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Skills
+                      {skills.length > 0 && (
+                        <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/60">
+                          ({skills.length})
+                        </span>
+                      )}
+                    </h3>
+                    <Link
+                      to={`/a/${encodedName}/settings/skills`}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Manage
+                      <ChevronRight className="size-3" />
+                    </Link>
+                  </div>
+
+                  {drafts.length > 0 && (
+                    <Link
+                      to={`/a/${encodedName}/settings/skills`}
+                      className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 transition-colors hover:bg-amber-500/10"
+                    >
+                      <Sparkles className="size-3.5 text-amber-600" />
+                      <span className="text-xs text-amber-700 dark:text-amber-400">
+                        {drafts.length} skill {drafts.length === 1 ? "draft" : "drafts"} pending review
+                      </span>
+                      <ChevronRight className="ml-auto size-3 text-amber-600" />
+                    </Link>
+                  )}
+
+                  {skills.length === 0 ? (
+                    <div className="rounded-md border border-dashed px-4 py-6 text-center">
+                      <Sparkles className="mx-auto mb-2 size-5 text-muted-foreground/50" />
+                      <p className="text-sm text-muted-foreground">
+                        No skills attached.
+                      </p>
+                      <p className="text-xs text-muted-foreground/60 mt-1">
+                        Add skills to give this agent reusable capabilities.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3"
+                        onClick={() => navigate(`/a/${encodedName}/settings/skills`)}
+                      >
+                        Add Skill
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border divide-y">
+                      {skills.map((skill) => (
+                        <div
+                          key={skill.id}
+                          className="flex items-center gap-3 px-4 py-2.5"
+                        >
+                          <span className="text-sm font-medium">{skill.name}</span>
+                          {skill.always_enabled && (
+                            <Badge variant="outline" className="text-[10px]">
+                              BUILTIN
+                            </Badge>
+                          )}
+                          {skill.description && (
+                            <span className="ml-auto text-xs text-muted-foreground truncate max-w-[200px]">
+                              {skill.description}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="infrastructure" className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl p-6">
+            <ContainerResourcesPanel agentId={agentId} detail={detail} onUpdate={onUpdateDetail} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="files" className="flex-1 overflow-hidden">
+          <FileBrowser agentId={agentId} agentName={agentName} initialPath={fileSplat} />
+        </TabsContent>
+      </Tabs>
+
+      <Dialog open={showDeleteModal} onOpenChange={setShowDeleteModal}>
+        <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Delete "{detail.name}"?</DialogTitle>
+            <DialogDescription>
+              This will archive the agent, stop any running containers, and remove it from the sidebar. Choose whether to keep or delete the agent's workspace files.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Button
+              variant="outline"
+              className="w-full justify-start"
+              onClick={() => {
+                setShowDeleteModal(false)
+                onDeleteAgent(detail.id, false)
+              }}
+            >
+              <FolderOpen className="mr-2 size-4" />
+              Keep Agent Workspace
+            </Button>
+            <Button
+              variant="destructive"
+              className="w-full justify-start"
+              onClick={() => {
+                setShowDeleteModal(false)
+                onDeleteAgent(detail.id, true)
+              }}
+            >
+              <Trash2 className="mr-2 size-4" />
+              Delete Everything
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full"
+              onClick={() => setShowDeleteModal(false)
+              }
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
 interface AgentsViewProps {
   agents: Agent[]
   onSelectAgent: (id: string) => void
@@ -466,7 +874,6 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
   const [content, setContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
-  const [showDeleteModal, setShowDeleteModal] = useState(false)
 
   const location = useLocation()
   const pathAfterAgent = agentName ? location.pathname.split(`/a/${encodeURIComponent(agentName)}/settings/`)[1] ?? "" : ""
@@ -529,231 +936,17 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
         <McpConfigPanel agentId={agentId} agentName={agentName} />
       ) : showSkills ? (
         <SkillsPanel agentId={agentId} agentName={agentName} initialPath={skillsSplat} />
-      ) : showFileBrowser ? (
-        <FileBrowser agentId={agentId} agentName={agentName} initialPath={fileSplat} />
-      ) : !openFile ? (
-        <>
-          <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
-            <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-            <span className="text-sm font-medium truncate flex items-center gap-1.5">
-              <AgentIcon name={detail.icon} className="size-4" />
-              {detail.name}
-            </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm">
-                  <MoreHorizontal className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuCheckboxItem checked={false} onClick={() => onSelectAgent(detail.id)}>
-                  <MessageSquare className="mr-2 size-3.5" />
-                  Chat
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem checked={true} className="whitespace-nowrap">
-                  <Settings className="mr-2 size-3.5" />
-                  Agent Settings
-                </DropdownMenuCheckboxItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-3xl space-y-6 p-6">
-            {/* Configuration */}
-            <div>
-              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Configuration
-              </h3>
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>File</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead className="w-10" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {IDENTITY_FILES.map(({ file: f, description }) => (
-                      <TableRow key={f}>
-                        <TableCell className="font-medium">{f}</TableCell>
-                        <TableCell className="text-muted-foreground">{description}</TableCell>
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="size-8">
-                                <MoreHorizontal className="size-4" />
-                                <span className="sr-only">Open menu</span>
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => navigate(`/a/${encodeURIComponent(agentName!)}/settings/${f}`)}>
-                                <Pencil className="mr-2 size-3.5" />
-                                Edit
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-
-            {/* Tools & Extensions */}
-            <div>
-              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Tools & Extensions
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/mcp`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Server className="size-4 text-muted-foreground" />
-                        MCP Servers
-                      </CardTitle>
-                      <CardDescription>External tool integrations</CardDescription>
-                      <CardAction>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </CardAction>
-                    </CardHeader>
-                  </Card>
-                </Link>
-
-                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/skills`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Sparkles className="size-4 text-muted-foreground" />
-                        Skills
-                      </CardTitle>
-                      <CardDescription>Agent capabilities</CardDescription>
-                      <CardAction>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </CardAction>
-                    </CardHeader>
-                  </Card>
-                </Link>
-
-              </div>
-            </div>
-
-            {/* Files */}
-            <div>
-              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Files
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/files/memory`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <FolderOpen className="size-4 text-muted-foreground" />
-                        Memory Files
-                      </CardTitle>
-                      <CardDescription>Agent memory directory</CardDescription>
-                      <CardAction>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </CardAction>
-                    </CardHeader>
-                  </Card>
-                </Link>
-
-                <Link to={`/a/${encodeURIComponent(agentName!)}/settings/files`} className="block">
-                  <Card size="sm" className="h-full transition-colors hover:bg-muted/50">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <FolderOpen className="size-4 text-muted-foreground" />
-                        Workspace
-                      </CardTitle>
-                      <CardDescription>Browse all agent files</CardDescription>
-                      <CardAction>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </CardAction>
-                    </CardHeader>
-                  </Card>
-                </Link>
-              </div>
-
-            </div>
-
-            {/* Container Settings */}
-            <ContainerResourcesPanel agentId={agentId} detail={detail} onUpdate={setDetail} />
-
-            {/* Danger Zone */}
-            <Separator />
-            <div>
-              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-destructive">
-                Danger Zone
-              </h3>
-              <div className="flex items-center justify-between rounded-md border border-destructive/30 px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium">Delete this agent</p>
-                  <p className="text-xs text-muted-foreground">
-                    Once deleted, this agent cannot be recovered.
-                  </p>
-                </div>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => setShowDeleteModal(true)}
-                >
-                  <Trash2 className="mr-1.5 size-3.5" />
-                  Delete Agent
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <Dialog open={showDeleteModal} onOpenChange={setShowDeleteModal}>
-          <DialogContent className="sm:max-w-sm" showCloseButton={false}>
-            <DialogHeader>
-              <DialogTitle>Delete "{detail.name}"?</DialogTitle>
-              <DialogDescription>
-                This will archive the agent, stop any running containers, and remove it from the sidebar. Choose whether to keep or delete the agent's workspace files.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-col gap-2">
-              <Button
-                variant="outline"
-                className="w-full justify-start"
-                onClick={() => {
-                  setShowDeleteModal(false)
-                  onDeleteAgent(detail.id, false)
-                }}
-              >
-                <FolderOpen className="mr-2 size-4" />
-                Keep Agent Workspace
-              </Button>
-              <Button
-                variant="destructive"
-                className="w-full justify-start"
-                onClick={() => {
-                  setShowDeleteModal(false)
-                  onDeleteAgent(detail.id, true)
-                }}
-              >
-                <Trash2 className="mr-2 size-4" />
-                Delete Everything
-              </Button>
-            </div>
-            <DialogFooter>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full"
-                onClick={() => setShowDeleteModal(false)}
-              >
-                Cancel
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-        </>
+      ) : !openFile || showFileBrowser ? (
+        <AgentSettingsDashboard
+          agentId={agentId}
+          agentName={agentName!}
+          detail={detail}
+          onSelectAgent={onSelectAgent}
+          onDeleteAgent={onDeleteAgent}
+          onUpdateDetail={setDetail}
+          filesMode={showFileBrowser}
+          fileSplat={fileSplat}
+        />
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="flex items-center gap-3 border-b px-4 py-2">
@@ -783,6 +976,7 @@ export function AgentsView({ agents, onSelectAgent, onDeleteAgent }: AgentsViewP
               setContent(v)
               setDirty(true)
             }}
+            markdown
           />
         </div>
       )}

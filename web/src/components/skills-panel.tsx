@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { FileEditor } from "@/components/file-editor"
-import { ArrowLeft, Pencil, Plus, Search, Square, Trash2, X } from "lucide-react"
+import { ArrowLeft, Pencil, Plus, Search, Trash2, X } from "lucide-react"
 
 interface RegistrySkill {
   id: string
@@ -57,7 +58,6 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
   const [availableLoaded, setAvailableLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<SkillDetail | null>(null)
-  const [stopping, setStopping] = useState(false)
   const [search, setSearch] = useState("")
   const [searchFocused, setSearchFocused] = useState(false)
   const [customSkills, setCustomSkills] = useState<CustomSkill[]>([])
@@ -134,26 +134,6 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
       setDraftEditing(false)
     }
   }, [viewType, viewId, agentId])
-
-  const handleStop = async () => {
-    setStopping(true)
-    try {
-      const res = await fetch("/api/containers")
-      if (res.ok) {
-        const containers = await res.json()
-        const active = containers.find(
-          (c: { agent_id: string; status: string }) =>
-            c.agent_id === agentId &&
-            ["running", "idle", "starting"].includes(c.status),
-        )
-        if (active) {
-          await fetch(`/api/containers/${active.id}`, { method: "DELETE" })
-        }
-      }
-    } finally {
-      setStopping(false)
-    }
-  }
 
   const handleAdd = async (skillId: string) => {
     const res = await fetch(`/api/agents/${agentId}/registry-skills/${skillId}`, {
@@ -242,15 +222,14 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
             <ArrowLeft className="size-4" />
           </Button>
           <span className="text-sm font-medium">{selectedDraft.name}</span>
-          <span className="text-[10px] rounded bg-amber-500/10 text-amber-600 px-1.5 py-0.5 font-medium">
-            DRAFT
-          </span>
+          <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/30">DRAFT</Badge>
         </div>
 
         <FileEditor
           value={draftEditing ? draftEditContent : selectedDraft.content}
           onChange={draftEditing ? setDraftEditContent : undefined}
           readOnly={!draftEditing}
+          markdown
         />
 
         {selectedDraft.files.length > 0 && (
@@ -327,9 +306,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
           </Button>
           <span className="text-sm font-medium">{selected.name}</span>
           {isCustom ? (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              CUSTOM
-            </span>
+            <Badge variant="outline" className="text-[10px]">CUSTOM</Badge>
           ) : (
             <span className="text-xs text-muted-foreground ml-auto">
               Read-only (edit in System Skills)
@@ -341,6 +318,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
           value={draftEditing ? draftEditContent : selected.content}
           onChange={draftEditing ? setDraftEditContent : undefined}
           readOnly={!draftEditing}
+          markdown
         />
 
         {selected.description && !draftEditing && (
@@ -430,24 +408,13 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => navigate(`/a/${encodeURIComponent(agentName ?? agentId)}/settings`)}
+          onClick={() => navigate(`/a/${encodeURIComponent(agentName ?? agentId)}/settings?tab=extensions`)}
         >
           <ArrowLeft className="size-4" />
         </Button>
         <span className="text-sm font-medium">
           Skills{drafts.length > 0 && ` (${drafts.length} ${drafts.length === 1 ? "draft" : "drafts"})`}
         </span>
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleStop}
-            disabled={stopping}
-          >
-            <Square className="mr-1.5 size-3 fill-current" />
-            {stopping ? "Stopping..." : "Stop Worker"}
-          </Button>
-        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
@@ -481,9 +448,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                         )}
                       </button>
                       <Pencil className="size-3.5 text-muted-foreground shrink-0" />
-                      <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
-                        DRAFT
-                      </span>
+                      <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/30">DRAFT</Badge>
                     </div>
                   ))}
                 </div>
@@ -574,9 +539,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                       )}
                     </button>
                     {skill.always_enabled ? (
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                        BUILTIN
-                      </span>
+                      <Badge variant="outline" className="text-[10px]">BUILTIN</Badge>
                     ) : (
                       <Button
                         variant="ghost"
@@ -613,9 +576,7 @@ export function SkillsPanel({ agentId, agentName, initialPath }: { agentId: stri
                           </span>
                         )}
                       </div>
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                        CUSTOM
-                      </span>
+                      <Badge variant="outline" className="text-[10px]">CUSTOM</Badge>
                     </button>
                   ))}
                 </div>
