@@ -422,12 +422,10 @@ export function ChatMessageList({
                 )
               ) : msg.status === "streaming" && !msg.content ? (
                 <span className="inline-block animate-pulse text-muted-foreground text-xs">&nbsp;</span>
-              ) : msg.role === "assistant" ? (
+              ) : (
                 <div className="markdown-body">
                   <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{msg.content}</Markdown>
                 </div>
-              ) : (
-                <span className="whitespace-pre-wrap break-all">{msg.content}</span>
               )}
               {msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
                 <AttachmentChips paths={msg.attachments} agentId={agentId} />

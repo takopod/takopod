@@ -192,6 +192,9 @@
   color: var(--color-primary);
   text-decoration: underline;
 }
+.bg-primary .markdown-body a {
+  color: inherit;
+}
 .markdown-body blockquote {
   border-left: 3px solid var(--color-border);
   padding-left: 0.75em;
