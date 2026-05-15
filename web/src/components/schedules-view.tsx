@@ -29,9 +29,9 @@ import {
   Pencil,
   Play,
   Plus,
-  ToggleRight,
   Trash2,
   X,
+  Zap,
 } from "lucide-react"
 
 interface Schedule {
@@ -450,7 +450,7 @@ export function SchedulesView() {
                     {triggeringId === s.id ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : (
-                      <Play className="size-3.5" />
+                      <Zap className="size-3.5" />
                     )}
                   </Button>
                   <Button
@@ -470,7 +470,7 @@ export function SchedulesView() {
                     {s.status === "enabled" ? (
                       <Pause className="size-3.5" />
                     ) : (
-                      <ToggleRight className="size-3.5" />
+                      <Play className="size-3.5" />
                     )}
                   </Button>
                   <Button
