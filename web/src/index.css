@@ -195,6 +195,14 @@
 .bg-primary .markdown-body a {
   color: inherit;
 }
+.bg-primary .markdown-body code {
+  background: rgba(255, 255, 255, 0.2);
+  color: inherit;
+}
+.bg-primary .markdown-body pre {
+  background: rgba(255, 255, 255, 0.15);
+  color: inherit;
+}
 .markdown-body blockquote {
   border-left: 3px solid var(--color-border);
   padding-left: 0.75em;
