@@ -8,6 +8,7 @@ import { ContainersView } from "@/components/containers-view"
 import { SchedulesView } from "@/components/schedules-view"
 import { SystemSkillsView } from "@/components/system-skills-view"
 import { SystemMcpView } from "@/components/system-mcp-view"
+import { SettingsLayout } from "@/components/settings-layout"
 import { SettingsView } from "@/components/settings-view"
 import { SlackView } from "@/components/slack-view"
 import { SearchIndexView } from "@/components/search-index-view"
@@ -360,23 +361,14 @@ export function App() {
                 />
               }
             />
-            <Route path="/settings" element={<SettingsView />} />
-            <Route path="/settings/slack" element={<SlackView />} />
-            <Route
-              path="/settings/containers"
-              element={<ContainersView />}
-            />
-            <Route
-              path="/settings/containers/:containerName/logs"
-              element={<ContainerLogsView />}
-            />
-            <Route
-              path="/settings/queue"
-              element={
-                <QueueStatusPanel status={queueStatus} connected={connected} />
-              }
-            />
-            <Route path="/settings/search-index" element={<SearchIndexView />} />
+            <Route path="/settings" element={<SettingsLayout queueStatus={queueStatus} connected={connected} />}>
+              <Route index element={<SettingsView />} />
+              <Route path="slack" element={<SlackView />} />
+              <Route path="containers" element={<ContainersView />} />
+              <Route path="search-index" element={<SearchIndexView />} />
+              <Route path="queue" element={<QueueStatusPanel />} />
+            </Route>
+            <Route path="/settings/containers/:containerName/logs" element={<ContainerLogsView />} />
             <Route path="/skills" element={<SystemSkillsView />} />
             <Route path="/mcp" element={<SystemMcpView />} />
             <Route path="/schedules" element={<SchedulesView />} />

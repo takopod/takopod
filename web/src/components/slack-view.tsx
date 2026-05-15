@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -28,7 +27,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  ArrowLeft,
   Check,
   Hash,
   Loader2,
@@ -348,7 +346,6 @@ function MonitoredThreadsSection({
 export function SlackView() {
   const [config, setConfig] = useState<SlackConfig>({ configured: false })
   const [status, setStatus] = useState<SlackStatus | null>(null)
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
 
@@ -470,12 +467,7 @@ export function SlackView() {
   }
 
   const loadAll = useCallback(async () => {
-    setLoading(true)
-    try {
-      await Promise.all([fetchConfig(), fetchPolling(), fetchThreadTtl(), fetchThreads()])
-    } finally {
-      setLoading(false)
-    }
+    await Promise.all([fetchConfig(), fetchPolling(), fetchThreadTtl(), fetchThreads()])
   }, [fetchConfig, fetchPolling, fetchThreadTtl, fetchThreads])
 
   useEffect(() => {
@@ -574,29 +566,6 @@ export function SlackView() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Header */}
-      <div className="border-b px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link to="/settings">
-              <Button variant="ghost" size="icon-sm">
-                <ArrowLeft className="size-3.5" />
-              </Button>
-            </Link>
-            <div>
-              <h2 className="text-lg font-semibold tracking-tight">Slack Integration</h2>
-              <p className="text-xs text-muted-foreground">
-                Connect Slack to enable agent communication via channels and threads
-              </p>
-            </div>
-          </div>
-          <Button variant="ghost" size="icon-sm" onClick={loadAll} disabled={loading}>
-            <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-          </Button>
-        </div>
-      </div>
-
-      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-5 p-5">
           {/* Connection Status */}

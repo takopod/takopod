@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 
-import { ArrowLeft, FileText, RefreshCw, Trash2 } from "lucide-react"
+import { FileText, RefreshCw, Trash2 } from "lucide-react"
 
 interface Container {
   id: string
@@ -64,15 +64,7 @@ export function ContainersView() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <div className="flex items-center gap-2">
-          <Link to="/settings">
-            <Button variant="ghost" size="icon-sm">
-              <ArrowLeft className="size-3.5" />
-            </Button>
-          </Link>
-          <span className="text-sm font-medium">Containers</span>
-        </div>
+      <div className="flex items-center justify-end px-4 pt-3">
         <Button variant="outline" size="sm" onClick={fetchContainers} disabled={loading}>
           <RefreshCw className={`mr-1.5 size-3.5 ${loading ? "animate-spin" : ""}`} />
           Refresh

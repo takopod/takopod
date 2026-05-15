@@ -14,11 +14,6 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import { Button } from "@/components/ui/button"
 import { useTheme } from "@/components/theme-provider"
 import {
@@ -31,17 +26,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { SortableAgentItem } from "@/components/sortable-agent-item"
 import type { Agent } from "@/lib/types"
 import {
   Calendar,
-  ChevronRight,
-  Hash,
   MessageSquare,
   Moon,
   Plus,
@@ -209,49 +199,18 @@ export function AppSidebar({
               </SidebarMenuButton>
             </SidebarMenuItem>
 
-            <Collapsible
-              asChild
-              defaultOpen={currentPath.startsWith("/settings")}
-              className="group/collapsible"
-            >
-              <SidebarMenuItem>
-                <CollapsibleTrigger asChild>
-                  <SidebarMenuButton
-                    isActive={currentPath.startsWith("/settings")}
-                    tooltip="Settings"
-                  >
-                    <Settings />
-                    <span>Settings</span>
-                    <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-                  </SidebarMenuButton>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <SidebarMenuSub>
-                    <SidebarMenuSubItem>
-                      <SidebarMenuSubButton
-                        asChild
-                        isActive={currentPath === "/settings"}
-                      >
-                        <Link to="/settings">
-                          <span>General</span>
-                        </Link>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem>
-                      <SidebarMenuSubButton
-                        asChild
-                        isActive={currentPath === "/settings/slack"}
-                      >
-                        <Link to="/settings/slack">
-                          <Hash className="size-3.5" />
-                          <span>Slack</span>
-                        </Link>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                  </SidebarMenuSub>
-                </CollapsibleContent>
-              </SidebarMenuItem>
-            </Collapsible>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={currentPath.startsWith("/settings")}
+                tooltip="Settings"
+              >
+                <Link to="/settings">
+                  <Settings />
+                  <span>Settings</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>

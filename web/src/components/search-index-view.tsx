@@ -12,7 +12,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  ArrowLeft,
   ChevronDown,
   ChevronRight,
   Pencil,
@@ -259,28 +258,12 @@ export function SearchIndexView() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <div className="flex items-center gap-2">
-          <Link to="/settings">
-            <Button variant="ghost" size="icon-sm">
-              <ArrowLeft className="size-3.5" />
-            </Button>
-          </Link>
-          <span className="text-sm font-medium">Search Index</span>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            fetchStats()
-          }}
-        >
+      <div className="flex items-center justify-end px-4 pt-3">
+        <Button variant="outline" size="sm" onClick={fetchStats}>
           <RefreshCw className="mr-1.5 size-3.5" />
           Refresh
         </Button>
       </div>
-
       <div className="flex-1 overflow-auto">
         {!selectedAgentId ? (
           <p className="p-4 text-sm text-muted-foreground">

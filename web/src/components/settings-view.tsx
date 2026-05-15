@@ -1,19 +1,14 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import {
-  ChevronRight,
   Container,
-  Database,
-  ListChecks,
   MessageSquare,
   RefreshCw,
   Search,
-  Server,
   Settings,
   Timer,
 } from "lucide-react"
@@ -26,18 +21,12 @@ interface OllamaStatus {
 export function SettingsView() {
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null)
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [checkingOllama, setCheckingOllama] = useState(false)
 
   const fetchSettings = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await fetch("/api/settings")
-      if (res.ok) setSettings(await res.json())
-    } finally {
-      setLoading(false)
-    }
+    const res = await fetch("/api/settings")
+    if (res.ok) setSettings(await res.json())
   }, [])
 
   const fetchOllamaStatus = useCallback(async () => {
@@ -85,27 +74,6 @@ export function SettingsView() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Header */}
-      <div className="border-b px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-            <p className="text-xs text-muted-foreground">
-              Configure platform defaults and integrations
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => { fetchSettings(); fetchOllamaStatus() }}
-            disabled={loading}
-          >
-            <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-          </Button>
-        </div>
-      </div>
-
-      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-5 p-5">
           {/* General Settings */}
@@ -192,21 +160,6 @@ export function SettingsView() {
                   />
                 </div>
               )}
-              <NavLink to="/settings/search-index" icon={<Database className="size-4" />} label="Search Index" />
-            </CardContent>
-          </Card>
-
-          {/* System */}
-          <Card size="sm">
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Server className="size-4 text-muted-foreground" />
-                <CardTitle>System</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-1 pt-0">
-              <NavLink to="/settings/containers" icon={<Container className="size-4" />} label="Containers" />
-              <NavLink to="/settings/queue" icon={<ListChecks className="size-4" />} label="Queue Status" />
             </CardContent>
           </Card>
 
@@ -294,21 +247,6 @@ export function SettingsView() {
         </div>
       </div>
     </div>
-  )
-}
-
-function NavLink({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
-  return (
-    <Link
-      to={to}
-      className="flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium hover:bg-muted/50 transition-colors"
-    >
-      <div className="flex items-center gap-2.5 text-muted-foreground">
-        {icon}
-        <span className="text-foreground">{label}</span>
-      </div>
-      <ChevronRight className="size-4 text-muted-foreground" />
-    </Link>
   )
 }
 
