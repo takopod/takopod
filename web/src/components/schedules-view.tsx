@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -8,9 +9,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -18,17 +25,39 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import {
-  ChevronDown,
-  ChevronRight,
+  Activity,
+  Clock,
   Copy,
+  Eye,
+  EyeOff,
   Info,
   Loader2,
+  MoreHorizontal,
   Pause,
   Pencil,
   Play,
   Plus,
+  Search,
+  Timer,
   Trash2,
   X,
   Zap,
@@ -75,7 +104,7 @@ interface WebhookInfo {
 }
 
 function formatInterval(seconds: number): string {
-  if (seconds <= 0) return "-"
+  if (seconds <= 0) return "--"
   const mins = Math.floor(seconds / 60)
   if (mins < 60) return `${mins}m`
   const hours = Math.floor(mins / 60)
@@ -106,10 +135,28 @@ function triggerLabel(t: string): string {
   return labels[t] || t
 }
 
+function triggerBadgeClass(type: string): string {
+  switch (type) {
+    case "interval":
+      return "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400"
+    case "webhook":
+      return "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400"
+    case "file_watch":
+      return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+    case "github_pr":
+    case "github_issues":
+      return "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-400"
+    case "slack_channel":
+      return "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400"
+    default:
+      return ""
+  }
+}
+
 export function SchedulesView() {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -146,6 +193,9 @@ export function SchedulesView() {
   const [showTriggerInfo, setShowTriggerInfo] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [triggeringId, setTriggeringId] = useState<string | null>(null)
+
+  const [activeTab, setActiveTab] = useState("all")
+  const [searchQuery, setSearchQuery] = useState("")
 
   const fetchSchedules = useCallback(async () => {
     setLoading(true)
@@ -377,141 +427,372 @@ export function SchedulesView() {
 
   const editingSchedule = schedules.find((s) => s.id === editingId)
 
+  const activeCount = schedules.filter((s) => s.status === "enabled").length
+  const pausedCount = schedules.filter((s) => s.status !== "enabled").length
+  const recentRunCount = schedules.filter((s) => {
+    if (!s.last_executed_at) return false
+    return Date.now() - new Date(s.last_executed_at).getTime() < 24 * 60 * 60 * 1000
+  }).length
+
+  const filteredSchedules = useMemo(() => {
+    let result = [...schedules].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )
+    if (activeTab === "active") result = result.filter((s) => s.status === "enabled")
+    if (activeTab === "paused") result = result.filter((s) => s.status !== "enabled")
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      result = result.filter(
+        (s) =>
+          s.agent_name.toLowerCase().includes(q) ||
+          s.prompt.toLowerCase().includes(q) ||
+          triggerLabel(s.trigger_type).includes(q)
+      )
+    }
+    return result
+  }, [schedules, activeTab, searchQuery])
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-sm font-medium">Schedules</span>
-        <Button size="sm" onClick={() => setShowCreate(true)}>
-          <Plus className="mr-1.5 size-3.5" />
-          New Schedule
-        </Button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mx-auto max-w-3xl flex flex-col gap-3">
-          {schedules.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              {loading
-                ? "Loading..."
-                : "No scheduled tasks. Click \"New Schedule\" or ask an agent to create one."}
+      {/* Header */}
+      <div className="border-b px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">Schedules</h2>
+            <p className="text-xs text-muted-foreground">
+              Manage automated agent tasks and triggers
             </p>
-          )}
-
-          {schedules.map((s) => (
-            <div key={s.id} className="rounded-md border px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex flex-col gap-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{s.agent_name}</span>
-                    <Badge variant="outline" className="text-[10px]">
-                      {triggerLabel(s.trigger_type)}
-                    </Badge>
-                    <Badge variant={s.status === "enabled" ? "default" : "secondary"}>
-                      {s.status}
-                    </Badge>
-                    {s.interval_seconds > 0 && (
-                      <span className="text-xs text-muted-foreground font-mono">
-                        every {formatInterval(s.interval_seconds)}
-                      </span>
-                    )}
-                    {s.model && (
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {s.model}
-                      </span>
-                    )}
-                    {s.full_context && (
-                      <Badge variant="outline" className="text-[10px]">
-                        full context
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="font-mono">{s.id.slice(0, 8)}</span>
-                    {s.last_checked_at && (
-                      <Badge variant="outline" className="text-[10px] font-normal">
-                        checked {timeAgo(s.last_checked_at)}
-                      </Badge>
-                    )}
-                    {s.last_executed_at && (
-                      <Badge variant="outline" className="text-[10px] font-normal">
-                        ran {timeAgo(s.last_executed_at)}
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    title="Run now"
-                    disabled={triggeringId === s.id}
-                    onClick={() => handleRunNow(s.id)}
-                  >
-                    {triggeringId === s.id ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Zap className="size-3.5" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    title="Edit"
-                    onClick={() => startEditing(s)}
-                  >
-                    <Pencil className="size-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    title={s.status === "enabled" ? "Pause" : "Resume"}
-                    onClick={() => handleToggle(s.id, s.status)}
-                  >
-                    {s.status === "enabled" ? (
-                      <Pause className="size-3.5" />
-                    ) : (
-                      <Play className="size-3.5" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    title="Delete"
-                    onClick={() => setConfirmDeleteId(s.id)}
-                  >
-                    <Trash2 className="size-3.5 text-destructive" />
-                  </Button>
-                  {s.last_result && (
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => setExpandedId(expandedId === s.id ? null : s.id)}
-                    >
-                      {expandedId === s.id ? (
-                        <ChevronDown className="size-3.5" />
-                      ) : (
-                        <ChevronRight className="size-3.5" />
-                      )}
-                    </Button>
-                  )}
-                </div>
-              </div>
-              {expandedId === s.id && s.last_result && (
-                <div className="mt-3 border-t pt-3">
-                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
-                    Last Result
-                  </div>
-                  <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                    {s.last_result}
-                  </pre>
-                </div>
-              )}
-            </div>
-          ))}
+          </div>
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="mr-1 size-3.5" />
+            New Schedule
+          </Button>
         </div>
       </div>
 
-      {/* Create Schedule Dialog */}
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-5xl space-y-5 p-5">
+          {/* Stat Cards */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Card size="sm" className="gap-0">
+              <CardContent className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+                  <Timer className="size-4 text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Total</p>
+                  <p className="text-xl font-semibold tracking-tight">{schedules.length}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card size="sm" className="gap-0">
+              <CardContent className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-emerald-500/10">
+                  <Activity className="size-4 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Active</p>
+                  <p className="text-xl font-semibold tracking-tight">{activeCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card size="sm" className="gap-0">
+              <CardContent className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+                  <Pause className="size-4 text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Paused</p>
+                  <p className="text-xl font-semibold tracking-tight">{pausedCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card size="sm" className="gap-0">
+              <CardContent className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-blue-500/10">
+                  <Clock className="size-4 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Ran Today</p>
+                  <p className="text-xl font-semibold tracking-tight">{recentRunCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Tabs + Search */}
+          <div className="flex items-center justify-between gap-4">
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
+              <TabsList>
+                <TabsTrigger value="all">
+                  All
+                  <Badge variant="secondary" className="ml-1 h-4 min-w-5 px-1 text-[10px]">
+                    {schedules.length}
+                  </Badge>
+                </TabsTrigger>
+                <TabsTrigger value="active">
+                  Active
+                  <Badge variant="secondary" className="ml-1 h-4 min-w-5 px-1 text-[10px]">
+                    {activeCount}
+                  </Badge>
+                </TabsTrigger>
+                <TabsTrigger value="paused">
+                  Paused
+                  <Badge variant="secondary" className="ml-1 h-4 min-w-5 px-1 text-[10px]">
+                    {pausedCount}
+                  </Badge>
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search schedules..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-8 w-56 pl-8 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Data Table */}
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="pl-4">Agent</TableHead>
+                  <TableHead>Trigger</TableHead>
+                  <TableHead className="min-w-[180px]">Prompt</TableHead>
+                  <TableHead>Every</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Last Activity</TableHead>
+                  <TableHead className="w-10 pr-4"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading && schedules.length === 0 && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={7} className="h-32 text-center">
+                      <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                        <Loader2 className="size-4 animate-spin" />
+                        <span className="text-sm">Loading schedules...</span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!loading && filteredSchedules.length === 0 && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={7} className="h-32 text-center">
+                      <div className="flex flex-col items-center gap-1.5 text-muted-foreground">
+                        <Timer className="size-8 opacity-30" />
+                        <p className="text-sm">
+                          {schedules.length === 0
+                            ? "No scheduled tasks yet"
+                            : "No schedules match your filters"}
+                        </p>
+                        {schedules.length === 0 && (
+                          <p className="text-xs">
+                            Click "New Schedule" or ask an agent to create one.
+                          </p>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {filteredSchedules.map((s) => (
+                  <Fragment key={s.id}>
+                    <TableRow>
+                      {/* Agent */}
+                      <TableCell className="pl-4">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-sm font-medium">{s.agent_name}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono text-[10px] text-muted-foreground">
+                                    {s.id.slice(0, 8)}
+                                  </span>
+                                  {s.model && (
+                                    <Badge variant="outline" className="h-4 px-1 text-[10px] font-normal">
+                                      {s.model}
+                                    </Badge>
+                                  )}
+                                  {s.full_context && (
+                                    <Badge variant="outline" className="h-4 px-1 text-[10px] font-normal">
+                                      full ctx
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                              <span>ID: {s.id}</span>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </TableCell>
+
+                      {/* Trigger */}
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={`text-[11px] font-normal ${triggerBadgeClass(s.trigger_type)}`}
+                        >
+                          {triggerLabel(s.trigger_type)}
+                        </Badge>
+                      </TableCell>
+
+                      {/* Prompt */}
+                      <TableCell>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <p className="max-w-[280px] truncate text-sm text-muted-foreground">
+                                {s.prompt}
+                              </p>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="max-w-sm">
+                              <span className="whitespace-pre-wrap">{s.prompt}</span>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </TableCell>
+
+                      {/* Interval */}
+                      <TableCell>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {formatInterval(s.interval_seconds)}
+                        </span>
+                      </TableCell>
+
+                      {/* Status */}
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`size-2 rounded-full ${
+                              s.status === "enabled"
+                                ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]"
+                                : "bg-muted-foreground/40"
+                            }`}
+                          />
+                          <span className="text-xs">
+                            {s.status === "enabled" ? "Active" : "Paused"}
+                          </span>
+                        </div>
+                      </TableCell>
+
+                      {/* Last Activity */}
+                      <TableCell>
+                        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                          {s.last_executed_at && (
+                            <span>Ran {timeAgo(s.last_executed_at)}</span>
+                          )}
+                          {s.last_checked_at && (
+                            <span>Checked {timeAgo(s.last_checked_at)}</span>
+                          )}
+                          {!s.last_executed_at && !s.last_checked_at && (
+                            <span className="italic">Never</span>
+                          )}
+                        </div>
+                      </TableCell>
+
+                      {/* Actions */}
+                      <TableCell className="pr-4">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon-xs">
+                              <MoreHorizontal className="size-3.5" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => handleRunNow(s.id)}
+                              disabled={triggeringId === s.id}
+                            >
+                              {triggeringId === s.id ? (
+                                <Loader2 className="size-4 animate-spin" />
+                              ) : (
+                                <Zap className="size-4" />
+                              )}
+                              Run Now
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => startEditing(s)}>
+                              <Pencil className="size-4" />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleToggle(s.id, s.status)}>
+                              {s.status === "enabled" ? (
+                                <Pause className="size-4" />
+                              ) : (
+                                <Play className="size-4" />
+                              )}
+                              {s.status === "enabled" ? "Pause" : "Resume"}
+                            </DropdownMenuItem>
+                            {s.last_result && (
+                              <DropdownMenuItem
+                                onClick={() => setExpandedId(expandedId === s.id ? null : s.id)}
+                              >
+                                {expandedId === s.id ? (
+                                  <EyeOff className="size-4" />
+                                ) : (
+                                  <Eye className="size-4" />
+                                )}
+                                {expandedId === s.id ? "Hide Result" : "View Result"}
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={() => setConfirmDeleteId(s.id)}
+                            >
+                              <Trash2 className="size-4" />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+
+                    {/* Expanded Result Row */}
+                    {expandedId === s.id && s.last_result && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={7} className="bg-muted/30 px-6 py-4">
+                          <div className="mb-2 flex items-center justify-between">
+                            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                              Last Result
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              onClick={() => setExpandedId(null)}
+                            >
+                              <X className="size-3" />
+                            </Button>
+                          </div>
+                          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-sm leading-relaxed">
+                            {s.last_result}
+                          </pre>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Footer stats */}
+          {filteredSchedules.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Showing {filteredSchedules.length} of {schedules.length} schedule{schedules.length !== 1 ? "s" : ""}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Create Schedule Dialog ── */}
       <Dialog open={showCreate} onOpenChange={(open) => { if (!open) closeCreateDialog() }}>
         <DialogContent className="sm:max-w-lg">
           {webhookInfo ? (
@@ -651,13 +932,12 @@ export function SchedulesView() {
                   </Select>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
+                <div className="flex items-center gap-2.5">
+                  <Switch
                     id="new-full-context"
+                    size="sm"
                     checked={newFullContext}
-                    onChange={(e) => setNewFullContext(e.target.checked)}
-                    className="size-3.5 rounded border-input accent-primary"
+                    onCheckedChange={setNewFullContext}
                   />
                   <Label htmlFor="new-full-context" className="text-xs cursor-pointer">
                     Full context (include memory, personality, and search results)
@@ -846,14 +1126,17 @@ export function SchedulesView() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Schedule Dialog */}
+      {/* ── Edit Schedule Dialog ── */}
       {editingSchedule && (
         <Dialog open onOpenChange={(open) => { if (!open) cancelEditing() }}>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <div className="flex items-center gap-2">
                 <DialogTitle>Edit Schedule</DialogTitle>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] ${triggerBadgeClass(editingSchedule.trigger_type)}`}
+                >
                   {triggerLabel(editingSchedule.trigger_type)}
                 </Badge>
               </div>
@@ -898,13 +1181,12 @@ export function SchedulesView() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <div className="flex items-center gap-2.5">
+                <Switch
                   id="edit-full-context"
+                  size="sm"
                   checked={editFullContext}
-                  onChange={(e) => setEditFullContext(e.target.checked)}
-                  className="size-3.5 rounded border-input accent-primary"
+                  onCheckedChange={setEditFullContext}
                 />
                 <Label htmlFor="edit-full-context" className="text-xs cursor-pointer">
                   Full context (include memory, personality, and search results)

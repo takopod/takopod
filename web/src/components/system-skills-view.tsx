@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import {
   Dialog,
@@ -10,14 +11,41 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { SkillFilesDialog } from "@/components/skill-files-dialog"
-import { SidebarTrigger } from "@/components/ui/sidebar"
-import { Separator } from "@/components/ui/separator"
 import {
-  Info,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { SkillFilesDialog } from "@/components/skill-files-dialog"
+import {
+  Eye,
+  Loader2,
+  MoreHorizontal,
+  Package,
   Plus,
+  Search,
+  Sparkles,
   Trash2,
   Upload,
+  Wrench,
   X,
 } from "lucide-react"
 
@@ -44,6 +72,9 @@ export function SystemSkillsView() {
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const [activeTab, setActiveTab] = useState("all")
+  const [searchQuery, setSearchQuery] = useState("")
 
   const fetchSkills = useCallback(async () => {
     const res = await fetch("/api/skills")
@@ -113,81 +144,258 @@ export function SystemSkillsView() {
     }
   }
 
+  const builtinCount = skills.filter((s) => s.builtin).length
+  const customCount = skills.filter((s) => !s.builtin).length
+
+  const filteredSkills = useMemo(() => {
+    let result = [...skills].sort((a, b) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0))
+    if (activeTab === "builtin") result = result.filter((s) => s.builtin)
+    if (activeTab === "custom") result = result.filter((s) => !s.builtin)
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      result = result.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          s.description.toLowerCase().includes(q)
+      )
+    }
+    return result
+  }, [skills, activeTab, searchQuery])
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-1.5">
-        <SidebarTrigger className="-ml-1" />
-        <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-        <span className="text-sm font-medium">Available Skills</span>
-        <div className="ml-auto">
+      {/* Header */}
+      <div className="border-b px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">Skills</h2>
+            <p className="text-xs text-muted-foreground">
+              Manage reusable capabilities available to new agents
+            </p>
+          </div>
           <Button size="sm" onClick={() => setShowUpload(true)}>
-            <Plus className="mr-1.5 size-3.5" />
+            <Plus className="mr-1 size-3.5" />
             Add Skill
           </Button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mx-auto max-w-2xl">
-          <div className="mb-4 flex items-start gap-2.5 rounded-md border border-primary/20 bg-primary/5 px-4 py-3">
-            <Info className="mt-0.5 size-4 shrink-0 text-primary" />
-            <p className="text-xs text-muted-foreground">
-              They are copied to each new agent at creation time. Changes here
-              do not affect existing agents.
-            </p>
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-5xl space-y-5 p-5">
+          {/* Stat Cards */}
+          <div className="grid grid-cols-3 gap-3">
+            <Card size="sm" className="gap-0">
+              <CardContent className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+                  <Wrench className="size-4 text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Total</p>
+                  <p className="text-xl font-semibold tracking-tight">{skills.length}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card size="sm" className="gap-0">
+              <CardContent className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-blue-500/10">
+                  <Package className="size-4 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Builtin</p>
+                  <p className="text-xl font-semibold tracking-tight">{builtinCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card size="sm" className="gap-0">
+              <CardContent className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-purple-500/10">
+                  <Sparkles className="size-4 text-purple-600 dark:text-purple-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Custom</p>
+                  <p className="text-xl font-semibold tracking-tight">{customCount}</p>
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : (
-            <div className="rounded-md border divide-y">
-              {skills.length === 0 && (
-                <div className="px-4 py-6 text-center">
-                  <p className="text-sm text-muted-foreground">
-                    No default skills configured. Add one to give new agents
-                    reusable capabilities out of the box.
-                  </p>
-                </div>
-              )}
-
-              {skills
-                .sort((a, b) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0))
-                .map((skill) => (
-                <button
-                  key={skill.id}
-                  type="button"
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50"
-                  onClick={() => handleSelect(skill.id)}
-                >
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium">{skill.name}</span>
-                    {skill.description && (
-                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                        {skill.description}
-                      </p>
-                    )}
-                  </div>
-                  {skill.builtin ? (
-                    <Badge variant="outline" className="shrink-0">BUILTIN</Badge>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setConfirmDeleteId(skill.id)
-                      }}
-                    >
-                      <Trash2 className="size-3.5 text-destructive" />
-                    </Button>
-                  )}
-                </button>
-              ))}
+          {/* Tabs + Search */}
+          <div className="flex items-center justify-between gap-4">
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
+              <TabsList>
+                <TabsTrigger value="all">
+                  All
+                  <Badge variant="secondary" className="ml-1 h-4 min-w-5 px-1 text-[10px]">
+                    {skills.length}
+                  </Badge>
+                </TabsTrigger>
+                <TabsTrigger value="builtin">
+                  Builtin
+                  <Badge variant="secondary" className="ml-1 h-4 min-w-5 px-1 text-[10px]">
+                    {builtinCount}
+                  </Badge>
+                </TabsTrigger>
+                <TabsTrigger value="custom">
+                  Custom
+                  <Badge variant="secondary" className="ml-1 h-4 min-w-5 px-1 text-[10px]">
+                    {customCount}
+                  </Badge>
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search skills..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-8 w-56 pl-8 text-sm"
+              />
             </div>
+          </div>
+
+          {/* Data Table */}
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="pl-4">Name</TableHead>
+                  <TableHead className="min-w-[250px]">Description</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead className="w-10 pr-4"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={4} className="h-32 text-center">
+                      <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                        <Loader2 className="size-4 animate-spin" />
+                        <span className="text-sm">Loading skills...</span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!loading && filteredSkills.length === 0 && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={4} className="h-32 text-center">
+                      <div className="flex flex-col items-center gap-1.5 text-muted-foreground">
+                        <Wrench className="size-8 opacity-30" />
+                        <p className="text-sm">
+                          {skills.length === 0
+                            ? "No skills configured"
+                            : "No skills match your filters"}
+                        </p>
+                        {skills.length === 0 && (
+                          <p className="text-xs">
+                            Add a skill to give new agents reusable capabilities.
+                          </p>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {filteredSkills.map((skill) => (
+                  <TableRow
+                    key={skill.id}
+                    className="cursor-pointer"
+                    onClick={() => handleSelect(skill.id)}
+                  >
+                    {/* Name */}
+                    <TableCell className="pl-4">
+                      <span className="text-sm font-medium">{skill.name}</span>
+                    </TableCell>
+
+                    {/* Description */}
+                    <TableCell>
+                      {skill.description ? (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <p className="max-w-[350px] truncate text-sm text-muted-foreground">
+                                {skill.description}
+                              </p>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="max-w-sm">
+                              <span>{skill.description}</span>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">--</span>
+                      )}
+                    </TableCell>
+
+                    {/* Source */}
+                    <TableCell>
+                      {skill.builtin ? (
+                        <Badge
+                          variant="outline"
+                          className="border-blue-500/30 bg-blue-500/10 text-[11px] font-normal text-blue-700 dark:text-blue-400"
+                        >
+                          builtin
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className="border-purple-500/30 bg-purple-500/10 text-[11px] font-normal text-purple-700 dark:text-purple-400"
+                        >
+                          custom
+                        </Badge>
+                      )}
+                    </TableCell>
+
+                    {/* Actions */}
+                    <TableCell className="pr-4">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <MoreHorizontal className="size-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSelect(skill.id) }}>
+                            <Eye className="size-4" />
+                            View
+                          </DropdownMenuItem>
+                          {!skill.builtin && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setConfirmDeleteId(skill.id)
+                                }}
+                              >
+                                <Trash2 className="size-4" />
+                                Delete
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {filteredSkills.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Showing {filteredSkills.length} of {skills.length} skill{skills.length !== 1 ? "s" : ""}
+            </p>
           )}
         </div>
       </div>
 
+      {/* ── Skill Detail Dialog ── */}
       {selected && (
         <SkillFilesDialog
           open
@@ -204,6 +412,7 @@ export function SystemSkillsView() {
         />
       )}
 
+      {/* ── Upload Dialog ── */}
       <Dialog open={showUpload} onOpenChange={(open) => { if (!open) closeUploadDialog() }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
