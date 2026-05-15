@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { ChevronRight, RefreshCw } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
+import {
+  ChevronRight,
+  Container,
+  Database,
+  ListChecks,
+  MessageSquare,
+  RefreshCw,
+  Search,
+  Server,
+  Settings,
+  Timer,
+} from "lucide-react"
 
 interface OllamaStatus {
   status: string
@@ -13,7 +26,7 @@ interface OllamaStatus {
 export function SettingsView() {
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [checkingOllama, setCheckingOllama] = useState(false)
 
@@ -72,138 +85,141 @@ export function SettingsView() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-sm font-medium">Settings</span>
-        <Button variant="ghost" size="icon-sm" onClick={() => { fetchSettings(); fetchOllamaStatus() }} disabled={loading}>
-          <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-        </Button>
+      {/* Header */}
+      <div className="border-b px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+            <p className="text-xs text-muted-foreground">
+              Configure platform defaults and integrations
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => { fetchSettings(); fetchOllamaStatus() }}
+            disabled={loading}
+          >
+            <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mx-auto max-w-lg space-y-4">
-          {filteredSettings.map(([key, value]) => (
-            <div
-              key={key}
-              className="rounded-md border px-4 py-3"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium">{formatLabel(key)}</div>
-                  <div className="text-xs text-muted-foreground">{key}</div>
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-3xl space-y-5 p-5">
+          {/* General Settings */}
+          {filteredSettings.length > 0 && (
+            <Card size="sm">
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Settings className="size-4 text-muted-foreground" />
+                  <CardTitle>General</CardTitle>
                 </div>
-                {isBoolean(value) ? (
-                  <button
-                    onClick={() => toggleSetting(key, value)}
-                    disabled={saving === key}
-                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                      value === "true" ? "bg-primary" : "bg-muted"
-                    } ${saving === key ? "opacity-50" : ""}`}
+              </CardHeader>
+              <CardContent className="space-y-1 pt-0">
+                {filteredSettings.map(([key, value]) => (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between rounded-md px-3 py-2.5 hover:bg-muted/50 transition-colors"
                   >
-                    <span
-                      className={`pointer-events-none inline-block size-5 rounded-full bg-background shadow-sm ring-0 transition-transform ${
-                        value === "true" ? "translate-x-5" : "translate-x-0"
-                      }`}
-                    />
-                  </button>
-                ) : (
-                  <span className="text-sm text-muted-foreground">{value}</span>
-                )}
-              </div>
-            </div>
-          ))}
-          {filteredSettings.length === 0 && !ollamaValue && !loading && (
-            <p className="text-center text-sm text-muted-foreground">No settings found.</p>
+                    <div>
+                      <div className="text-sm font-medium">{formatLabel(key)}</div>
+                      <div className="text-xs text-muted-foreground font-mono">{key}</div>
+                    </div>
+                    {isBoolean(value) ? (
+                      <Switch
+                        size="sm"
+                        checked={value === "true"}
+                        disabled={saving === key}
+                        onCheckedChange={() => toggleSetting(key, value)}
+                      />
+                    ) : (
+                      <span className="text-sm text-muted-foreground">{value}</span>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
           )}
 
-          {/* Search */}
-          <div className="pt-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Search</div>
-            <div className="space-y-3">
-              {/* Ollama Enabled */}
+          {/* Search & Embedding */}
+          <Card size="sm">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Search className="size-4 text-muted-foreground" />
+                <CardTitle>Search & Embedding</CardTitle>
+              </div>
+              <CardDescription>
+                Ollama provides local embedding for hybrid search (BM25 + vector)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-1 pt-0">
               {ollamaValue !== undefined && (
-                <div className="rounded-md border px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium">Ollama Enabled</div>
-                      <div className="text-xs text-muted-foreground">ollama_enabled</div>
-                    </div>
-                    <button
-                      onClick={() => toggleSetting("ollama_enabled", ollamaValue)}
-                      disabled={saving === "ollama_enabled"}
-                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                        ollamaValue === "true" ? "bg-primary" : "bg-muted"
-                      } ${saving === "ollama_enabled" ? "opacity-50" : ""}`}
-                    >
-                      <span
-                        className={`pointer-events-none inline-block size-5 rounded-full bg-background shadow-sm ring-0 transition-transform ${
-                          ollamaValue === "true" ? "translate-x-5" : "translate-x-0"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                  {ollamaStatus && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <Badge variant={
-                        ollamaStatus.status === "healthy" ? "default" :
-                        ollamaStatus.status === "disabled" ? "secondary" :
-                        "destructive"
-                      }>
-                        {ollamaStatus.status}
-                      </Badge>
-                      {ollamaStatus.model && (
-                        <span className="text-xs text-muted-foreground">{ollamaStatus.model}</span>
+                <div className="flex items-center justify-between rounded-md px-3 py-2.5 hover:bg-muted/50 transition-colors">
+                  <div className="flex-1">
+                    <div className="text-sm font-medium">Ollama Enabled</div>
+                    <div className="flex items-center gap-2 mt-1">
+                      {ollamaStatus && (
+                        <>
+                          <Badge variant={
+                            ollamaStatus.status === "healthy" ? "default" :
+                            ollamaStatus.status === "disabled" ? "secondary" :
+                            "destructive"
+                          }>
+                            {ollamaStatus.status}
+                          </Badge>
+                          {ollamaStatus.model && (
+                            <span className="text-xs text-muted-foreground font-mono">{ollamaStatus.model}</span>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={fetchOllamaStatus}
+                            disabled={checkingOllama}
+                          >
+                            <RefreshCw className={`size-3 ${checkingOllama ? "animate-spin" : ""}`} />
+                          </Button>
+                        </>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={fetchOllamaStatus}
-                        disabled={checkingOllama}
-                        className="ml-auto"
-                      >
-                        <RefreshCw className={`size-3 ${checkingOllama ? "animate-spin" : ""}`} />
-                      </Button>
                     </div>
-                  )}
+                  </div>
+                  <Switch
+                    size="sm"
+                    checked={ollamaValue === "true"}
+                    disabled={saving === "ollama_enabled"}
+                    onCheckedChange={() => toggleSetting("ollama_enabled", ollamaValue)}
+                  />
                 </div>
               )}
-
-              {/* Search Index */}
-              <Link
-                to="/settings/search-index"
-                className="flex items-center justify-between rounded-md border px-4 py-3 text-sm font-medium hover:bg-muted transition-colors"
-              >
-                Search Index
-                <ChevronRight className="size-4 text-muted-foreground" />
-              </Link>
-            </div>
-          </div>
+              <NavLink to="/settings/search-index" icon={<Database className="size-4" />} label="Search Index" />
+            </CardContent>
+          </Card>
 
           {/* System */}
-          <div className="pt-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">System</div>
-            <div className="space-y-3">
-              <Link
-                to="/settings/containers"
-                className="flex items-center justify-between rounded-md border px-4 py-3 text-sm font-medium hover:bg-muted transition-colors"
-              >
-                Containers
-                <ChevronRight className="size-4 text-muted-foreground" />
-              </Link>
-              <Link
-                to="/settings/queue"
-                className="flex items-center justify-between rounded-md border px-4 py-3 text-sm font-medium hover:bg-muted transition-colors"
-              >
-                Queue Status
-                <ChevronRight className="size-4 text-muted-foreground" />
-              </Link>
-            </div>
-          </div>
+          <Card size="sm">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Server className="size-4 text-muted-foreground" />
+                <CardTitle>System</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-1 pt-0">
+              <NavLink to="/settings/containers" icon={<Container className="size-4" />} label="Containers" />
+              <NavLink to="/settings/queue" icon={<ListChecks className="size-4" />} label="Queue Status" />
+            </CardContent>
+          </Card>
 
           {/* Conversation */}
-          <div className="pt-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Conversation</div>
-            <div className="space-y-3">
-              <ContainerDefaultInput
+          <Card size="sm">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <MessageSquare className="size-4 text-muted-foreground" />
+                <CardTitle>Conversation</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <SettingInput
                 label="Session History Window"
                 settingKey="session_history_window_size"
                 placeholder="20"
@@ -211,17 +227,22 @@ export function SettingsView() {
                 value={settings["session_history_window_size"] ?? ""}
                 onSaved={(v) => setSettings((prev) => ({ ...prev, session_history_window_size: v }))}
               />
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
           {/* Container Defaults */}
-          <div className="pt-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Container Defaults</div>
-            <p className="text-xs text-muted-foreground pb-3">
-              Default CPU and memory limits for new agent containers. Existing agents are not affected.
-            </p>
-            <div className="space-y-3">
-              <ContainerDefaultInput
+          <Card size="sm">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Container className="size-4 text-muted-foreground" />
+                <CardTitle>Container Defaults</CardTitle>
+              </div>
+              <CardDescription>
+                Default CPU and memory limits for new agent containers. Existing agents are not affected.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-1 pt-0">
+              <SettingInput
                 label="Memory"
                 settingKey="default_container_memory"
                 placeholder="2g"
@@ -229,7 +250,7 @@ export function SettingsView() {
                 value={settings["default_container_memory"] ?? ""}
                 onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_memory: v }))}
               />
-              <ContainerDefaultInput
+              <SettingInput
                 label="CPUs"
                 settingKey="default_container_cpus"
                 placeholder="2"
@@ -237,16 +258,22 @@ export function SettingsView() {
                 value={settings["default_container_cpus"] ?? ""}
                 onSaved={(v) => setSettings((prev) => ({ ...prev, default_container_cpus: v }))}
               />
-            </div>
-          </div>
+            </CardContent>
+          </Card>
+
           {/* Container Lifecycle */}
-          <div className="pt-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground pb-2">Container Lifecycle</div>
-            <p className="text-xs text-muted-foreground pb-3">
-              Default timeout values for new agent containers. Per-agent overrides can be set in each agent's settings.
-            </p>
-            <div className="space-y-3">
-              <ContainerDefaultInput
+          <Card size="sm">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Timer className="size-4 text-muted-foreground" />
+                <CardTitle>Container Lifecycle</CardTitle>
+              </div>
+              <CardDescription>
+                Default timeout values for new agent containers. Per-agent overrides can be set in each agent's settings.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-1 pt-0">
+              <SettingInput
                 label="Idle Timeout (seconds)"
                 settingKey="idle_timeout_seconds"
                 placeholder="300"
@@ -254,7 +281,7 @@ export function SettingsView() {
                 value={settings["idle_timeout_seconds"] ?? ""}
                 onSaved={(v) => setSettings((prev) => ({ ...prev, idle_timeout_seconds: v }))}
               />
-              <ContainerDefaultInput
+              <SettingInput
                 label="Hard Timeout (seconds)"
                 settingKey="inflight_hard_timeout"
                 placeholder="600"
@@ -262,15 +289,30 @@ export function SettingsView() {
                 value={settings["inflight_hard_timeout"] ?? ""}
                 onSaved={(v) => setSettings((prev) => ({ ...prev, inflight_hard_timeout: v }))}
               />
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>
   )
 }
 
-function ContainerDefaultInput({
+function NavLink({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
+  return (
+    <Link
+      to={to}
+      className="flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium hover:bg-muted/50 transition-colors"
+    >
+      <div className="flex items-center gap-2.5 text-muted-foreground">
+        {icon}
+        <span className="text-foreground">{label}</span>
+      </div>
+      <ChevronRight className="size-4 text-muted-foreground" />
+    </Link>
+  )
+}
+
+function SettingInput({
   label,
   settingKey,
   placeholder,
@@ -315,28 +357,26 @@ function ContainerDefaultInput({
   }
 
   return (
-    <div className="rounded-md border px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex-1">
-          <div className="text-sm font-medium">{label}</div>
-          <div className="text-xs text-muted-foreground">{helpText}</div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Input
-            value={draft}
-            onChange={(e) => { setDraft(e.target.value); setError("") }}
-            onKeyDown={(e) => { if (e.key === "Enter" && dirty) handleSave() }}
-            placeholder={placeholder}
-            className="h-8 w-24 text-sm"
-          />
-          {dirty && (
-            <Button size="sm" onClick={handleSave} disabled={saving}>
-              {saving ? "..." : "Save"}
-            </Button>
-          )}
-        </div>
+    <div className="flex items-center justify-between rounded-md px-3 py-2.5 hover:bg-muted/50 transition-colors">
+      <div className="flex-1">
+        <div className="text-sm font-medium">{label}</div>
+        <div className="text-xs text-muted-foreground">{helpText}</div>
       </div>
-      {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
+      <div className="flex items-center gap-2">
+        <Input
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setError("") }}
+          onKeyDown={(e) => { if (e.key === "Enter" && dirty) handleSave() }}
+          placeholder={placeholder}
+          className="h-8 w-24 text-sm"
+        />
+        {dirty && (
+          <Button size="xs" onClick={handleSave} disabled={saving}>
+            {saving ? "..." : "Save"}
+          </Button>
+        )}
+        {error && <span className="text-xs text-destructive">{error}</span>}
+      </div>
     </div>
   )
 }
